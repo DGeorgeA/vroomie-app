@@ -3,7 +3,7 @@ import React, { useState, useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { Zap, Menu, X, Activity, Droplets, Sparkles } from "lucide-react";
-import VroomieLogo from "./components/ui/VroomieLogo";
+import VroomieLogo from '@/components/ui/VroomieLogo';
 
 export default function Layout({ children, currentPageName }) {
   const location = useLocation();
