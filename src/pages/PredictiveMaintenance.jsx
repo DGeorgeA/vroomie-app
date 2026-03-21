@@ -29,12 +29,11 @@ export default function PredictiveMaintenance() {
     // In a real app, use navigator.geolocation
     // Here we randomly pick a region or default to 'en-US' initially
     // Let's assume we "sensed" a random location for demo
-    const mockRegions = ['en-US', 'en-GB', 'es-ES', 'de-DE', 'fr-FR', 'hi-IN'];
-    // const detected = mockRegions[Math.floor(Math.random() * mockRegions.length)];
-    const detected = 'en-US'; // Defaulting to US for stability unless user changes
+    // MOCK: Detected Kerala Region
+    const detected = 'ml-IN';
     setLanguage(detected);
 
-    // toast.info(`Location detected. Language set to ${LANGUAGES.find(l => l.code === detected)?.name}`);
+    toast.success(`Location detected: Kerala. Language set to Malayalam.`);
   }, []);
 
   // MOCK DATA: Vehicles
@@ -158,53 +157,84 @@ export default function PredictiveMaintenance() {
               <span className="text-yellow-300 text-xs md:text-sm font-medium">AI-Powered Diagnostics</span>
             </div>
           </div>
-          <h1 className="text-2xl md:text-4xl lg:text-6xl font-bold mb-2 md:mb-4">
-            <span className="bg-gradient-to-r from-white to-yellow-300 bg-clip-text text-transparent">
-              Predictive Maintenance
+          <h1 className="text-3xl md:text-5xl lg:text-7xl font-bold mb-2 md:mb-4 tracking-tight">
+            <span className="bg-gradient-to-r from-yellow-300 via-yellow-100 to-white bg-clip-text text-transparent filter drop-shadow-lg">
+              #1 Instant Car Health Checkup
             </span>
           </h1>
-          <p className="text-sm md:text-xl text-gray-400 max-w-3xl mx-auto px-4">
-            Listen to your engine's heartbeat. Real-time ECG-style audio analysis detects issues before they happen.
+          <p className="text-sm md:text-xl text-gray-400 max-w-3xl mx-auto px-4 mt-4">
+            Listen to your engine's heartbeat. Real-time audio analysis detects issues in seconds.
           </p>
         </motion.div>
 
-        {/* Vehicle Selector - Hidden on mobile when fullscreen ECG */}
-        {vehicles.length > 0 && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
-            className={`mb-3 md:mb-6 ${isFullscreenECG ? 'hidden md:block' : ''}`}
-          >
-            <GlassCard className="p-3 md:p-4">
-              <div className="flex flex-col md:flex-row items-center justify-between gap-3 md:gap-4">
-                <div className="w-full md:w-auto">
-                  <p className="text-xs md:text-sm text-gray-400 mb-2">Selected Vehicle</p>
-                  <div className="flex gap-2 md:gap-3 overflow-x-auto w-full">
-                    {vehicles.map((vehicle) => (
-                      <button
-                        key={vehicle.id}
-                        onClick={() => setSelectedVehicle(vehicle)}
-                        className={`px-3 md:px-4 py-1.5 md:py-2 rounded-lg transition-all whitespace-nowrap text-sm ${selectedVehicle?.id === vehicle.id
-                          ? "bg-yellow-300/20 text-yellow-300 border border-yellow-300/30"
-                          : "bg-white/5 text-gray-300 hover:bg-white/10"
-                          }`}
-                      >
-                        {vehicle.make} {vehicle.model}
-                      </button>
-                    ))}
-                  </div>
+        {/* Vehicle Details (Optional) */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className={`mb-6 max-w-2xl mx-auto ${isFullscreenECG ? 'hidden md:block' : ''}`}
+        >
+          <div className="bg-white/5 border border-white/10 rounded-xl p-4 backdrop-blur-sm">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-xs text-yellow-300 font-medium px-2 py-0.5 bg-yellow-300/10 rounded-full border border-yellow-300/20">Optional</span>
+              <p className="text-sm text-gray-300 font-medium">Add Vehicle Details for Better Accuracy</p>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <input
+                type="text"
+                placeholder="Car Name (e.g., Honda City)"
+                className="bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-yellow-300/50 transition-colors"
+              />
+              <input
+                type="text"
+                placeholder="VIN / Reg Number"
+                className="bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-yellow-300/50 transition-colors"
+              />
+            </div>
+          </div>
+        </motion.div>
+
+        {/* MAIN ACTION: Large ECG Visualizer */}
+        <div className="mb-8">
+          <GlassCard className={`p-1 ${isFullscreenECG ? 'min-h-[85vh]' : 'mx-auto max-w-5xl'}`}>
+            <div className={`relative bg-zinc-950/80 rounded-xl overflow-hidden border border-yellow-300/20 shadow-2xl shadow-yellow-900/20 ${isFullscreenECG ? 'h-full' : 'h-[400px] md:h-[500px]'}`}>
+              {/* Overlay Content */}
+              <div className="absolute top-4 left-4 z-10 flex items-center gap-3">
+                <div className="flex items-center gap-2 px-3 py-1 bg-black/40 backdrop-blur-md rounded-full border border-white/10">
+                  <Activity className="w-4 h-4 text-emerald-400 animate-pulse" />
+                  <span className="text-xs font-medium text-emerald-400">System Ready</span>
                 </div>
-                {selectedVehicle && (
-                  <div className="text-right w-full md:w-auto">
-                    <p className="text-xs md:text-sm text-gray-400">VIN</p>
-                    <p className="text-white font-mono text-xs md:text-sm">{selectedVehicle.vin}</p>
+                {isRecording && (
+                  <div className="flex items-center gap-2 px-3 py-1 bg-red-500/20 backdrop-blur-md rounded-full border border-red-500/30 animate-pulse">
+                    <span className="w-2 h-2 rounded-full bg-red-500"></span>
+                    <span className="text-xs font-medium text-red-400">Device Listening...</span>
                   </div>
                 )}
               </div>
-            </GlassCard>
-          </motion.div>
-        )}
+
+              <AudioWaveform
+                audioContext={audioContext}
+                analyser={analyser}
+                isRecording={isRecording}
+                anomalies={selectedAnalysis?.anomalies_detected || []}
+                duration={selectedAnalysis?.duration_seconds || 0}
+                onAnomalyDetected={handleAnomalyDetected}
+              />
+
+              {/* Centered Recorder Button if not recording */}
+              <div className="absolute bottom-8 left-0 right-0 flex justify-center z-20 pointer-events-none">
+                <div className="pointer-events-auto">
+                  {/* Audio Recorder Controls - Passing language and implicit vehicle ID */}
+                  <AudioRecorder
+                    vehicleId={selectedVehicle?.id || 'guest-vehicle'}
+                    onRecordingComplete={handleRecordingComplete}
+                    language={language}
+                  />
+                </div>
+              </div>
+            </div>
+          </GlassCard>
+        </div>
 
         {/* Status Overview Cards - Hidden on mobile when fullscreen ECG */}
         <div className={`grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4 mb-3 md:mb-6 ${isFullscreenECG ? 'hidden md:grid' : ''}`}>
@@ -265,73 +295,8 @@ export default function PredictiveMaintenance() {
         </div>
 
         {/* MAIN LAYOUT: Mobile Fullscreen ECG, Desktop 40/60 Split */}
-        <div className={`grid ${isFullscreenECG ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-5'} gap-3 md:gap-6`}>
-          {/* Live Audio Monitor - Fullscreen on Mobile */}
-          <motion.div
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: 0.6 }}
-            className={`${isFullscreenECG ? 'col-span-1' : 'lg:col-span-2'}`}
-          >
-            <GlassCard className={`p-3 md:p-6 ${isFullscreenECG ? 'min-h-screen' : 'h-full'}`}>
-              <div className="flex items-center justify-between mb-3 md:mb-4">
-                <h2 className="text-lg md:text-xl font-bold text-white flex items-center gap-2">
-                  <Activity className="w-4 h-4 md:w-5 md:h-5 text-yellow-300" />
-                  <span className="hidden md:inline">Live ECG Monitor</span>
-                  <span className="md:hidden">ECG Monitor</span>
-                </h2>
-                <div className="flex items-center gap-2">
-                  {isRecording && (
-                    <div className="flex items-center gap-1.5 md:gap-2">
-                      <div className="w-1.5 h-1.5 md:w-2 md:h-2 bg-red-400 rounded-full animate-pulse" />
-                      <span className="text-[10px] md:text-xs text-red-400 font-medium">REC</span>
-                    </div>
-                  )}
-                  <button
-                    onClick={() => setIsFullscreenECG(!isFullscreenECG)}
-                    className="md:hidden p-1.5 rounded-lg bg-yellow-300/10 hover:bg-yellow-300/20 transition-colors"
-                  >
-                    {isFullscreenECG ? (
-                      <Minimize2 className="w-4 h-4 text-yellow-300" />
-                    ) : (
-                      <Maximize2 className="w-4 h-4 text-yellow-300" />
-                    )}
-                  </button>
-                </div>
-              </div>
+        <div className={`grid ${isFullscreenECG ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-1'} gap-3 md:gap-6`}>
 
-              {/* ECG-Style Waveform - Larger on Mobile Fullscreen */}
-              <div
-                className={`bg-zinc-950/50 rounded-xl p-2 md:p-3 border border-yellow-300/10 mb-3 md:mb-4 ${isFullscreenECG ? 'min-h-[70vh]' : 'min-h-[300px] md:min-h-[400px]'
-                  }`}
-              >
-                <AudioWaveform
-                  audioContext={audioContext}
-                  analyser={analyser}
-                  isRecording={isRecording}
-                  anomalies={selectedAnalysis?.anomalies_detected || []}
-                  duration={selectedAnalysis?.duration_seconds || 0}
-                  onAnomalyDetected={handleAnomalyDetected}
-                />
-              </div>
-
-              {/* Audio Recorder Controls */}
-              {selectedVehicle && (
-                <AudioRecorder
-                  vehicleId={selectedVehicle.id}
-                  onRecordingComplete={handleRecordingComplete}
-                  language={language}
-                />
-              )}
-
-              {/* ECG Info */}
-              <div className="mt-3 md:mt-4 p-2 md:p-3 bg-yellow-300/5 border border-yellow-300/10 rounded-lg">
-                <p className="text-[10px] md:text-xs text-gray-400 leading-relaxed">
-                  <span className="font-semibold text-yellow-300">Real-time Engine Heartbeat:</span> Watch live acoustic patterns as your engine runs. Anomalies trigger audio alerts instantly.
-                </p>
-              </div>
-            </GlassCard>
-          </motion.div>
 
           {/* Analysis History - Hidden on mobile when ECG is fullscreen */}
           <motion.div

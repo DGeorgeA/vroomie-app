@@ -99,7 +99,7 @@ export default function Layout({ children, currentPageName }) {
             {/* Contact */}
             <div>
               <h3 className="text-yellow-300 font-semibold mb-4">Connect</h3>
-              <p className="text-gray-400 text-sm mb-2">support@vroomie.app</p>
+              <p className="text-gray-400 text-sm mb-2">sales@gofriday.shop</p>
               <p className="text-gray-400 text-sm">© 2025 Vroomie. All rights reserved.</p>
             </div>
           </div>

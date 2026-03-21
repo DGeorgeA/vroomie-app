@@ -1,8 +1,11 @@
 import React, { useState, useRef } from "react";
-import { Mic, Square, Upload, Loader2, Clock } from "lucide-react";
+import { Mic, Square, Upload, Loader2, Clock, Bug } from "lucide-react";
 import GlassButton from "../ui/GlassButton";
 import { toast } from "sonner";
-import { speak, SCRIPTS } from "@/utils/voice";
+import { startExtraction, stopExtraction } from "@/lib/audioFeatureExtractor";
+import { matchBuffer } from "@/lib/audioMatchingEngine";
+import { triggerContinuousAlert, clearContinuousAlert, speakText } from "@/lib/voiceFeedback";
+import { Logger } from "@/lib/logger";
 
 export default function AudioRecorder({
   onRecordingComplete,
@@ -19,9 +22,38 @@ export default function AudioRecorder({
   const timerRef = useRef(null);
   const streamRef = useRef(null);
   const [remainingTime, setRemainingTime] = useState(120); // 2 minutes target
+  const [isVoiceAlertsEnabled, setIsVoiceAlertsEnabled] = useState(true);
+  
+  const [debugStats, setDebugStats] = useState(null);
+  const IS_DEBUG = import.meta.env.DEV || true;
 
+  // Remove WebSocket
   const startRecording = async () => {
     try {
+      // Start real-time extraction using our local pipeline
+      await startExtraction((features) => {
+        const result = matchBuffer(features);
+        
+        if (IS_DEBUG) {
+          setDebugStats({
+            rms: features.rms.toFixed(4),
+            centroid: features.spectralCentroid.toFixed(1),
+            conf: result.confidence.toFixed(3)
+          });
+        }
+        
+        if (result.anomaly) {
+          Logger.info("Real-time Alert Dispatched to UI", { anomaly: result.anomaly, score: result.confidence });
+          toast.warning(`Anomaly Detected: ${result.anomaly}`, {
+            description: `Confidence: ${(result.confidence * 100).toFixed(1)}%`
+          });
+          
+          triggerContinuousAlert(result.anomaly, isVoiceAlertsEnabled);
+        } else {
+          clearContinuousAlert();
+        }
+      });
+      
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -43,7 +75,7 @@ export default function AudioRecorder({
       setAudioContext(audioCtx);
       setAnalyser(analyserNode);
 
-      // Set up MediaRecorder for saving audio
+      // Set up MediaRecorder for saving audio AND streaming
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
       chunksRef.current = [];
@@ -51,6 +83,11 @@ export default function AudioRecorder({
       mediaRecorder.ondataavailable = (e) => {
         if (e.data.size > 0) {
           chunksRef.current.push(e.data);
+
+          // Stream to WebSocket
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(e.data);
+          }
         }
       };
 
@@ -63,14 +100,42 @@ export default function AudioRecorder({
         streamRef.current = null;
       };
 
-      mediaRecorder.start();
+      mediaRecorder.start(1000); // Send chunks every 1s
       setIsRecording(true);
       setRecordingTime(0);
       setRemainingTime(120);
 
       // Start timer
       timerRef.current = setInterval(() => {
-        setRecordingTime((prev) => prev + 1);
+        setRecordingTime((prev) => {
+          const newTime = prev + 1;
+
+          // 20 Second Intervals - Periodic Voice Check
+          if (newTime % 20 === 0 && newTime < 120) {
+            // Trigger voice prompt: "No anomalies, continuing..."
+            speakText("No anomalies found. Continuing scan.");
+
+            toast.info("Scanning in progress...", {
+              description: `Time elapsed: ${newTime}s. Analyzing patterns...`,
+              duration: 3000,
+            });
+          }
+
+          // 20 Second Prompt
+          if (newTime === 20) {
+            toast.info("Sufficient data collected.", {
+              description: "You can stop now, or keep running for a deep scan.",
+              duration: 5000,
+              action: {
+                label: "Stop",
+                onClick: () => stopRecording()
+              }
+            });
+          }
+
+          return newTime;
+        });
+
         setRemainingTime((prev) => {
           const next = prev - 1;
           if (next <= 0) {
@@ -93,10 +158,13 @@ export default function AudioRecorder({
     if (mediaRecorderRef.current && isRecording) {
       mediaRecorderRef.current.stop();
       setIsRecording(false);
+      stopExtraction(); // Stop our analysis pipeline
 
       if (timerRef.current) {
         clearInterval(timerRef.current);
       }
+
+      clearContinuousAlert(); // Clear repeating alarms if active
 
       if (audioContext) {
         audioContext.close();
@@ -201,12 +269,11 @@ export default function AudioRecorder({
     }
 
     // Voice Feedback
-    const script = SCRIPTS[language] || SCRIPTS['en-US'];
     if (mockAnomalies.length > 0) {
       const primaryAnomaly = mockAnomalies[0].type;
-      speak(script.anomaly(primaryAnomaly), language);
+      speakText(`Analysis complete. Primary issue detected: ${primaryAnomaly}`);
     } else {
-      speak(script.safe(), language);
+      speakText("Scan complete. Your engine sounds healthy.");
     }
 
     toast.success("Analysis complete!");
@@ -262,9 +329,37 @@ export default function AudioRecorder({
         </div>
       </div>
 
+      {/* Voice Alert Settings Toggle */}
+      <div className="flex items-center justify-between mt-6 pt-4 border-t border-white/5">
+        <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
+          <input 
+            type="checkbox" 
+            checked={isVoiceAlertsEnabled}
+            onChange={(e) => setIsVoiceAlertsEnabled(e.target.checked)}
+            className="rounded border-zinc-700 bg-zinc-800 text-blue-500 focus:ring-blue-500/50 cursor-pointer"
+          />
+          Voice Alerts ON/OFF
+        </label>
+      </div>
+
       {/* Pass analyser to parent for waveform visualization */}
       {isRecording && analyser && (
         <div className="hidden" data-analyser={analyser} />
+      )}
+      
+      {/* Live Pipeline Debug Mode */}
+      {IS_DEBUG && isRecording && debugStats && (
+        <div className="mt-4 p-3 bg-black/40 border border-[#7b9a1e]/30 rounded-xl font-mono text-xs text-[#7b9a1e]/80 flex flex-col gap-1 backdrop-blur-md">
+          <div className="flex items-center gap-2 mb-1 border-b border-[#7b9a1e]/20 pb-1">
+            <Bug size={14} className="text-[#7b9a1e]" />
+            <span className="font-bold tracking-widest uppercase text-[#7b9a1e]">ML Pipeline Telemetry</span>
+          </div>
+          <div className="grid grid-cols-2 gap-x-4">
+            <span>RMS Energy: <span className="text-white">{debugStats.rms}</span></span>
+            <span>Centroid Hz: <span className="text-white">{debugStats.centroid}</span></span>
+            <span className="col-span-2 mt-1 pt-1 border-t border-[#7b9a1e]/10">Match Confidence: <span className="text-white">{(debugStats.conf * 100).toFixed(1)}%</span></span>
+          </div>
+        </div>
       )}
     </div>
   );

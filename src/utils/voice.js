@@ -5,6 +5,7 @@ export const LANGUAGES = [
     { code: 'de-DE', name: 'German', region: 'Europe' },
     { code: 'fr-FR', name: 'French', region: 'Europe' },
     { code: 'hi-IN', name: 'Hindi', region: 'Asia' },
+    { code: 'ml-IN', name: 'Malayalam', region: 'India (Kerala)' },
     { code: 'ja-JP', name: 'Japanese', region: 'Asia' },
 ];
 
@@ -32,6 +33,11 @@ export const SCRIPTS = {
     'hi-IN': {
         anomaly: (name) => `Namaste. ${name} mila hai. Mechanic se sampark karein. Dhanyavad aur savdhani se gaadi chalayein.`,
         safe: () => `Namaste. Koi kharabi nahi mili. Savdhani se gaadi chalayein.`
+    },
+    'ml-IN': {
+        anomaly: (name) => `Namaskaram. ${name} attention venam. Oru mechanicine kanikkunnathu nallathaa. Sookshikka.`,
+        safe: () => `Namaskaram. Engine clean aanu. Kuzhappangalonnum kandilla. Dhairyamaayi pokaam.`,
+        scanning: () => `Namaskaram. Ithuvare kuzhappangal onnum illa. Parishodhana thudarukayanu. Stop cheyyan instrucion tharuka.`
     },
     'ja-JP': {
         anomaly: (name) => `Konnichiwa. ${name} ga mitsukarimashita. Mekanikku ni sodan shite kudasai. Anzen untende.`,
