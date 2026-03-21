@@ -1,6 +1,7 @@
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 import { format } from 'date-fns';
+import { getDiagnosticMetadata } from './diagnosticDictionary';
 
 export function generatePDFReport(vehicleId, historyData, aggregatedTrends) {
   const doc = new jsPDF();
@@ -155,81 +156,106 @@ export function generateSingleEntryPDFReport(entryData) {
   const hasAnomalies = entryData.anomalies_detected && entryData.anomalies_detected.length > 0;
   const primaryAnomaly = hasAnomalies ? entryData.anomalies_detected[0] : null;
 
-  // --- HEADER ---
-  doc.setFillColor(25, 25, 25);
-  doc.rect(0, 0, 210, 40, 'F');
-  
-  doc.setTextColor(212, 175, 55);
-  doc.setFontSize(22);
-  doc.setFont("helvetica", "bold");
-  doc.text("VROOMIE DIAGNOSTIC REPORT", 105, 20, { align: "center" });
-  
-  doc.setTextColor(200, 200, 200);
-  doc.setFontSize(12);
-  doc.setFont("helvetica", "italic");
-  doc.text("Analysis Type: Single Event Report", 105, 28, { align: "center" });
-
-  // --- 1. TIMESTAMP & 2. STATUS ---
-  doc.setTextColor(0, 0, 0);
-  doc.setFontSize(14);
-  doc.setFont("helvetica", "bold");
-  doc.text("1. EVENT OVERVIEW", 14, 50);
-
-  doc.setFontSize(10);
-  doc.setFont("helvetica", "normal");
-  doc.text(`Timestamp: ${timeStr}`, 14, 58);
-  
-  const statusFormatted = hasAnomalies ? "!! ANOMALY DETECTED !!" : "OK - NO ANOMALY";
-  doc.setFont("helvetica", "bold");
-  if (hasAnomalies) doc.setTextColor(220, 38, 38); // Red
-  else doc.setTextColor(22, 163, 74); // Green
-  doc.text(`Status: ${statusFormatted}`, 14, 66);
-
-  // --- 3. ANOMALY DETAILS & 4. AUDIO MATCH INFO ---
-  doc.setTextColor(0, 0, 0);
-  doc.setFontSize(14);
-  doc.text("2. DIAGNOSTIC DETAILS", 14, 80);
-
-  doc.setFontSize(10);
-  doc.setFont("helvetica", "normal");
-  
-  if (hasAnomalies) {
-    doc.text(`Anomaly Name: ${primaryAnomaly.type}`, 14, 88);
-    doc.text(`Severity Level: ${primaryAnomaly.severity.toUpperCase()}`, 14, 94);
-    if (primaryAnomaly.description) {
-      doc.text(`Description: ${primaryAnomaly.description}`, 14, 100);
+  const renderPage = (currencyType, isFirstPage) => {
+    if (!isFirstPage) {
+      doc.addPage();
     }
-  } else {
-    doc.text(`Anomaly Name: None`, 14, 88);
-    doc.text(`Severity Level: N/A`, 14, 94);
-  }
-  
-  doc.text(`Network Confidence: ${entryData.confidence_score ? entryData.confidence_score.toFixed(1) + '%' : 'N/A'}`, 14, 110);
-  if (hasAnomalies && primaryAnomaly.matchedFile) {
-      doc.text(`Matched Reference: ${primaryAnomaly.matchedFile}`, 14, 116);
-  }
+    
+    // --- HEADER ---
+    doc.setFillColor(25, 25, 25);
+    doc.rect(0, 0, 210, 40, 'F');
+    
+    doc.setTextColor(212, 175, 55);
+    doc.setFontSize(22);
+    doc.setFont("helvetica", "bold");
+    doc.text("VROOMIE DIAGNOSTIC REPORT", 105, 20, { align: "center" });
+    
+    doc.setTextColor(200, 200, 200);
+    doc.setFontSize(12);
+    doc.setFont("helvetica", "italic");
+    doc.text(`Analysis Type: Single Event Report (${currencyType} Costing)`, 105, 28, { align: "center" });
 
-  // --- 5. SIGNAL DIAGNOSTICS & 6. SYSTEM INTERPRETATION ---
-  doc.setFontSize(14);
-  doc.setFont("helvetica", "bold");
-  doc.text("3. SYSTEM INTERPRETATION & ACTION", 14, 135);
+    // --- 1. TIMESTAMP & 2. STATUS ---
+    doc.setTextColor(0, 0, 0);
+    doc.setFontSize(14);
+    doc.setFont("helvetica", "bold");
+    doc.text("1. EVENT OVERVIEW", 14, 50);
 
-  let insightText = "";
-  if (hasAnomalies) {
-    const sev = primaryAnomaly.severity;
-    if (sev === 'critical' || sev === 'high') {
-      insightText = "SUGGESTED ACTION: IMMEDIATE CHECK / SERVICE REQUIRED.\nThis acoustic signature strongly correlates with severe mechanical breakdown.\nDo not operate the vehicle until the indicated component is inspected.";
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Timestamp: ${timeStr}`, 14, 58);
+    
+    const dominantStatus = hasAnomalies 
+      ? entryData.anomalies_detected.some(a => a.status === 'anomaly' || ['critical', 'high'].includes(a.severity)) 
+        ? "!! ANOMALY DETECTED !!" 
+        : "⚠️ POTENTIAL ANOMALY - UNCERTAIN" 
+      : "OK - NO ANOMALY";
+      
+    doc.setFont("helvetica", "bold");
+    if (dominantStatus.includes("ANOMALY DETECTED")) doc.setTextColor(220, 38, 38); // Red
+    else if (dominantStatus.includes("POTENTIAL")) doc.setTextColor(202, 138, 4); // Yellow
+    else doc.setTextColor(22, 163, 74); // Green
+    
+    doc.text(`Status: ${dominantStatus}`, 14, 66);
+
+    // --- 3. ANOMALY DETAILS & 4. AUDIO MATCH INFO ---
+    doc.setTextColor(0, 0, 0);
+    doc.setFontSize(14);
+    doc.text("2. DIAGNOSTIC DETAILS", 14, 80);
+
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    
+    if (hasAnomalies) {
+      doc.text(`Anomaly Name: ${primaryAnomaly.type}`, 14, 88);
+      doc.text(`Severity Level: ${primaryAnomaly.severity.toUpperCase()}`, 14, 94);
+      if (primaryAnomaly.description) {
+        doc.text(`Description: ${primaryAnomaly.description}`, 14, 100);
+      }
     } else {
-      insightText = "SUGGESTED ACTION: MONITOR.\nAcoustic anomalies detected but currently operating within non-critical margins.\nSchedule a checkup during the next routine service window.";
+      doc.text(`Anomaly Name: None`, 14, 88);
+      doc.text(`Severity Level: N/A`, 14, 94);
     }
-  } else {
-    insightText = "SUGGESTED ACTION: NONE.\nNo acoustic signatures of mechanical failure were matched.\nThe active engine block sounds healthy within normal operating frequency bands.";
-  }
+    
+    doc.text(`Network Confidence: ${entryData.confidence_score ? entryData.confidence_score.toFixed(1) + '%' : 'N/A'}`, 14, 110);
+    if (hasAnomalies && primaryAnomaly.matchedFile) {
+        doc.text(`Matched Reference: ${primaryAnomaly.matchedFile}`, 14, 116);
+    }
 
-  doc.setFontSize(10);
-  doc.setFont("helvetica", "normal");
-  const splitText = doc.splitTextToSize(insightText, 180);
-  doc.text(splitText, 14, 143);
+    // --- 5. SIGNAL DIAGNOSTICS & FIX / COST EST ---
+    doc.setFontSize(14);
+    doc.setFont("helvetica", "bold");
+    doc.text("3. SYSTEM INTERPRETATION & ACTION", 14, 135);
+
+    let insightText = "";
+    if (hasAnomalies) {
+      const sev = primaryAnomaly.severity;
+      const dict = getDiagnosticMetadata(primaryAnomaly.type);
+      
+      const costStr = currencyType === 'USD' ? `$${dict.usd}` : `₹${dict.inr.toLocaleString()}`;
+      
+      if (sev === 'critical' || sev === 'high') {
+        insightText = `SUGGESTED ACTION: IMMEDIATE CHECK REQUIRED.\nThis acoustic signature strongly correlates with severe engine breakdown.\n\nRecommended Fix: ${dict.fix}\nEstimated Cost: ${costStr}`;
+      } else {
+        insightText = `SUGGESTED ACTION: MONITOR / MINOR SERVICE.\nAcoustic anomalies detected but currently operating within secondary margins.\n\nRecommended Fix: ${dict.fix}\nEstimated Cost: ${costStr}`;
+      }
+    } else {
+      insightText = "SUGGESTED ACTION: NONE.\nNo acoustic signatures of mechanical failure were matched.\nThe active engine block sounds perfectly healthy within normal operating frequency bands.";
+    }
+
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    const splitText = doc.splitTextToSize(insightText, 180);
+    doc.text(splitText, 14, 143);
+  };
+
+  // Render Page 1 (USD)
+  renderPage('USD', true);
+  
+  // Render Page 2 (INR)
+  if (hasAnomalies) {
+    renderPage('INR', false);
+  }
 
   const fileName = `Vroomie_Report_${safeFilenameTime}.pdf`;
   doc.save(fileName);

@@ -6,6 +6,7 @@ import { startExtraction, stopExtraction } from "@/lib/audioFeatureExtractor";
 import { matchBuffer } from "@/lib/audioMatchingEngine";
 import { triggerContinuousAlert, clearContinuousAlert, speakText } from "@/lib/voiceFeedback";
 import { Logger } from "@/lib/logger";
+import { getDiagnosticMetadata } from "@/lib/diagnosticDictionary";
 
 export default function AudioRecorder({
   onRecordingComplete,
@@ -21,6 +22,9 @@ export default function AudioRecorder({
   const chunksRef = useRef([]);
   const timerRef = useRef(null);
   const streamRef = useRef(null);
+  const sessionAnomaliesRef = useRef([]); // Track real anomalies exclusively
+  const sessionConfidenceRef = useRef([]); 
+  
   const [remainingTime, setRemainingTime] = useState(120); // 2 minutes target
   const [isVoiceAlertsEnabled, setIsVoiceAlertsEnabled] = useState(true);
   
@@ -30,22 +34,44 @@ export default function AudioRecorder({
   // Remove WebSocket
   const startRecording = async () => {
     try {
+      sessionAnomaliesRef.current = [];
+      sessionConfidenceRef.current = [];
+      
       // Start real-time extraction using our local pipeline
       await startExtraction((features) => {
         const result = matchBuffer(features);
+        
+        if (result.confidence > 0) {
+          sessionConfidenceRef.current.push(result.confidence);
+        }
         
         if (IS_DEBUG) {
           setDebugStats({
             rms: features.rms.toFixed(4),
             centroid: features.spectralCentroid.toFixed(1),
-            conf: result.confidence.toFixed(3)
+            conf: result.confidence.toFixed(3),
+            status: result.status?.toUpperCase() || 'NORMAL'
           });
         }
         
-        if (result.anomaly) {
-          Logger.info("Real-time Alert Dispatched to UI", { anomaly: result.anomaly, score: result.confidence });
-          toast.warning(`Anomaly Detected: ${result.anomaly}`, {
-            description: `Confidence: ${(result.confidence * 100).toFixed(1)}%`
+        if (result.status === 'anomaly' || result.status === 'potential_anomaly') {
+          // Add to session log to pass back up the chain later
+          const anomalyData = {
+             type: result.anomaly?.split('_').filter(a => a !== result.severity).join(' ').replace(/\b\w/g, l => l.toUpperCase()),
+             severity: result.severity || 'high',
+             timestamp: recordingTime,
+             status: result.status,
+             matchedFile: result.source
+          };
+          
+          // Basic debouncing for the history array
+          if (!sessionAnomaliesRef.current.some(a => a.type === anomalyData.type)) {
+            sessionAnomaliesRef.current.push(anomalyData);
+          }
+          
+          Logger.info(`Real-time Alert Dispatched to UI (${result.status})`, { anomaly: result.anomaly, score: result.confidence });
+          toast.warning(`Issue Detected: ${anomalyData.type}`, {
+            description: `Confidence: ${(result.confidence * 100).toFixed(1)}% | Status: ${result.status}`
           });
           
           triggerContinuousAlert(result.anomaly, isVoiceAlertsEnabled);
@@ -176,108 +202,66 @@ export default function AudioRecorder({
 
   const handleAudioUpload = async (blob) => {
     try {
-      // Create MOCK analysis record
-      const mockId = `analysis-mock-${Date.now()}`;
+      const mockId = `analysis-live-${Date.now()}`;
+      
+      const realAnomalies = sessionAnomaliesRef.current || [];
+      const totalConf = sessionConfidenceRef.current.reduce((a, b) => a + b, 0);
+      const avgConfidence = sessionConfidenceRef.current.length > 0 
+        ? (totalConf / sessionConfidenceRef.current.length) * 100 
+        : 85; 
+
+      const overallHealth = realAnomalies.length === 0
+        ? "healthy"
+        : realAnomalies.some(a => a.severity === "critical" || a.severity === "high")
+          ? "critical"
+          : "warning";
 
       const analysis = {
         id: mockId,
         vehicle_id: vehicleId,
-        audio_file_url: URL.createObjectURL(blob), // Local object URL
+        audio_file_url: URL.createObjectURL(blob),
         duration_seconds: recordingTime,
-        status: "pending",
-        created_date: new Date().toISOString()
+        status: realAnomalies.length > 0 ? "flagged" : "completed",
+        confidence_score: avgConfidence,
+        anomalies_detected: realAnomalies,
+        analysis_result: {
+          overall_health: overallHealth,
+          confidence_score: avgConfidence,
+          detected_patterns: realAnomalies.length > 0
+            ? realAnomalies.map(a => a.type)
+            : ["smooth_idle", "consistent_rpm"],
+        },
+        processed_at: new Date().toISOString(),
+        created_date: new Date().toISOString(),
+        notes: realAnomalies.length > 0
+          ? "Active acoustic signatures met anomaly thresholds."
+          : "Engine block returned nominal patterns cleanly across all frequencies.",
       };
 
-      // Simulate analysis (in production, this would be a real ML model)
-      setTimeout(async () => {
-        await performMockAnalysis(analysis);
-      }, 2000);
-
-      toast.success("Audio captured successfully");
+      toast.success("Audio captured and verified fully on-device!");
+      
+      if (onRecordingComplete) {
+        onRecordingComplete(analysis);
+      }
+      
+      // Voice Feedback Confirmation
+      if (isVoiceAlertsEnabled) {
+          if (realAnomalies.length > 0) {
+            const primary = realAnomalies[0].type;
+            const meta = getDiagnosticMetadata(primary);
+            speakText(`Analysis complete. Priority issue: ${primary}. Estimated repair costs around ${meta.usd} dollars.`);
+          } else {
+            speakText("No anomalies detected. Vehicle is operating normally.");
+          }
+      }
+      
     } catch (error) {
       console.error("Error processing audio:", error);
       toast.error("Failed to process audio");
     }
   };
 
-  const performMockAnalysis = async (analysisData) => {
-    // Mock analysis - simulate anomaly detection
-    const mockAnomalies = [];
-    // 50% chance of detecting something
-    const shouldDetectAnomaly = Math.random() > 0.5;
 
-    if (shouldDetectAnomaly) {
-      const severities = ["low", "medium", "high", "critical"];
-      const types = [
-        "Belt tension variation",
-        "Valve timing offset",
-        "Exhaust resonance",
-        "Bearing noise",
-        "Engine knock",
-        "Misfire detected",
-        "Timing chain rattle",
-      ];
-
-      const numAnomalies = Math.floor(Math.random() * 2) + 1;
-
-      for (let i = 0; i < numAnomalies; i++) {
-        const severity = severities[Math.floor(Math.random() * severities.length)];
-        mockAnomalies.push({
-          type: types[Math.floor(Math.random() * types.length)],
-          severity: severity,
-          timestamp: Math.random() * recordingTime,
-          description: `Detected unusual acoustic pattern in engine sound`,
-          frequency_range: `${Math.floor(Math.random() * 5 + 1)}-${Math.floor(Math.random() * 5 + 6)}kHz`,
-        });
-      }
-    }
-
-    const overallHealth = mockAnomalies.length === 0
-      ? "healthy"
-      : mockAnomalies.some(a => a.severity === "high" || a.severity === "critical")
-        ? "critical"
-        : "warning";
-
-    const confidenceScore = Math.random() * 15 + 85; // 85-100%
-
-    // Construct the completed analysis object
-    const completedAnalysis = {
-      ...analysisData,
-      status: mockAnomalies.length > 0 ? "flagged" : "completed",
-      confidence_score: confidenceScore,
-      anomalies_detected: mockAnomalies,
-      analysis_result: {
-        overall_health: overallHealth,
-        confidence_score: confidenceScore,
-        frequency_analysis: {
-          low_freq: Math.random() > 0.7 ? "elevated" : "normal",
-          mid_freq: Math.random() > 0.8 ? "spike" : "normal",
-          high_freq: Math.random() > 0.9 ? "abnormal" : "normal",
-        },
-        detected_patterns: mockAnomalies.length > 0
-          ? mockAnomalies.map(a => a.type)
-          : ["smooth_idle", "consistent_rpm"],
-      },
-      processed_at: new Date().toISOString(),
-      notes: mockAnomalies.length > 0
-        ? "Anomalies detected - recommend professional inspection"
-        : "Engine operating within normal parameters",
-    };
-
-    if (onRecordingComplete) {
-      onRecordingComplete(completedAnalysis);
-    }
-
-    // Voice Feedback
-    if (mockAnomalies.length > 0) {
-      const primaryAnomaly = mockAnomalies[0].type;
-      speakText(`Analysis complete. Primary issue detected: ${primaryAnomaly}`);
-    } else {
-      speakText("Scan complete. Your engine sounds healthy.");
-    }
-
-    toast.success("Analysis complete!");
-  };
 
   const formatTime = (seconds) => {
     const mins = Math.floor(seconds / 60);

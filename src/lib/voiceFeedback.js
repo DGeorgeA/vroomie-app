@@ -1,4 +1,5 @@
 import { Logger } from './logger';
+import { getDiagnosticMetadata } from './diagnosticDictionary';
 
 const voiceProfiles = {
   'hi-IN': { pitch: 1.1, rate: 0.9, priorityParams: ['aurora', 'natural', 'premium'] },
@@ -73,16 +74,41 @@ export function speakText(text) {
 /**
  * Initiates a continuous 10-second repeating alert loop for severe anomalies.
  */
-export function triggerContinuousAlert(anomalyName, isVoiceEnabled = true) {
+export function triggerContinuousAlert(anomalyRawName, isVoiceEnabled = true) {
   if (!isVoiceEnabled) return;
 
   // Debounce if the exact same anomaly is already triggering to prevent overlapping intervals
-  if (currentAnomalyName === anomalyName && alertInterval !== null) return;
+  if (currentAnomalyName === anomalyRawName && alertInterval !== null) return;
 
   clearContinuousAlert(); // Safely wipe any previous state before starting
   
-  currentAnomalyName = anomalyName;
-  const alertMessage = `Warning: ${anomalyName} detected. Please check the vehicle.`;
+  currentAnomalyName = anomalyRawName;
+  
+  // Parse <category>_<anomalyName>_<severity> from the file name
+  const parts = anomalyRawName.split('_');
+  let severityStr = 'Unknown';
+  let readableNameStr = anomalyRawName;
+  
+  if (parts.length >= 3) {
+    severityStr = parts.pop();
+    // Reconstruct the descriptive name dropping the category prefix
+    readableNameStr = parts.slice(1).join(' ');
+  } else if (parts.length === 2) {
+    severityStr = parts.pop();
+    readableNameStr = parts[0];
+  }
+  
+  readableNameStr = readableNameStr.replace(/\b\w/g, l => l.toUpperCase());
+  severityStr = severityStr.toUpperCase();
+  
+  const dict = getDiagnosticMetadata(readableNameStr);
+  
+  let alertMessage = `Warning. Anomaly detected: ${readableNameStr}. Estimated repair cost is ${dict.usd} dollars.`;
+  
+  // Specific Voice Override for Bearing Faults
+  if (readableNameStr.toLowerCase().includes('bearing')) {
+    alertMessage = "Warning. Bearing fault detected. Immediate inspection recommended.";
+  }
   
   // Speak immediately
   speakText(alertMessage);

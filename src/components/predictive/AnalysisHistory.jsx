@@ -6,6 +6,7 @@ import GlassCard from "../ui/GlassCard";
 import { Skeleton } from "@/components/ui/skeleton";
 import { calculateRecurrence } from "../../lib/diagnosticsAggregator";
 import { generatePDFReport, generateCSVReport, generateSingleEntryPDFReport } from "../../lib/reportGenerator";
+import { getDiagnosticMetadata } from "../../lib/diagnosticDictionary";
 
 export default function AnalysisHistory({ 
   analyses = [], 
@@ -24,9 +25,11 @@ export default function AnalysisHistory({
     return colors[severity?.toLowerCase()] || colors.low;
   };
 
-  const getHealthIcon = (health) => {
-    if (health === "healthy" || health === true) { 
+  const getHealthIcon = (status) => {
+    if (status === "normal") { 
       return <CheckCircle className="w-5 h-5 text-green-400" />;
+    } else if (status === "potential_anomaly") {
+      return <AlertTriangle className="w-5 h-5 text-yellow-400" />;
     }
     return <AlertTriangle className="w-5 h-5 text-red-400" />;
   };
@@ -125,7 +128,31 @@ export default function AnalysisHistory({
       {/* Main Timeline */}
       <div className="space-y-3 relative z-0">
         {analyses.map((analysis, index) => {
-          const hasAnomalies = analysis.anomalies_detected && analysis.anomalies_detected.length > 0;
+          const anomalies = analysis.anomalies_detected || [];
+          const hasAnomalies = anomalies.length > 0;
+          
+          let dominantStatus = "normal";
+          if (hasAnomalies) {
+             if (anomalies.some(a => a.status === 'anomaly' || ['high', 'critical'].includes(a.severity))) {
+                 dominantStatus = 'anomaly';
+             } else {
+                 dominantStatus = 'potential_anomaly';
+             }
+          }
+          
+          let cardBorder = 'border-green-500/10';
+          let badgeClass = "bg-green-500/20 text-green-400 border-green-500/30";
+          let badgeText = "✅ NO ANOMALY DETECTED";
+          
+          if (dominantStatus === 'anomaly') {
+             cardBorder = 'border-red-500/20 bg-red-900/5';
+             badgeClass = getSeverityColor(anomalies[0]?.severity);
+             badgeText = `❗ ANOMALY DETECTED: ${anomalies[0]?.type.toUpperCase()}`;
+          } else if (dominantStatus === 'potential_anomaly') {
+             cardBorder = 'border-yellow-500/20 bg-yellow-900/5';
+             badgeClass = "bg-yellow-500/20 text-yellow-400 border-yellow-500/30";
+             badgeText = `⚠️ POTENTIAL ANOMALY: ${anomalies[0]?.type.toUpperCase()}`;
+          }
           
           return (
             <motion.div
@@ -135,23 +162,19 @@ export default function AnalysisHistory({
               transition={{ delay: index * 0.05 }}
             >
               <GlassCard 
-                className={`p-4 cursor-pointer border ${hasAnomalies ? 'border-red-500/20 bg-red-900/5' : 'border-green-500/10'}`}
+                className={`p-4 cursor-pointer border ${cardBorder}`}
                 hover
                 onClick={() => onSelectAnalysis && onSelectAnalysis(analysis)}
               >
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex items-center gap-3">
-                    {getHealthIcon(!hasAnomalies)}
+                    {getHealthIcon(dominantStatus)}
                     <div>
                       <div className="flex items-center gap-2">
                         <span
-                          className={`px-2 py-1 rounded-full text-[10px] font-bold tracking-wide border uppercase ${
-                            hasAnomalies
-                              ? getSeverityColor(analysis.anomalies_detected[0]?.severity)
-                              : "bg-green-500/20 text-green-400 border-green-500/30"
-                          }`}
+                          className={`px-2 py-1 rounded-full text-[10px] font-bold tracking-wide border uppercase ${badgeClass}`}
                         >
-                          {hasAnomalies ? `\u203C ${analysis.anomalies_detected[0]?.type || "ANOMALY DETECTED"}` : "\u2714 NO ANOMALY DETECTED"}
+                          {badgeText}
                         </span>
                         {analysis.confidence_score && (
                           <span className="text-xs text-gray-400 font-mono">
@@ -198,34 +221,44 @@ export default function AnalysisHistory({
                 {/* Anomalies List */}
                 {hasAnomalies && (
                   <div className="space-y-2 mt-4 pt-4 border-t border-white/5">
-                    {analysis.anomalies_detected.slice(0, 2).map((anomaly, i) => (
-                      <div
-                        key={i}
-                        className="bg-black/20 border border-white/5 rounded-md p-2"
-                      >
-                        <div className="flex items-start justify-between mb-1">
-                          <span className="text-sm font-semibold text-orange-200">
-                            {anomaly.type}
-                          </span>
-                          <span
-                            className={`px-2 py-0.5 rounded text-[10px] font-bold border ${getSeverityColor(
-                              anomaly.severity
-                            )}`}
-                          >
-                            {anomaly.severity?.toUpperCase()}
-                          </span>
+                    {anomalies.slice(0, 2).map((anomaly, i) => {
+                      const diagnosticMeta = getDiagnosticMetadata(anomaly.type);
+                      return (
+                        <div
+                          key={i}
+                          className="bg-black/20 border border-white/5 rounded-md p-3"
+                        >
+                          <div className="flex items-start justify-between mb-1">
+                            <span className="text-sm font-bold text-orange-200">
+                              {anomaly.type}
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold border ${getSeverityColor(anomaly.severity)}`}
+                            >
+                              {anomaly.severity?.toUpperCase()}
+                            </span>
+                          </div>
+                          
+                          <div className="mt-2 space-y-1">
+                            <p className="text-xs text-gray-300">
+                              <span className="font-semibold text-gray-400">Suggested Fix:</span> {diagnosticMeta.fix}
+                            </p>
+                            <div className="flex items-center gap-3 pt-1">
+                               <p className="text-xs text-green-400 font-mono bg-green-500/10 px-2 py-0.5 rounded border border-green-500/20">
+                                 Est: ${diagnosticMeta.usd} USD
+                               </p>
+                               <p className="text-xs text-blue-400 font-mono bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">
+                                 ₹{diagnosticMeta.inr.toLocaleString()} INR
+                               </p>
+                            </div>
+                          </div>
+                          
                         </div>
-                        {anomaly.description && <p className="text-xs text-gray-400">{anomaly.description}</p>}
-                        {anomaly.frequency_range && (
-                          <p className="text-xs text-gray-500 mt-1 font-mono">
-                            FQ: {anomaly.frequency_range}
-                          </p>
-                        )}
-                      </div>
-                    ))}
-                    {analysis.anomalies_detected.length > 2 && (
+                      );
+                    })}
+                    {anomalies.length > 2 && (
                       <p className="text-xs text-gray-500 text-center mt-2">
-                        +{analysis.anomalies_detected.length - 2} subsequent anomalies mapped
+                        +{anomalies.length - 2} subsequent anomalies mapped
                       </p>
                     )}
                   </div>
