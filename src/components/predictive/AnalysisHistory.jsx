@@ -170,15 +170,33 @@ export default function AnalysisHistory({
                   <div className="flex items-center gap-3">
                     {getHealthIcon(dominantStatus)}
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span
                           className={`px-2 py-1 rounded-full text-[10px] font-bold tracking-wide border uppercase ${badgeClass}`}
                         >
                           {badgeText}
                         </span>
-                        {analysis.confidence_score && (
+                        {analysis.detection_mode === 'hybrid' && analysis.mlConfidence !== undefined ? (
+                          <div className="flex gap-2">
+                            <span className="text-[10px] bg-blue-500/10 text-blue-400 px-1.5 py-0.5 rounded border border-blue-500/20">
+                              ML: {(analysis.mlConfidence * 100).toFixed(1)}%
+                            </span>
+                            <span className="text-[10px] bg-emerald-500/10 text-emerald-400 px-1.5 py-0.5 rounded border border-emerald-500/20">
+                              Signal: {(analysis.signalSimilarity * 100).toFixed(1)}%
+                            </span>
+                          </div>
+                        ) : analysis.confidence_score ? (
                           <span className="text-xs text-gray-400 font-mono">
                             {analysis.confidence_score.toFixed(1)}% conf
+                          </span>
+                        ) : null}
+                        {analysis.detection_mode && (
+                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${
+                            analysis.detection_mode === 'ml' 
+                              ? 'bg-blue-500/15 text-blue-300 border-blue-500/30' 
+                              : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                          }`}>
+                            {analysis.detection_mode === 'ml' ? '🤖 ML' : '🔊 Basic'}
                           </span>
                         )}
                       </div>

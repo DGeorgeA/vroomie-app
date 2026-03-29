@@ -42,6 +42,16 @@ export const diagnosticDictionary = {
     fix: "Inspect exhaust mounts and patch muffler leaks",
     usd: 80,
     inr: 6500,
+  },
+  "Bearing Fault": {
+    fix: "Replace affected bearing assembly — alternator, idler, or tensioner",
+    usd: 180,
+    inr: 15000,
+  },
+  "Belt Issue": {
+    fix: "Inspect and replace serpentine belt; check tensioner and idler pulleys",
+    usd: 100,
+    inr: 8000,
   }
 };
 

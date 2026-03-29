@@ -1,133 +1,271 @@
 import { referenceIndex } from '../services/audioDatasetService';
 import { Logger } from './logger';
+import { N_MELS, TARGET_TIME_FRAMES } from './spectrogramGenerator';
 
-const MAX_WINDOW_SIZE = 5;
-const BASE_CONFIDENCE_THRESHOLD = 0.75; // Lowered from 0.85
-const POTENTIAL_THRESHOLD = 0.60;
-const MAJORITY_VOTES_REQUIRED = 3;
+// ═══════════════════════════════════════════════
+// CONFIGURATION
+// ═══════════════════════════════════════════════
 
-let matchHistory = [];
-let ambientNoiseRmsHistory = [];
+const LIVE_WINDOW_FRAMES = 8; // ~2 seconds of 250ms chunks
+const SMOOTHING_WINDOW = 8;
 
-function fastCosine(vecA, vecB, normB) {
-  let dot = 0, normA_sq = 0;
-  for (let i = 0; i < vecA.length; i++) {
-    dot += vecA[i] * vecB[i];
-    normA_sq += vecA[i] * vecA[i];
+// Real-world calibrated thresholds
+const ANOMALY_THRESHOLD = 0.65;
+const PROBABLE_THRESHOLD = 0.55;
+
+// Hysteresis
+const STABILITY_DURATION_MS = 8000;
+const THRESHOLD_FRAMES = 4;
+
+// ═══════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════
+
+let liveWindowMfcc = [];
+let scoreHistory = [];
+let consecutiveDetections = 0;
+let activeAnomaly = null;
+let activeAnomalyTime = 0;
+
+// ═══════════════════════════════════════════════
+// MATH: COSINE SIMILARITY
+// ═══════════════════════════════════════════════
+
+function cosineSimilarity(a, b) {
+  let dot = 0, nA = 0, nB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    nA += a[i] * a[i];
+    nB += b[i] * b[i];
   }
-  if (normA_sq === 0 || normB === 0) return 0;
-  return dot / (Math.sqrt(normA_sq) * normB);
+  if (nA === 0 || nB === 0) return 0;
+  return dot / (Math.sqrt(nA) * Math.sqrt(nB));
 }
 
-function getDynamicThreshold(currentRms) {
-  ambientNoiseRmsHistory.push(currentRms);
-  if (ambientNoiseRmsHistory.length > 20) ambientNoiseRmsHistory.shift();
+// ═══════════════════════════════════════════════
+// MATH: NORMALIZED EUCLIDEAN (inverted to similarity)
+// ═══════════════════════════════════════════════
+
+function normalizedEuclidean(a, b) {
+  let sum = 0;
+  for (let i = 0; i < a.length; i++) sum += (a[i] - b[i]) ** 2;
+  return Math.max(0, 1 - Math.sqrt(sum) / 50);
+}
+
+// ═══════════════════════════════════════════════
+// SPECTROGRAM DTW — Lightweight Band-Averaged DTW
+// Compares mel-band energy profiles over time
+// ═══════════════════════════════════════════════
+
+function spectrogramDTW(refSpec, liveSpec) {
+  if (!refSpec || !liveSpec) return 0;
   
-  const avgBgNoise = ambientNoiseRmsHistory.reduce((a, b) => a + b, 0) / ambientNoiseRmsHistory.length;
-  if (avgBgNoise > 0.15) return { strict: BASE_CONFIDENCE_THRESHOLD + 0.05, potential: POTENTIAL_THRESHOLD + 0.05 }; 
-  return { strict: BASE_CONFIDENCE_THRESHOLD, potential: POTENTIAL_THRESHOLD }; 
-}
-
-function checkMajorityVoting(historyWindow, strictThreshold, potentialThreshold) {
-  const counts = {};
-  for (const match of historyWindow) {
-    if (!match.label) continue;
-    counts[match.label] = (counts[match.label] || 0) + 1;
-    if (counts[match.label] >= MAJORITY_VOTES_REQUIRED) {
-      return match.label;
+  // Reduce 128 mel bins to 16 bands, compare across time
+  const BANDS = 16;
+  const BINS_PER_BAND = Math.floor(N_MELS / BANDS);
+  const T = TARGET_TIME_FRAMES;
+  
+  // Compute band-averaged profiles
+  function bandProfile(spec) {
+    const profile = new Float32Array(BANDS * T);
+    for (let b = 0; b < BANDS; b++) {
+      for (let t = 0; t < T; t++) {
+        let sum = 0;
+        for (let m = 0; m < BINS_PER_BAND; m++) {
+          const melIdx = b * BINS_PER_BAND + m;
+          sum += spec[melIdx * T + t];
+        }
+        profile[b * T + t] = sum / BINS_PER_BAND;
+      }
     }
+    return profile;
   }
-  return null;
+  
+  const refProfile = bandProfile(refSpec);
+  const liveProfile = bandProfile(liveSpec);
+  
+  // Compute band-wise cosine similarity and average
+  let totalSim = 0;
+  for (let b = 0; b < BANDS; b++) {
+    const refBand = refProfile.slice(b * T, (b + 1) * T);
+    const liveBand = liveProfile.slice(b * T, (b + 1) * T);
+    totalSim += cosineSimilarity(refBand, liveBand);
+  }
+  
+  return Math.max(0, totalSim / BANDS);
 }
 
-export function matchBuffer(features) {
-  if (!referenceIndex || referenceIndex.length === 0) {
-    return { anomaly: null, confidence: 0, status: 'normal' };
+// ═══════════════════════════════════════════════
+// RESET
+// ═══════════════════════════════════════════════
+
+export function resetMatchState() {
+  liveWindowMfcc = [];
+  scoreHistory = [];
+  consecutiveDetections = 0;
+  activeAnomaly = null;
+  activeAnomalyTime = 0;
+  Logger.info('Match state reset');
+}
+
+// ═══════════════════════════════════════════════
+// CNN LABEL MAPPING
+// ═══════════════════════════════════════════════
+
+function cnnClassToLabel(cnnClass) {
+  return {
+    'bearing_fault': 'alternator_bearing_fault_critical',
+    'engine_knocking': 'engine_knocking_high',
+    'misfire': 'misfire_medium',
+    'belt_issue': 'pulley_misalignment_medium',
+    'other': 'unknown_anomaly_medium'
+  }[cnnClass] || cnnClass;
+}
+
+import { calculateCosineSimilarity } from './mlEmbeddingEngine';
+
+// ═══════════════════════════════════════════════
+// CORE: HYBRID EMBEDDING MATCHING
+// ═══════════════════════════════════════════════
+
+function computeSignalMatch(features) {
+  if (!referenceIndex || referenceIndex.length === 0 || !features.liveEmbedding) {
+    return { matchedFile: null, finalScore: 0, cosine: 0, dtwScore: 0 };
   }
   
   let bestMatch = null;
-  let maxConfidence = 0;
+  let bestScore = 0;
+  let bestCos = 0, bestDtw = 0;
   
-  
-  const thresholds = getDynamicThreshold(features.rms);
-  let liveScoresLog = [];
-  
-  // 4. Compare Against ALL Sounds (Core Fix)
   for (const ref of referenceIndex) {
-    let confidence = fastCosine(features.mfcc, ref.featureVector.mfcc, ref.featureVector.mfccNorm);
+    // We expect the Supabase dataset to now have `embedding_vector`
+    if (!ref.embedding_vector) continue;
     
-    // 5. Frequency-Specific Booster (Crucial for Bearing / Alternator squeals)
-    // Bearing faults are notoriously high-frequency and steady.
-    if (ref.label.toLowerCase().includes('bearing')) {
-       // If the live microphone detects high-frequency energy (> 2000 Hz)
-       if (features.spectralCentroid > 2000) {
-         confidence += 0.12; // Flat 12% confidence boost
-       }
-       // If the RMS (volume) is stable/distinct (not just transient clicking)
-       if (features.rms > 0.05) {
-         confidence += 0.05; 
-       }
+    // Step 1: FAST FILTER — Cosine Similarity on YAMNet Embeddings
+    const cos = calculateCosineSimilarity(ref.embedding_vector, features.liveEmbedding);
+    
+    // Low-confidence embeddings are immediately rejected as noise
+    if (cos < 0.45) continue;
+    
+    // Step 2: PRECISE MATCH — Spectrogram DTW Refinement
+    let dtw = 0;
+    if (features.liveSpectrogram && ref.spectrogram) {
+      dtw = spectrogramDTW(ref.spectrogram, features.liveSpectrogram);
     }
     
-    // Clamp at 1.0 (100%)
-    confidence = Math.min(1.0, confidence);
-    liveScoresLog.push(`${ref.label}: ${(confidence*100).toFixed(1)}%`);
+    // WEIGHTED FUSION: ML Embeddings are primary (0.7), Temporal DTW is secondary (0.3)
+    const finalScore = (dtw > 0)
+      ? 0.70 * cos + 0.30 * dtw
+      : cos; // Fallback if spectrograms missing
     
-    // 6. Select BEST MATCH (Classification)
-    if (confidence > maxConfidence) {
-      maxConfidence = confidence;
+    Logger.debug(`Match [${ref.label}] | YAMNet Cos=${cos.toFixed(3)} DTW=${dtw.toFixed(3)} => ${finalScore.toFixed(3)}`);
+    
+    if (finalScore > bestScore) {
+      bestScore = finalScore;
       bestMatch = ref;
+      bestCos = cos;
+      bestDtw = dtw;
     }
   }
   
-  // Observability: Log live scores identically against all reference samples
-  Logger.debug(`Live Classifier [Strict ${Math.round(thresholds.strict*100)}% | Pot ${Math.round(thresholds.potential*100)}%] -> ${liveScoresLog.join(' | ')}`);
+  return {
+    matchedFile: bestMatch ? bestMatch.label : null,
+    finalScore: bestScore,
+    cosine: bestCos,
+    dtwScore: bestDtw,
+  };
+}
+
+// ═══════════════════════════════════════════════
+// MAIN ENTRY: matchBuffer
+// ═══════════════════════════════════════════════
+
+export function matchBuffer(features) {
+  // Layer 2: Hybrid Signal & Embedding matching
+  const sigMatch = computeSignalMatch(features);
   
-  const isMatch = maxConfidence >= thresholds.strict && bestMatch;
-  const isPotential = !isMatch && maxConfidence >= thresholds.potential && bestMatch;
+  // Layer 1: CNN (If active)
+  const cnnResult = features.cnnResult || { class: 'normal', confidence: 0 };
+  const mlConf = cnnResult.class !== 'normal' ? cnnResult.confidence : 0;
+  const mlLabel = cnnResult.class !== 'normal' ? cnnClassToLabel(cnnResult.class) : null;
   
-  const predictedLabel = (isMatch || isPotential) ? bestMatch.label : null;
+  // Confidence smoothing over 2 seconds (8 frames @ 250ms)
+  scoreHistory.push(sigMatch.finalScore);
+  if (scoreHistory.length > SMOOTHING_WINDOW) scoreHistory.shift();
+  const smoothed = scoreHistory.reduce((a, b) => a + b, 0) / scoreHistory.length;
   
-  if (isMatch) {
-    Logger.info(`Top match tentatively isolating ${bestMatch.label} (Confidence: ${(maxConfidence*100).toFixed(1)}% - ANOMALY)`);
-  } else if (isPotential) {
-    Logger.info(`Top match tentatively isolating ${bestMatch.label} (Confidence: ${(maxConfidence*100).toFixed(1)}% - POTENTIAL)`);
+  // FALLBACK LOGIC: If confidence < 0.75, it's NOT an anomaly (strict requirement)
+  let finalDecision = 'NO ANOMALY';
+  let status = 'normal';
+  let anomalyName = null;
+  
+  // Step 3: STABILITY CHECK — Require consistent detection
+  if (smoothed >= ANOMALY_THRESHOLD || mlConf >= 0.75) {
+    status = 'anomaly';
+    anomalyName = mlConf >= 0.75 ? (mlLabel || sigMatch.matchedFile) : sigMatch.matchedFile;
+  } else if (smoothed >= PROBABLE_THRESHOLD) {
+    status = 'potential_anomaly';
+    anomalyName = sigMatch.matchedFile;
   }
   
-  // Sliding window queue handling false-positives via spatial persistence
-  matchHistory.push({ label: predictedLabel, confidence: maxConfidence });
-  if (matchHistory.length > MAX_WINDOW_SIZE) matchHistory.shift();
+  const rawResult = {
+    anomaly: anomalyName,
+    status,
+    mlConfidence: mlConf,
+    signalSimilarity: smoothed,
+    finalDecision: status === 'anomaly' ? 'ANOMALY DETECTED' : (status === 'potential_anomaly' ? 'PROBABLE ANOMALY' : 'NO ANOMALY'),
+    mode: 'hybrid_yamnet',
+    confidence: Math.max(mlConf, smoothed),
+    detectedClass: anomalyName,
+    classifierSource: 'yamnet_dtw_fusion',
+    source: sigMatch.matchedFile,
+    severity: (anomalyName && anomalyName.includes('critical')) ? 'critical' : 'medium',
+    _cosine: sigMatch.cosine,
+    _dtw: sigMatch.dtwScore,
+    _rawScore: sigMatch.finalScore,
+  };
   
-  // Find dominant label in window
-  let dominantLabel = null;
-  let dominantStatus = 'normal';
+  const now = Date.now();
   
-  const counts = {};
-  for (const item of matchHistory) {
-    if (!item.label) continue;
-    counts[item.label] = (counts[item.label] || 0) + 1;
-    if (counts[item.label] >= MAJORITY_VOTES_REQUIRED) {
-      dominantLabel = item.label;
-      // Re-eval strictness based on the current frame's confidence
-      dominantStatus = (maxConfidence >= thresholds.strict) ? 'anomaly' : 'potential_anomaly';
-      break;
+  // HYSTERESIS (Require 3-5 frames of consecutive high confidence)
+  if (rawResult.status === 'anomaly' || rawResult.status === 'potential_anomaly') {
+    consecutiveDetections++;
+    if (consecutiveDetections >= THRESHOLD_FRAMES) {
+      activeAnomaly = { ...rawResult };
+      activeAnomalyTime = now;
+      Logger.info(`❗ STABLE ANOMALY TRIGGERED: ${activeAnomaly.anomaly} (Confidence=${rawResult.confidence.toFixed(3)})`);
+    }
+  } else {
+    // If we dip below threshold, break the consecutive chain
+    consecutiveDetections = 0;
+  }
+  
+  if (activeAnomaly) {
+    const elapsed = now - activeAnomalyTime;
+    if (elapsed < STABILITY_DURATION_MS) {
+      // Keep anomaly alive through brief dropouts
+      if (rawResult.status === 'anomaly' || rawResult.status === 'potential_anomaly') {
+        activeAnomalyTime = now;
+      }
+      return {
+        ...activeAnomaly,
+        mlConfidence: mlConf,
+        signalSimilarity: smoothed,
+        confidence: Math.max(activeAnomaly.confidence, rawResult.confidence),
+        isPersistentState: true
+      };
+    } else {
+      Logger.info(`✅ Cleared anomaly state: ${activeAnomaly.anomaly}`);
+      activeAnomaly = null;
     }
   }
   
-  if (dominantLabel) {
-    Logger.info(`==== ${dominantStatus.toUpperCase()} CLASSIFIED ====`, { 
-      classifiedMatch: dominantLabel, 
-      confidenceTrigger: maxConfidence 
-    });
-    
-    return { 
-      anomaly: dominantLabel, 
-      confidence: maxConfidence, 
-      source: bestMatch?.audioBufferPath,
-      status: dominantStatus,
-      severity: bestMatch?.label?.split('_').pop() || 'medium'
-    };
+  // Strict fallback
+  if (rawResult.confidence < 0.75 && rawResult.status !== 'potential_anomaly') {
+     rawResult.finalDecision = 'NO ANOMALY';
+     rawResult.status = 'normal';
+     rawResult.anomaly = null;
   }
   
-  return { anomaly: null, confidence: maxConfidence, status: 'normal' };
+  return rawResult;
 }

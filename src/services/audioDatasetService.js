@@ -1,78 +1,93 @@
 import { supabase } from '../lib/supabase';
 import { Logger } from '../lib/logger';
-import { extractFeaturesFromBuffer } from '../lib/offlineAudioProcessor';
+import { initializeCNN, fileNameToClass } from '../lib/cnnClassifier';
+import { openDB } from 'idb';
 
 export let referenceIndex = [];
 
-function calculateNorm(vec) {
-  return Math.sqrt(vec.reduce((sum, val) => sum + val * val, 0));
-}
+// Initialize IndexedDB for resilient offline operations
+const initDB = async () => {
+  return openDB('vroomie-db', 1, {
+    upgrade(db) {
+      if (!db.objectStoreNames.contains('anomaly_references')) {
+        db.createObjectStore('anomaly_references', { keyPath: 'id' });
+      }
+    },
+  });
+};
 
 export async function initializeAudioDataset() {
   referenceIndex = [];
-  Logger.info("Starting Multi-File Anomaly Pattern extraction from Supabase Storage...");
+  const cnnTrainingData = [];
+  
+  Logger.info("Starting ML Reference Extraction (Offline-First IDB)...");
   
   try {
-    // 1. Fetch ALL Files from Supabase Storage
-    const { data: files, error: listError } = await supabase.storage.from('anomaly-patterns').list();
-    if (listError) {
-      Logger.error("Supabase Storage error listing bucket files", listError);
-      return;
-    }
-    
-    const audioFiles = files.filter(f => f.name.endsWith('.wav') || f.name.endsWith('.mp3'));
-    Logger.info(`Discovered ${audioFiles.length} valid audio patterns in bucket.`);
-    
-    if (audioFiles.length === 0) {
-      Logger.warn("No audio files found in anomaly-patterns bucket");
-      return;
-    }
+    const db = await initDB();
+    let dbRefs = [];
 
-    // 2. Load and Process ALL Reference Audio Files
-    const offlineCtx = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(1, 16000, 16000);
-    
-    for (const file of audioFiles) {
-      Logger.info(`Downloading and extracting features for: ${file.name}`);
+    // 1. Attempt to sync fresh metadata and pre-computed embeddings from DB
+    try {
+      const { data, error } = await supabase.from('anomaly_references').select('*');
+      if (error) throw new Error(`Supabase DB Error: ${error.message}`);
       
-      const { data: blob, error: downloadError } = await supabase.storage
-        .from('anomaly-patterns')
-        .download(file.name);
-        
-      if (downloadError) {
-        Logger.error(`Failed to download ${file.name}`, downloadError);
-        continue;
+      if (data && data.length > 0) {
+        dbRefs = data;
+        // Cache to IndexedDB
+        const tx = db.transaction('anomaly_references', 'readwrite');
+        await tx.store.clear();
+        for (const ref of data) {
+          await tx.store.put(ref);
+        }
+        await tx.done;
+        Logger.info(`Synced ${dbRefs.length} references to local IndexedDB cache.`);
       }
+    } catch (networkErr) {
+      Logger.warn("Network fetch failed or Timeout. Falling back to Local IndexedDB Cache...", networkErr);
+      // Seamlessly fall back to local IDB
+      dbRefs = await db.getAll('anomaly_references');
       
-      const arrayBuffer = await blob.arrayBuffer();
-      const audioBuffer = await offlineCtx.decodeAudioData(arrayBuffer);
-      
-      // 3. Ensure Feature Consistency mathematically via shared Meyda windowing slice
-      const features = await extractFeaturesFromBuffer(audioBuffer);
-      
-      if (features) {
-        referenceIndex.push({
-          label: file.name.replace(/\.[^/.]+$/, ""), // Strip extension for clean label
-          category: 'Anomaly',
-          source: 'supabase_bucket',
-          featureVector: {
-            mfcc: features.mfcc,
-            mfccNorm: calculateNorm(features.mfcc), // Precomputed for instant matching
-            rms: features.rms,
-            spectralCentroid: features.spectralCentroid
-          },
-          audioBufferPath: file.name
-        });
-      } else {
-        Logger.warn(`Feature extraction yielded empty payload for ${file.name} (perhaps completely silent)`);
+      if (dbRefs && dbRefs.length > 0) {
+        Logger.info(`Revived ${dbRefs.length} references from local IndexedDB cache.`);
       }
     }
     
-    Logger.info("====== MULTI-SOUND REFERENCE LIBRARY SUCCESSFULLY LOADED ======", { 
-      totalProcessed: referenceIndex.length,
-      patternsAdded: referenceIndex.map(r => r.label)
-    });
+    if (!dbRefs || dbRefs.length === 0) {
+      Logger.warn("No reference anomalies found in Supabase or Local Cache. The matching engine will be inactive.");
+      return;
+    }
+    
+    // 2. Load into memory index
+    for (const ref of dbRefs) {
+      if (ref.embedding_vector) {
+        // Parse the embedding vector. Depending on the SQL client, it might be a string '[0.1, ...]' or an array.
+        let parsedVector = ref.embedding_vector;
+        if (typeof parsedVector === 'string') {
+          try {
+            parsedVector = JSON.parse(parsedVector);
+          } catch (e) {
+            Logger.error(`Failed to parse embedding vector for ${ref.label}`, e);
+            continue;
+          }
+        }
+        
+        referenceIndex.push({
+          label: ref.label,
+          category: ref.category,
+          source: 'supabase_db',
+          embedding_vector: parsedVector,
+          spectrogram: ref.spectrogram_url ? null : null, // If we store spectrogram json, we can fetch it here
+          audioBufferPath: ref.source_file
+        });
+      }
+    }
+    
+    Logger.info(`Reference library loaded: ${referenceIndex.length} patterns.`);
+    
+    // Note: CNN initialization is skipped here since we moved to YAMNet. 
+    // If the legacy CNN is still active, we'd need spectrograms.
     
   } catch (err) {
-    Logger.error("Critical failure during Multi-File Dataset Initialization loop", err);
+    Logger.error("Dataset initialization failed", err);
   }
 }

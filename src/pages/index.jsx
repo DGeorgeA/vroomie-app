@@ -1,13 +1,12 @@
 import Layout from "./Layout.jsx";
-
 import PredictiveMaintenance from "./PredictiveMaintenance";
+import LoginPage from "./LoginPage";
+import SubscriptionPage from "./SubscriptionPage";
 
 import { BrowserRouter as Router, Route, Routes, useLocation } from 'react-router-dom';
 
 const PAGES = {
-
     PredictiveMaintenance: PredictiveMaintenance,
-
 }
 
 function _getCurrentPage(url) {
@@ -29,12 +28,24 @@ function PagesContent() {
     const currentPage = _getCurrentPage(location.pathname);
 
     return (
-        <Layout currentPageName={currentPage}>
-            <Routes>
-                <Route path="/" element={<PredictiveMaintenance />} />
-                <Route path="*" element={<PredictiveMaintenance />} />
-            </Routes>
-        </Layout>
+        <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/subscribe" element={
+                <Layout currentPageName={currentPage}>
+                    <SubscriptionPage />
+                </Layout>
+            } />
+            <Route path="/" element={
+                <Layout currentPageName={currentPage}>
+                    <PredictiveMaintenance />
+                </Layout>
+            } />
+            <Route path="*" element={
+                <Layout currentPageName={currentPage}>
+                    <PredictiveMaintenance />
+                </Layout>
+            } />
+        </Routes>
     );
 }
 

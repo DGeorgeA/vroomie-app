@@ -1,54 +1,74 @@
 import Meyda from 'meyda';
 import { Logger } from './logger';
+import { mixToMono, preprocessSignal, logSignalStats, TARGET_SR } from './audioPreprocessor';
+import { generateMelSpectrogram } from './spectrogramGenerator';
+
+const BUFFER_SIZE = 2048;
+const FEATURE_SET = ['mfcc', 'rms', 'spectralCentroid', 'zcr', 'spectralFlatness', 'spectralRolloff'];
 
 /**
- * Extracts reference features mathematically identical to strict real-time Web Audio API Meyda outputs.
- * Uses an array slice method directly to chunk through the decoded buffer.
- * 
- * @param {AudioBuffer} audioBuffer Fully decoded 16kHz Mono audio buffer
- * @returns {Object} average vectors { mfcc, rms, spectralCentroid }
+ * Extracts BOTH:
+ *  1. Log-Mel Spectrogram (PRIMARY — for DTW matching & CNN)
+ *  2. MFCC mean vector (SECONDARY — fast cosine pre-filter)
+ * from a decoded AudioBuffer.
  */
 export async function extractFeaturesFromBuffer(audioBuffer) {
-  Logger.info("Initiating identical offline Meyda extraction on reference buffer", { 
-    durationSeconds: audioBuffer.duration, 
-    sampleRate: audioBuffer.sampleRate 
-  });
+  let channelData = mixToMono(audioBuffer);
   
-  const bufferSize = 4096;
-  const channelData = audioBuffer.getChannelData(0); // Assuming mono or utilizing left channel
+  // Apply identical domain-robust preprocessing
+  channelData = preprocessSignal(channelData, audioBuffer.sampleRate);
+  logSignalStats(channelData, 'REF POST-PREPROCESS');
   
-  let totalWindows = 0;
-  let mfccSums = new Array(13).fill(0);
-  let rmsSum = 0;
-  let centroidSum = 0;
+  // 1. Generate Log-Mel Spectrogram (PRIMARY)
+  const spectrogram = generateMelSpectrogram(channelData, audioBuffer.sampleRate);
   
-  // Slide through the array exactly identically to how getUserMedia chunking operates over time
-  for (let i = 0; i < channelData.length - bufferSize; i += bufferSize) {
-    const frame = channelData.slice(i, i + bufferSize);
+  // 2. Extract MFCC mean vector (SECONDARY pre-filter)
+  let validFrames = 0;
+  let meanMfcc = Array(13).fill(0);
+  let meanRms = 0, meanCentroid = 0, meanZcr = 0, meanFlatness = 0, meanRolloff = 0;
+  
+  Meyda.bufferSize = BUFFER_SIZE;
+  Meyda.sampleRate = audioBuffer.sampleRate;
+  
+  for (let i = 0; i < channelData.length - BUFFER_SIZE; i += BUFFER_SIZE) {
+    const frame = channelData.slice(i, i + BUFFER_SIZE);
+    const features = Meyda.extract(FEATURE_SET, frame);
     
-    // Meyda natively supports extracting directly from a contiguous Float32Array locally without a context node attached
-    const features = Meyda.extract(['mfcc', 'rms', 'spectralCentroid'], frame);
-    
-    if (features && features.mfcc) {
-      if (features.rms < 0.005) continue; // Noise gate identically applied
-      
-      for (let j = 0; j < 13; j++) {
-        mfccSums[j] += features.mfcc[j];
-      }
-      rmsSum += features.rms;
-      centroidSum += features.spectralCentroid;
-      totalWindows++;
+    if (features && features.mfcc && features.rms > 0.003) {
+      validFrames++;
+      for (let j = 0; j < 13; j++) meanMfcc[j] += features.mfcc[j];
+      meanRms += features.rms;
+      meanCentroid += features.spectralCentroid || 0;
+      meanZcr += features.zcr || 0;
+      meanFlatness += features.spectralFlatness || 0;
+      meanRolloff += features.spectralRolloff || 0;
     }
   }
   
-  if (totalWindows === 0) {
-    Logger.warn("Offline reference vector contained zero valid frames above noise gate.");
-    return null;
-  }
+  if (validFrames === 0) return null;
   
-  return {
-    mfcc: mfccSums.map(sum => sum / totalWindows),
-    rms: rmsSum / totalWindows,
-    spectralCentroid: centroidSum / totalWindows
+  for (let j = 0; j < 13; j++) meanMfcc[j] /= validFrames;
+  meanRms /= validFrames;
+  meanCentroid /= validFrames;
+  meanZcr /= validFrames;
+  meanFlatness /= validFrames;
+  meanRolloff /= validFrames;
+  
+  const mfccVector = {
+    mfcc: meanMfcc,
+    rms: meanRms,
+    spectralCentroid: meanCentroid,
+    zcr: meanZcr,
+    spectralFlatness: meanFlatness,
+    spectralRolloff: meanRolloff,
+    mfccNorm: Math.sqrt(meanMfcc.reduce((s, v) => s + v * v, 0))
+  };
+  
+  Logger.info(`REF extracted: ${validFrames} frames, spectrogram ${spectrogram.length} values`);
+  
+  return { 
+    mfccVector,
+    spectrogram, // Float32Array (128*128) normalized [0,1]
+    refSignal: channelData
   };
 }

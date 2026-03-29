@@ -1,12 +1,18 @@
-import React, { useState, useRef } from "react";
-import { Mic, Square, Upload, Loader2, Clock, Bug } from "lucide-react";
+import React, { useState, useRef, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import { Mic, Square, Upload, Loader2, Clock, Bug, Cpu, AudioWaveform as WaveformIcon, Lock, Sparkles } from "lucide-react";
 import GlassButton from "../ui/GlassButton";
 import { toast } from "sonner";
-import { startExtraction, stopExtraction } from "@/lib/audioFeatureExtractor";
-import { matchBuffer } from "@/lib/audioMatchingEngine";
+import { startExtraction, stopExtraction, getActiveMediaStream, getActiveAudioContext } from "@/lib/audioFeatureExtractor";
+import { matchBuffer, resetMatchState } from "@/lib/audioMatchingEngine";
 import { triggerContinuousAlert, clearContinuousAlert, speakText } from "@/lib/voiceFeedback";
 import { Logger } from "@/lib/logger";
 import { getDiagnosticMetadata } from "@/lib/diagnosticDictionary";
+import { getDetectionMode, setDetectionMode } from "@/lib/detectionMode";
+import { useAuth } from "@/contexts/AuthContext";
+import { canAccess } from "@/lib/featureGate";
+import UpgradeModal from "./UpgradeModal";
+import { motion } from "framer-motion";
 
 export default function AudioRecorder({
   onRecordingComplete,
@@ -22,22 +28,86 @@ export default function AudioRecorder({
   const chunksRef = useRef([]);
   const timerRef = useRef(null);
   const streamRef = useRef(null);
-  const sessionAnomaliesRef = useRef([]); // Track real anomalies exclusively
+  const sessionAnomaliesRef = useRef([]);
   const sessionConfidenceRef = useRef([]); 
   
-  const [remainingTime, setRemainingTime] = useState(120); // 2 minutes target
+  const [remainingTime, setRemainingTime] = useState(120);
   const [isVoiceAlertsEnabled, setIsVoiceAlertsEnabled] = useState(true);
+  const [detectionMode, setDetectionModeState] = useState(getDetectionMode());
+  
+  // PWA UX States
+  const [isOffline, setIsOffline] = useState(!navigator.onLine);
+  const [micPermissionDenied, setMicPermissionDenied] = useState(false);
+  
+  // Track offline status globally
+  useEffect(() => {
+    const handleOnline = () => setIsOffline(false);
+    const handleOffline = () => setIsOffline(true);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
   
   const [debugStats, setDebugStats] = useState(null);
+  const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const IS_DEBUG = import.meta.env.DEV || true;
+  const { isPro } = useAuth();
+  const navigate = useNavigate();
 
-  // Remove WebSocket
+  // ─── Desktop Keyboard Shortcuts ─────────────────────────
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      
+      if (e.code === 'Space' || e.key.toLowerCase() === 'r') {
+        e.preventDefault(); // Prevent page scrolling
+        if (isRecording) {
+          stopRecording();
+        } else if (!isAnalyzing) {
+          startRecording();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isRecording, isAnalyzing]);
+
+  // ─── Detection Mode Toggle Handler ──────────────────────
+  const handleModeSwitch = (mode) => {
+    try {
+      if (isRecording) {
+        toast.warning("Cannot switch while recording. Stop first.");
+        return;
+      }
+      
+      if (mode === 'ml' && !isPro) {
+        setIsUpgradeModalOpen(true);
+        return;
+      }
+      
+      setDetectionMode(mode);
+      setDetectionModeState(mode);
+      resetMatchState();
+      const modeLabel = mode === 'ml' ? '⚡ AI Enabled' : '🔊 Basic Mode';
+      toast.success(`Detection mode set to: ${modeLabel}`);
+      Logger.info(`User switched detection mode to: ${mode}`);
+    } catch (err) {
+      console.error("Error switching mode:", err);
+      toast.error("Failed to switch interaction mode");
+    }
+  };
+
   const startRecording = async () => {
     try {
       sessionAnomaliesRef.current = [];
       sessionConfidenceRef.current = [];
       
-      // Start real-time extraction using our local pipeline
+      const activeMode = getDetectionMode();
+      
       await startExtraction((features) => {
         const result = matchBuffer(features);
         
@@ -50,48 +120,64 @@ export default function AudioRecorder({
             rms: features.rms.toFixed(4),
             centroid: features.spectralCentroid.toFixed(1),
             conf: result.confidence.toFixed(3),
-            status: result.status?.toUpperCase() || 'NORMAL'
+            status: result.status?.toUpperCase() || 'NORMAL',
+            cnnClass: result.detectedClass || 'N/A',
+            cnnConf: result.cnnConfidence ? (result.cnnConfidence * 100).toFixed(1) + '%' : 'N/A',
+            source: result.classifierSource || 'meyda',
+            mode: result.mode || activeMode
           });
         }
         
         if (result.status === 'anomaly' || result.status === 'potential_anomaly') {
-          // Add to session log to pass back up the chain later
           const anomalyData = {
              type: result.anomaly?.split('_').filter(a => a !== result.severity).join(' ').replace(/\b\w/g, l => l.toUpperCase()),
              severity: result.severity || 'high',
              timestamp: recordingTime,
              status: result.status,
-             matchedFile: result.source
+             matchedFile: result.source,
+             detectedClass: result.detectedClass,
+             cnnConfidence: result.cnnConfidence,
+             classifierSource: result.classifierSource,
+             mode: result.mode || activeMode,
+             // Phase 2 Hybrid Metrics
+             mlConfidence: result.mlConfidence || 0,
+             signalSimilarity: result.signalSimilarity || 0,
+             finalDecision: result.finalDecision || 'NO ANOMALY'
           };
           
-          // Basic debouncing for the history array
           if (!sessionAnomaliesRef.current.some(a => a.type === anomalyData.type)) {
             sessionAnomaliesRef.current.push(anomalyData);
           }
           
-          Logger.info(`Real-time Alert Dispatched to UI (${result.status})`, { anomaly: result.anomaly, score: result.confidence });
-          toast.warning(`Issue Detected: ${anomalyData.type}`, {
-            description: `Confidence: ${(result.confidence * 100).toFixed(1)}% | Status: ${result.status}`
-          });
+          Logger.info(`Real-time Alert (${result.status}) [HYBRID]`, { anomaly: result.anomaly, finalDecision: result.finalDecision });
           
-          triggerContinuousAlert(result.anomaly, isVoiceAlertsEnabled);
+          // Only pop toast if it's confirmed or probable (not transient tracking)
+          if (result.finalDecision !== 'NO ANOMALY') {
+            toast.warning(`${result.finalDecision}: ${anomalyData.type}`, {
+              description: `ML: ${(anomalyData.mlConfidence * 100).toFixed(1)}% | Signal: ${(anomalyData.signalSimilarity * 100).toFixed(1)}%`
+            });
+          }
+          
+          // STRICT RULE: Bind Voice Output ONLY to CONFIRMED ANOMALY 
+          if (result.finalDecision === 'CONFIRMED ANOMALY') {
+             triggerContinuousAlert(result.anomaly, isVoiceAlertsEnabled);
+          }
         } else {
           clearContinuousAlert();
         }
       });
       
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          sampleRate: 44100,
-        }
-      });
+      // CRITICAL FIX: Do NOT call getUserMedia twice.
+      // startExtraction already got the mic. Reuse that stream.
+      const stream = getActiveMediaStream();
+      const audioCtx = getActiveAudioContext();
+      
+      if (!stream) {
+        throw new Error("Feature extractor started but no stream available");
+      }
 
       streamRef.current = stream;
 
-      // Set up Web Audio API for visualization
-      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       const analyserNode = audioCtx.createAnalyser();
       analyserNode.fftSize = 2048;
 
@@ -101,7 +187,6 @@ export default function AudioRecorder({
       setAudioContext(audioCtx);
       setAnalyser(analyserNode);
 
-      // Set up MediaRecorder for saving audio AND streaming
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
       chunksRef.current = [];
@@ -109,45 +194,40 @@ export default function AudioRecorder({
       mediaRecorder.ondataavailable = (e) => {
         if (e.data.size > 0) {
           chunksRef.current.push(e.data);
-
-          // Stream to WebSocket
-          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-            wsRef.current.send(e.data);
-          }
         }
       };
 
       mediaRecorder.onstop = async () => {
-        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
-        await handleAudioUpload(blob);
+        try {
+          const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+          await handleAudioUpload(blob);
 
-        // Clean up
-        stream.getTracks().forEach(track => track.stop());
-        streamRef.current = null;
+          if (streamRef.current) {
+            streamRef.current.getTracks().forEach(track => track.stop());
+            streamRef.current = null;
+          }
+        } catch (uploadObjErr) {
+          console.error("Failed to upload audio at end of recording:", uploadObjErr);
+        }
       };
 
-      mediaRecorder.start(1000); // Send chunks every 1s
+      mediaRecorder.start(1000);
       setIsRecording(true);
       setRecordingTime(0);
       setRemainingTime(120);
 
-      // Start timer
       timerRef.current = setInterval(() => {
         setRecordingTime((prev) => {
           const newTime = prev + 1;
 
-          // 20 Second Intervals - Periodic Voice Check
           if (newTime % 20 === 0 && newTime < 120) {
-            // Trigger voice prompt: "No anomalies, continuing..."
-            speakText("No anomalies found. Continuing scan.");
-
+            try { speakText("No anomalies found. Continuing scan."); } catch (e) {}
             toast.info("Scanning in progress...", {
               description: `Time elapsed: ${newTime}s. Analyzing patterns...`,
               duration: 3000,
             });
           }
 
-          // 20 Second Prompt
           if (newTime === 20) {
             toast.info("Sufficient data collected.", {
               description: "You can stop now, or keep running for a deep scan.",
@@ -165,7 +245,6 @@ export default function AudioRecorder({
         setRemainingTime((prev) => {
           const next = prev - 1;
           if (next <= 0) {
-            // Auto stop at 0
             stopRecording();
             return 0;
           }
@@ -173,36 +252,49 @@ export default function AudioRecorder({
         });
       }, 1000);
 
-      toast.success("Recording started - recommended: 2 minutes");
+      const modeLabel = activeMode === 'ml' ? 'ML Mode' : 'Basic Mode';
+      toast.success(`Recording started [${modeLabel}] - recommended: 2 minutes`);
     } catch (error) {
-      console.error("Error accessing microphone:", error);
-      toast.error("Could not access microphone. Please check permissions.");
+      console.error("🚨 Error in startRecording:", error);
+      if (error.name === 'NotAllowedError' || error.message.includes('Permission')) {
+        setMicPermissionDenied(true);
+        toast.error("Microphone access is required for real-time analysis.");
+      } else {
+        toast.error("Failed to start the audio engine. Ensure your device has a working microphone.");
+      }
+      setIsRecording(false);
+      stopExtraction();
     }
   };
 
   const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
+    try {
+      if (mediaRecorderRef.current && isRecording) {
+        if (mediaRecorderRef.current.state === "recording") {
+          mediaRecorderRef.current.stop();
+        }
+        setIsRecording(false);
+        stopExtraction(); // This handles closing stream and audioContext
+
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+        }
+
+        clearContinuousAlert();
+        toast.info("Processing audio...");
+      }
+    } catch (error) {
+      console.error("Error stopping recording:", error);
+      toast.error("Failed to stop recording cleanly");
       setIsRecording(false);
-      stopExtraction(); // Stop our analysis pipeline
-
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-      }
-
-      clearContinuousAlert(); // Clear repeating alarms if active
-
-      if (audioContext) {
-        audioContext.close();
-      }
-
-      toast.info("Processing audio...");
+      stopExtraction();
     }
   };
 
   const handleAudioUpload = async (blob) => {
     try {
       const mockId = `analysis-live-${Date.now()}`;
+      const activeMode = getDetectionMode();
       
       const realAnomalies = sessionAnomaliesRef.current || [];
       const totalConf = sessionConfidenceRef.current.reduce((a, b) => a + b, 0);
@@ -224,6 +316,14 @@ export default function AudioRecorder({
         status: realAnomalies.length > 0 ? "flagged" : "completed",
         confidence_score: avgConfidence,
         anomalies_detected: realAnomalies,
+        detection_mode: 'hybrid', // Phase 2 mandates hybrid tracking
+        detection_source: 'ML + Deterministic Fusion',
+        
+        // Phase 2 Hybrid Metrics 
+        mlConfidence: realAnomalies[0] ? realAnomalies[0].mlConfidence : 0,
+        signalSimilarity: realAnomalies[0] ? realAnomalies[0].signalSimilarity : avgConfidence / 100,
+        finalDecision: realAnomalies[0] ? realAnomalies[0].finalDecision : 'NO ANOMALY',
+        
         analysis_result: {
           overall_health: overallHealth,
           confidence_score: avgConfidence,
@@ -244,7 +344,6 @@ export default function AudioRecorder({
         onRecordingComplete(analysis);
       }
       
-      // Voice Feedback Confirmation
       if (isVoiceAlertsEnabled) {
           if (realAnomalies.length > 0) {
             const primary = realAnomalies[0].type;
@@ -261,8 +360,6 @@ export default function AudioRecorder({
     }
   };
 
-
-
   const formatTime = (seconds) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
@@ -270,59 +367,159 @@ export default function AudioRecorder({
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          {isRecording && (
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse" />
-              <div className="flex flex-col">
-                <span className="text-white font-mono text-lg">
-                  {formatTime(recordingTime)}
-                </span>
-                <span className="text-xs text-gray-500">
-                  / 2:00
-                </span>
-              </div>
-            </div>
-          )}
-          {!isRecording && recordingTime > 0 && (
-            <span className="text-gray-400 text-sm">Last run: {formatTime(recordingTime)}</span>
+    <div className="space-y-8 flex flex-col items-center w-full relative">
+      
+      <UpgradeModal 
+        isOpen={isUpgradeModalOpen} 
+        onClose={() => setIsUpgradeModalOpen(false)} 
+      />
+
+      {/* ═══ Detection Mode Toggle (Centered & Minimal) ═══ */}
+      <div className="flex flex-col items-center gap-3 mb-4">
+        {/* Subtle System Status */}
+        <div className="flex items-center gap-2">
+          {isOffline ? (
+            <>
+              <div className="w-1.5 h-1.5 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.8)]" />
+              <span className="text-[10px] text-amber-500/80 font-medium uppercase tracking-widest">
+                Offline Mode Active
+              </span>
+            </>
+          ) : (
+            <>
+              <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
+              <span className="text-[10px] text-gray-500 font-medium uppercase tracking-widest">
+                {detectionMode === 'ml' ? 'AI Engine Ready' : 'System Ready'}
+              </span>
+            </>
           )}
         </div>
 
-        <div className="flex gap-3">
-          {!isRecording ? (
-            <GlassButton
+        <div className="flex items-center bg-black/40 border border-white/5 rounded-full p-1 backdrop-blur-xl shadow-2xl">
+          <motion.button
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            onClick={() => handleModeSwitch('basic')}
+            className={`flex items-center gap-2 px-5 py-2.5 rounded-full text-xs font-semibold transition-colors duration-300 ${
+              detectionMode === 'basic'
+                ? 'bg-zinc-800/80 text-white shadow-md border border-zinc-700/50'
+                : 'text-gray-500 hover:text-gray-300'
+            }`}
+          >
+            Basic
+          </motion.button>
+          
+          <motion.button
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            onClick={() => handleModeSwitch('ml')}
+            className={`relative group flex items-center gap-2 px-5 py-2.5 rounded-full text-xs font-bold transition-colors duration-300 overflow-hidden ${
+              detectionMode === 'ml'
+                ? 'bg-gradient-to-r from-cyan-600/90 to-blue-700/90 text-white shadow-[0_0_20px_rgba(6,182,212,0.4)] border border-cyan-400/50'
+                : !isPro
+                  ? 'bg-gradient-to-r from-cyan-900/40 to-blue-900/40 text-cyan-200/50 border border-cyan-500/10'
+                  : 'text-gray-500 hover:text-gray-300'
+            }`}
+          >
+            {/* Shimmer animation for AI Enabled button */}
+            {(!isPro || detectionMode === 'ml') && (
+              <div className="absolute inset-0 w-[200%] bg-gradient-to-r from-transparent via-white/10 to-transparent translate-x-[-100%] animate-[shimmer_3s_infinite]" />
+            )}
+            
+            {!isPro && <Lock className="w-3 h-3 text-cyan-400/50 relative z-10" />}
+            {isPro && <Sparkles className="w-3.5 h-3.5 text-cyan-300 relative z-10" />}
+            <span className="relative z-10 text-transparent bg-clip-text bg-gradient-to-r from-cyan-100 to-white">
+              AI Enabled
+            </span>
+            
+            {/* Glow halo */}
+            {detectionMode === 'ml' && (
+              <div className="absolute inset-0 shadow-[inset_0_0_12px_rgba(255,255,255,0.2)] rounded-full pointer-events-none" />
+            )}
+          </motion.button>
+        </div>
+      </div>
+
+      {/* ═══ Recording Controls (Centered Spheroid) ═══ */}
+      <div className="flex flex-col items-center justify-center w-full mt-4">
+        <div className="flex items-center gap-3 mb-6 min-h-[30px]">
+          {isRecording && (
+            <div className="flex items-center gap-2 bg-red-500/10 px-4 py-1.5 rounded-full border border-red-500/20">
+              <div className="w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.8)]" />
+              <span className="text-red-400 font-mono text-base tracking-wider">
+                {formatTime(recordingTime)}
+              </span>
+            </div>
+          )}
+          {!isRecording && recordingTime > 0 && !micPermissionDenied && (
+            <span className="text-gray-600 text-xs font-mono tracking-widest uppercase">Last run: {formatTime(recordingTime)}</span>
+          )}
+        </div>
+
+        <div className="flex gap-3 justify-center w-full">
+          {micPermissionDenied ? (
+            <div className="flex flex-col items-center gap-3 p-6 bg-red-950/20 border border-red-500/20 rounded-3xl w-full max-w-[280px] text-center shadow-lg backdrop-blur-sm">
+               <Mic className="w-8 h-8 text-red-400/80 mb-1" />
+               <h3 className="text-white/90 font-semibold text-sm">Microphone Required</h3>
+               <p className="text-zinc-400 text-xs text-balance">Vroomie needs mic access to perform acoustic AI diagnostics.</p>
+               <button onClick={() => window.location.reload()} className="mt-3 px-6 py-2.5 bg-white text-black text-xs font-bold rounded-full hover:bg-zinc-200 transition-colors shadow-xl">
+                 Reload App
+               </button>
+            </div>
+          ) : !isRecording ? (
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
               onClick={startRecording}
               disabled={isAnalyzing}
-              icon={Mic}
+              className={`
+                relative group rounded-full px-8 py-4 font-bold text-black
+                bg-gradient-to-r from-yellow-400 to-amber-500
+                shadow-[0_0_20px_rgba(252,211,77,0.3)]
+                hover:shadow-[0_0_30px_rgba(252,211,77,0.5)]
+                transition-shadow duration-300
+                flex items-center gap-2 overflow-hidden
+                ${isAnalyzing ? 'opacity-50 cursor-not-allowed' : ''}
+              `}
             >
-              Start Recording
-            </GlassButton>
+              <div className="absolute inset-0 bg-white/20 translate-y-[-100%] group-hover:translate-y-[100%] transition-transform duration-700 ease-in-out" />
+              <div className="absolute top-0 inset-x-0 h-1/2 bg-gradient-to-b from-white/30 to-transparent rounded-t-full pointer-events-none" />
+              <Mic className="w-5 h-5 relative z-10 animate-pulse" />
+              <span className="relative z-10">Start Recording</span>
+            </motion.button>
           ) : (
-            <GlassButton
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
               onClick={stopRecording}
-              variant="secondary"
-              icon={Square}
-              className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+              className={`
+                relative group rounded-full px-8 py-4 font-bold text-white
+                bg-gradient-to-r from-red-500 to-rose-600
+                shadow-[0_0_20px_rgba(239,68,68,0.3)]
+                hover:shadow-[0_0_30px_rgba(239,68,68,0.5)]
+                transition-shadow duration-300
+                flex items-center gap-2 overflow-hidden
+              `}
             >
-              Stop Recording
-            </GlassButton>
+              <div className="absolute inset-0 bg-white/20 translate-y-[-100%] group-hover:translate-y-[100%] transition-transform duration-700 ease-in-out" />
+              <div className="absolute top-0 inset-x-0 h-1/2 bg-gradient-to-b from-white/20 to-transparent rounded-t-full pointer-events-none" />
+              <Square className="w-5 h-5 relative z-10" fill="currentColor" />
+              <span className="relative z-10">Stop Recording</span>
+            </motion.button>
           )}
         </div>
       </div>
 
-      {/* Voice Alert Settings Toggle */}
-      <div className="flex items-center justify-between mt-6 pt-4 border-t border-white/5">
-        <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
+      {/* Voice Alert Settings Toggle (Moved to bottom corner, subtle) */}
+      <div className="absolute bottom-[-40px] right-0 flex items-center">
+        <label className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-zinc-600 cursor-pointer hover:text-zinc-400 transition-colors">
           <input 
             type="checkbox" 
             checked={isVoiceAlertsEnabled}
             onChange={(e) => setIsVoiceAlertsEnabled(e.target.checked)}
-            className="rounded border-zinc-700 bg-zinc-800 text-blue-500 focus:ring-blue-500/50 cursor-pointer"
+            className="w-3 h-3 rounded-sm border-zinc-700 bg-zinc-800 text-amber-500 focus:ring-amber-500/50 cursor-pointer opacity-50"
           />
-          Voice Alerts ON/OFF
+          Voice Alerts
         </label>
       </div>
 
@@ -334,15 +531,38 @@ export default function AudioRecorder({
       {/* Live Pipeline Debug Mode */}
       {IS_DEBUG && isRecording && debugStats && (
         <div className="mt-4 p-3 bg-black/40 border border-[#7b9a1e]/30 rounded-xl font-mono text-xs text-[#7b9a1e]/80 flex flex-col gap-1 backdrop-blur-md">
-          <div className="flex items-center gap-2 mb-1 border-b border-[#7b9a1e]/20 pb-1">
-            <Bug size={14} className="text-[#7b9a1e]" />
-            <span className="font-bold tracking-widest uppercase text-[#7b9a1e]">ML Pipeline Telemetry</span>
+          <div className="flex items-center justify-between mb-1 border-b border-[#7b9a1e]/20 pb-1">
+            <div className="flex items-center gap-2">
+              <Bug size={14} className="text-[#7b9a1e]" />
+              <span className="font-bold tracking-widest uppercase text-[#7b9a1e]">Pipeline Telemetry</span>
+            </div>
+            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+              debugStats.mode === 'ml' 
+                ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' 
+                : 'bg-zinc-700 text-zinc-300 border border-zinc-600'
+            }`}>{debugStats.mode === 'ml' ? '🤖 ML' : '🔊 BASIC'}</span>
           </div>
           <div className="grid grid-cols-2 gap-x-4">
             <span>RMS Energy: <span className="text-white">{debugStats.rms}</span></span>
             <span>Centroid Hz: <span className="text-white">{debugStats.centroid}</span></span>
-            <span className="col-span-2 mt-1 pt-1 border-t border-[#7b9a1e]/10">Match Confidence: <span className="text-white">{(debugStats.conf * 100).toFixed(1)}%</span></span>
+            <span className="col-span-2 mt-1 pt-1 border-t border-[#7b9a1e]/10">
+              {debugStats.mode === 'basic' ? 'Meyda' : 'Active'} Confidence: <span className="text-white">{(debugStats.conf * 100).toFixed(1)}%</span>
+            </span>
           </div>
+          {debugStats.mode === 'ml' && (
+            <div className="mt-2 pt-2 border-t border-cyan-500/20">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="font-bold tracking-widest uppercase text-cyan-400">🧠 CNN Classifier</span>
+                <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                  debugStats.source === 'cnn' ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' : 'bg-zinc-800 text-zinc-400 border border-zinc-700'
+                }`}>{debugStats.source?.toUpperCase()}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-x-4">
+                <span>CNN Class: <span className="text-cyan-300">{debugStats.cnnClass}</span></span>
+                <span>CNN Conf: <span className="text-cyan-300">{debugStats.cnnConf}</span></span>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -1,12 +1,16 @@
 
 import React, { useState, useEffect } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { Activity } from "lucide-react";
+import { Activity, LogIn, LogOut, Crown, User } from "lucide-react";
 import VroomieLogo from '@/components/ui/VroomieLogo';
+import { useAuth } from '@/contexts/AuthContext';
+import { signOut } from '@/services/authService';
 
 export default function Layout({ children, currentPageName }) {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { user, isPro, loading } = useAuth();
   const [scrolled, setScrolled] = useState(false);
   const [showLogoAnimation, setShowLogoAnimation] = useState(true);
 
@@ -71,6 +75,43 @@ export default function Layout({ children, currentPageName }) {
               <span className="text-2xl font-bold bg-gradient-to-r from-yellow-300 to-yellow-500 bg-clip-text text-transparent">
                 Vroomie
               </span>
+            </div>
+
+            {/* Auth / User Section */}
+            <div className="flex items-center gap-3">
+              {!loading && user ? (
+                <>
+                  {/* Plan Badge */}
+                  <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border ${
+                    isPro 
+                      ? 'bg-yellow-400/15 text-yellow-300 border-yellow-400/30' 
+                      : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                  }`}>
+                    {isPro ? <Crown className="w-3 h-3" /> : null}
+                    {isPro ? 'PRO' : 'FREE'}
+                  </div>
+
+                  {/* User */}
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-yellow-400/20 to-yellow-600/20 border border-yellow-400/20 flex items-center justify-center">
+                      <User className="w-4 h-4 text-yellow-400" />
+                    </div>
+                    <button
+                      onClick={async () => { await signOut(); navigate('/login'); }}
+                      className="text-xs text-gray-500 hover:text-red-400 transition-colors flex items-center gap-1"
+                    >
+                      <LogOut className="w-3 h-3" />
+                    </button>
+                  </div>
+                </>
+              ) : !loading ? (
+                <button
+                  onClick={() => navigate('/login')}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-gradient-to-r from-yellow-400 to-yellow-500 text-black hover:from-yellow-300 hover:to-yellow-400 transition-all"
+                >
+                  <LogIn className="w-3.5 h-3.5" /> Sign In
+                </button>
+              ) : null}
             </div>
           </div>
         </div>

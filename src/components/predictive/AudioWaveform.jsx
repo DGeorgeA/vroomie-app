@@ -92,8 +92,8 @@ export default function AudioWaveform({
       ctx.fillStyle = "#09090b";
       ctx.fillRect(0, 0, width, height);
 
-      // ECG Grid - More prominent on mobile
-      ctx.strokeStyle = "rgba(252, 211, 77, 0.15)";
+      // ECG Grid - Make it faint, background-only
+      ctx.strokeStyle = "rgba(252, 211, 77, 0.04)";
       ctx.lineWidth = 1;
       
       // Horizontal lines
@@ -115,8 +115,8 @@ export default function AudioWaveform({
       }
 
       // Center line (baseline)
-      ctx.strokeStyle = "rgba(252, 211, 77, 0.3)";
-      ctx.lineWidth = 2;
+      ctx.strokeStyle = "rgba(252, 211, 77, 0.1)";
+      ctx.lineWidth = 1;
       ctx.setLineDash([5, 5]);
       ctx.beginPath();
       ctx.moveTo(0, height / 2);
@@ -132,8 +132,8 @@ export default function AudioWaveform({
 
         // Enhanced ECG-style waveform
         ctx.strokeStyle = "#FCD34D";
-        ctx.lineWidth = 3;
-        ctx.shadowBlur = 20;
+        ctx.lineWidth = 2.5;
+        ctx.shadowBlur = 12; // Reduced glow intensity
         ctx.shadowColor = "#FCD34D";
         ctx.beginPath();
 
@@ -161,8 +161,8 @@ export default function AudioWaveform({
       } else if (isListening) {
         // Dynamic ECG animation when idle/listening
         ctx.strokeStyle = "#FCD34D";
-        ctx.lineWidth = 3;
-        ctx.shadowBlur = 15;
+        ctx.lineWidth = 2;
+        ctx.shadowBlur = 8; // Reduced glow
         ctx.shadowColor = "#FCD34D";
         ctx.beginPath();
 
@@ -222,8 +222,8 @@ export default function AudioWaveform({
       } else if (waveformData.length > 0) {
         // Static playback waveform
         ctx.strokeStyle = "#FCD34D";
-        ctx.lineWidth = 3;
-        ctx.shadowBlur = 15;
+        ctx.lineWidth = 2;
+        ctx.shadowBlur = 8; // Reduced glow
         ctx.shadowColor = "#FCD34D";
         ctx.beginPath();
 
@@ -273,8 +273,8 @@ export default function AudioWaveform({
         });
       } else {
         // Idle flat line
-        ctx.strokeStyle = "rgba(252, 211, 77, 0.3)";
-        ctx.lineWidth = 2;
+        ctx.strokeStyle = "rgba(252, 211, 77, 0.1)";
+        ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(0, height / 2);
         ctx.lineTo(width, height / 2);
