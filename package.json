@@ -2,7 +2,7 @@
   "name": "vroomie-ap",
   "private": true,
   "version": "0.0.0",
-  "homepage": ".",
+  "homepage": "https://vroomie.in",
   "type": "module",
   "scripts": {
     "dev": "vite",
