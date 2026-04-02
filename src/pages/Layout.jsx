@@ -50,17 +50,28 @@ export default function Layout({ children, currentPageName }) {
       >
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-14 md:h-16">
-            {/* Logo — clicking always reloads to home */}
-            <button
-              onClick={() => { window.location.href = "/"; }}
-              className="flex items-center gap-2.5 group focus:outline-none"
-              aria-label="Vroomie home"
-            >
+            {/* Logo — VroomieLogo handles click internally (glow pulse → home) */}
+            <div className="flex items-center gap-3">
               <VroomieLogo size="md" />
-              <span className="text-xl font-bold text-yellow-300 group-hover:text-yellow-200 transition-colors">
+              <span
+                style={{
+                  fontFamily: "'Orbitron', system-ui, sans-serif",
+                  fontWeight: 700,
+                  fontStyle: "italic",
+                  letterSpacing: "-0.02em",
+                  fontSize: "1.15rem",
+                  lineHeight: 1,
+                  background: "linear-gradient(135deg, #FDE68A 0%, #FCD34D 55%, #F59E0B 100%)",
+                  WebkitBackgroundClip: "text",
+                  WebkitTextFillColor: "transparent",
+                  backgroundClip: "text",
+                  cursor: "pointer",
+                }}
+                onClick={() => { window.location.href = "/"; }}
+              >
                 Vroomie
               </span>
-            </button>
+            </div>
 
             {/* Auth / User Section */}
             <div className="flex items-center gap-3">
