@@ -4,14 +4,14 @@ import App from './App.jsx'
 import '@/index.css'
 import { registerSW } from 'virtual:pwa-register'
 
-// Register Service Worker for PWA Offline Capabilities
+// Register Service Worker — autoUpdate mode: new SW activates automatically
 const updateSW = registerSW({
   onNeedRefresh() {
-    // Optionally trigger a toast to the user
-    console.log('New content available, waiting for refresh...');
+    // Immediately activate the new service worker (skip waiting)
+    updateSW(true);
   },
   onOfflineReady() {
-    console.log('App ready to work offline!');
+    console.log('[Vroomie] App ready to work offline.');
   },
 })
 
