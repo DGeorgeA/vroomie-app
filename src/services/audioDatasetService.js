@@ -53,7 +53,11 @@ export async function initializeAudioDataset() {
     }
     
     if (!dbRefs || dbRefs.length === 0) {
-      Logger.warn("No reference anomalies found in Supabase or Local Cache. The matching engine will be inactive.");
+      Logger.warn(
+        "No reference anomalies found in Supabase DB or local IndexedDB cache. " +
+        "Ensure the 'anomaly_references' table has rows with populated 'embedding_vector' columns. " +
+        "The acoustic matching engine will remain inactive until references are loaded."
+      );
       return;
     }
     

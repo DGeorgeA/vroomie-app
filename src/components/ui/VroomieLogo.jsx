@@ -1,124 +1,54 @@
-import React, { useState, useEffect } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import vroomieLogo from "@/assets/vroomie_logo.jpg";
+import React from "react";
 
-export default function VroomieLogo({ size = "md", animate = false, showAnimation = true }) {
-  const [isAnimating, setIsAnimating] = useState(showAnimation);
-
-  // Auto-play animation on mount or when showAnimation changes
-  useEffect(() => {
-    if (showAnimation) {
-      setIsAnimating(true);
-      const timer = setTimeout(() => {
-        setIsAnimating(false);
-      }, 5000); // Longer animation for the new "revving" effect
-      return () => clearTimeout(timer);
-    }
-  }, [showAnimation]);
-
+/**
+ * VroomieLogo — Clean, flat, minimal SVG car icon.
+ * Static only. No animations. Scalable. Clicking reloads the page.
+ */
+export default function VroomieLogo({ size = "md", onClick }) {
   const sizes = {
-    sm: { width: 44, height: 44 },
-    md: { width: 64, height: 64 },
-    lg: { width: 100, height: 100 },
-    xl: { width: 160, height: 160 },
+    sm: 28,
+    md: 36,
+    lg: 52,
+    xl: 80,
   };
 
-  const { width, height } = sizes[size] || sizes.md;
+  const px = sizes[size] || sizes.md;
 
-  // Premium "Revving" Animation
-  const revvingAnimation = {
-    x: [0, -1, 1, -1, 1, 0],
-    y: [0, -0.5, 0.5, -0.5, 0.5, 0],
-    scale: [1, 1.02, 1],
-    transition: {
-      duration: 0.1,
-      repeat: Infinity,
-      ease: "linear"
-    }
-  };
-
-  const initialAnimation = {
-    initial: { x: -50, opacity: 0, scale: 0.8 },
-    animate: { 
-      x: 0, 
-      opacity: 1, 
-      scale: 1,
-      transition: {
-        type: "spring",
-        damping: 12,
-        stiffness: 100,
-        duration: 0.8,
-      }
-    }
-  };
+  const handleClick = onClick || (() => { window.location.href = "/"; });
 
   return (
-    <div className="relative flex items-center justify-center" style={{ width, height }}>
-      {/* Background Glow / AI Aura */}
-      <div className="absolute inset-0 bg-cyan-500/10 blur-xl rounded-full scale-150 animate-pulse pointer-events-none" />
-      
-      <AnimatePresence mode="wait">
-        <motion.div
-           key={isAnimating ? "animating" : "static"}
-           {...initialAnimation}
-           animate={isAnimating ? {
-             ...initialAnimation.animate,
-             ...revvingAnimation
-           } : initialAnimation.animate}
-           className="relative z-10 w-full h-full overflow-hidden rounded-[22%] shadow-2xl border border-white/5"
-           style={{
-             // Using a mask to "trim" the background from the JPG as best as possible
-             WebkitMaskImage: 'radial-gradient(circle at center, black 65%, transparent 100%)',
-             maskImage: 'radial-gradient(circle at center, black 65%, transparent 100%)',
-           }}
-        >
-          <img
-            src={vroomieLogo}
-            alt="Vroomie Premium Logo"
-            className="w-full h-full object-cover select-none"
-            style={{
-              filter: 'brightness(1.1) contrast(1.1) saturate(1.2)',
-            }}
-          />
-          
-          {/* Diagnostic Shine Effect */}
-          <motion.div
-            initial={{ left: '-100%' }}
-            animate={{ left: '100%' }}
-            transition={{
-              duration: 2,
-              repeat: Infinity,
-              repeatDelay: 3,
-              ease: "easeInOut"
-            }}
-            className="absolute top-0 bottom-0 w-1/2 bg-gradient-to-r from-transparent via-white/20 to-transparent skew-x-[-20deg] pointer-events-none"
-          />
-        </motion.div>
-      </AnimatePresence>
-      
-      {/* High-tech tech lines */}
-      {isAnimating && (
-        <div className="absolute -inset-2 pointer-events-none">
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: [0, 0.5, 0] }}
-            transition={{ duration: 1, repeat: Infinity }}
-            className="absolute top-1/2 -left-4 w-6 h-0.5 bg-cyan-400 rounded-full blur-[1px]" 
-          />
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: [0, 0.5, 0] }}
-            transition={{ duration: 1, repeat: Infinity, delay: 0.2 }}
-            className="absolute top-1/3 -left-2 w-4 h-0.5 bg-cyan-400 rounded-full blur-[1px]" 
-          />
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: [0, 0.5, 0] }}
-            transition={{ duration: 1, repeat: Infinity, delay: 0.4 }}
-            className="absolute top-2/3 -left-2 w-4 h-0.5 bg-cyan-400 rounded-full blur-[1px]" 
-          />
-        </div>
-      )}
-    </div>
+    <svg
+      width={px}
+      height={px}
+      viewBox="0 0 64 40"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      onClick={handleClick}
+      style={{ cursor: "pointer", display: "block", flexShrink: 0 }}
+      aria-label="Vroomie — go to home"
+      role="img"
+    >
+      {/* Car body */}
+      <path
+        d="M6 28 C6 28 4 28 4 26 L4 22 C4 22 4 20 6 20 L10 20 L15 12 C15 12 17 10 20 10 L44 10 C47 10 49 12 49 12 L54 20 L58 20 C60 20 60 22 60 22 L60 26 C60 28 58 28 58 28 L6 28 Z"
+        fill="#FCD34D"
+      />
+      {/* Windshield */}
+      <path
+        d="M19 20 L22 13 L42 13 L46 20 Z"
+        fill="#0a0a0a"
+        opacity="0.55"
+      />
+      {/* Left wheel */}
+      <circle cx="17" cy="28" r="6" fill="#18181b" />
+      <circle cx="17" cy="28" r="3" fill="#3f3f46" />
+      {/* Right wheel */}
+      <circle cx="47" cy="28" r="6" fill="#18181b" />
+      <circle cx="47" cy="28" r="3" fill="#3f3f46" />
+      {/* Headlight */}
+      <rect x="55" y="21" width="4" height="3" rx="1" fill="#FEF9C3" opacity="0.9" />
+      {/* Tail light */}
+      <rect x="5" y="21" width="4" height="3" rx="1" fill="#F87171" opacity="0.8" />
+    </svg>
   );
 }

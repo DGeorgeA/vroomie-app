@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Activity, AlertTriangle, CheckCircle, TrendingUp, Maximize2, Minimize2, Globe } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle, TrendingUp, Globe } from "lucide-react";
 import GlassCard from "../components/ui/GlassCard";
 import AudioWaveform from "../components/predictive/AudioWaveform";
 import AudioRecorder from "../components/predictive/AudioRecorder";
@@ -19,22 +19,9 @@ export default function PredictiveMaintenance() {
   const [isRecording, setIsRecording] = useState(false);
   const [analyser, setAnalyser] = useState(null);
   const [audioContext, setAudioContext] = useState(null);
-  const [isFullscreenECG, setIsFullscreenECG] = useState(false);
 
-  // Voice & Language State
+  // Voice & Language State — default English (US)
   const [language, setLanguage] = useState('en-US');
-
-  // MOCK: Simulate Location/Region Sensing
-  useEffect(() => {
-    // In a real app, use navigator.geolocation
-    // Here we randomly pick a region or default to 'en-US' initially
-    // Let's assume we "sensed" a random location for demo
-    // MOCK: Detected Kerala Region
-    const detected = 'ml-IN';
-    setLanguage(detected);
-
-    toast.success(`Location detected: Kerala. Language set to Malayalam.`);
-  }, []);
 
   // MOCK DATA: Vehicles
   useEffect(() => {
@@ -121,11 +108,11 @@ export default function PredictiveMaintenance() {
   return (
     <div className="min-h-screen py-6 md:py-12 px-2 md:px-4 lg:px-8">
       <div className="max-w-7xl mx-auto">
-        {/* Header - Hidden on mobile when fullscreen ECG */}
+        {/* Header */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className={`text-center mb-4 md:mb-8 ${isFullscreenECG ? 'hidden md:block' : ''}`}
+          className="text-center mb-4 md:mb-8"
         >
           <div className="flex flex-col items-center">
             <div className="w-full flex justify-between items-start mb-2 px-2">
@@ -149,7 +136,7 @@ export default function PredictiveMaintenance() {
                 </div>
               </div>
 
-              <div className="w-8"></div> {/* Spacer for symmetry */}
+              <div className="w-8"></div>
             </div>
 
             <div className="inline-flex items-center gap-2 backdrop-blur-md bg-yellow-300/10 border border-yellow-300/30 rounded-full px-3 md:px-4 py-1.5 md:py-2 mb-3 md:mb-6">
@@ -158,12 +145,12 @@ export default function PredictiveMaintenance() {
             </div>
           </div>
           <h1 className="text-3xl md:text-5xl lg:text-7xl font-bold mb-2 md:mb-4 tracking-tight">
-            <span className="bg-gradient-to-r from-yellow-300 via-yellow-100 to-white bg-clip-text text-transparent filter drop-shadow-lg">
-              #1 Instant Car Health Checkup
+            <span className="bg-gradient-to-r from-yellow-300 via-yellow-100 to-white bg-clip-text text-transparent">
+              Instant Car Health Checkup
             </span>
           </h1>
           <p className="text-sm md:text-xl text-gray-400 max-w-3xl mx-auto px-4 mt-4">
-            Listen to your engine's heartbeat. Real-time audio analysis detects issues in seconds.
+            Real-time engine audio analysis. Detect issues in seconds.
           </p>
         </motion.div>
 
@@ -172,7 +159,7 @@ export default function PredictiveMaintenance() {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1 }}
-          className={`mb-6 max-w-2xl mx-auto ${isFullscreenECG ? 'hidden md:block' : ''}`}
+          className="mb-6 max-w-2xl mx-auto"
         >
           <div className="bg-white/5 border border-white/10 rounded-xl p-4 backdrop-blur-sm">
             <div className="flex items-center gap-2 mb-3">
@@ -236,8 +223,8 @@ export default function PredictiveMaintenance() {
           </GlassCard>
         </div>
 
-        {/* Status Overview Cards - Hidden on mobile when fullscreen ECG */}
-        <div className={`grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4 mb-3 md:mb-6 ${isFullscreenECG ? 'hidden md:grid' : ''}`}>
+        {/* Status Overview Cards */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4 mb-3 md:mb-6">
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
             <GlassCard className="p-3 md:p-4">
               <div className="flex items-center justify-between mb-1 md:mb-2">
@@ -294,16 +281,13 @@ export default function PredictiveMaintenance() {
           </motion.div>
         </div>
 
-        {/* MAIN LAYOUT: Mobile Fullscreen ECG, Desktop 40/60 Split */}
-        <div className={`grid ${isFullscreenECG ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-1'} gap-3 md:gap-6`}>
-
-
-          {/* Analysis History - Hidden on mobile when ECG is fullscreen */}
+        {/* Analysis History */}
+        <div className="grid grid-cols-1 gap-3 md:gap-6">
           <motion.div
             initial={{ opacity: 0, x: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.7 }}
-            className={`${isFullscreenECG ? 'hidden' : 'lg:col-span-3'}`}
+            className="lg:col-span-3"
           >
             <GlassCard className="p-4 md:p-6">
               <h2 className="text-lg md:text-xl font-bold text-white mb-4 md:mb-6">Analysis History</h2>
@@ -327,12 +311,12 @@ export default function PredictiveMaintenance() {
           )}
         </AnimatePresence>
 
-        {/* How It Works - Hidden on mobile when fullscreen ECG */}
+        {/* How It Works */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.8 }}
-          className={`mt-6 md:mt-12 ${isFullscreenECG ? 'hidden md:block' : ''}`}
+          className="mt-6 md:mt-12"
         >
           <GlassCard className="p-4 md:p-8">
             <h3 className="text-xl md:text-2xl font-bold text-white mb-4 md:mb-6">How Real-Time ECG Monitoring Works</h3>

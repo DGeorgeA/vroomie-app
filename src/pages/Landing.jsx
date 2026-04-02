@@ -3,6 +3,8 @@ import { motion } from "framer-motion";
 import Hero from "../components/landing/Hero";
 import FeatureCard from "../components/landing/FeatureCard";
 import { Activity, Droplets, Sparkles } from "lucide-react";
+import { Link } from "react-router-dom";
+import { createPageUrl } from "@/utils";
 
 export default function Landing() {
   const features = [
@@ -14,7 +16,7 @@ export default function Landing() {
       pagePath: "PredictiveMaintenance",
       features: [
         "Live audio waveform monitoring",
-        "Anomaly detection with 99.8% accuracy",
+        "Anomaly detection with high accuracy",
         "Mechanic report generation",
         "Early warning system",
         "Historical analysis tracking",
@@ -56,29 +58,27 @@ export default function Landing() {
       <Hero />
 
       {/* Features Section */}
-      <section className="relative py-20 md:py-32">
-        {/* Section header */}
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mb-16 text-center">
+      <section className="relative py-20 md:py-28">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mb-14 text-center">
           <motion.div
-            initial={{ opacity: 0, y: 20 }}
+            initial={{ opacity: 0, y: 16 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true }}
-            transition={{ duration: 0.6 }}
+            transition={{ duration: 0.5 }}
           >
-            <h2 className="text-4xl md:text-5xl font-bold mb-4">
+            <h2 className="text-3xl md:text-5xl font-bold mb-4">
               <span className="bg-gradient-to-r from-white to-yellow-300 bg-clip-text text-transparent">
                 Three Powerful Modules
               </span>
             </h2>
-            <p className="text-xl text-gray-400 max-w-2xl mx-auto">
+            <p className="text-base md:text-lg text-zinc-400 max-w-xl mx-auto">
               Everything you need to maintain, control, and enhance your vehicle
             </p>
           </motion.div>
         </div>
 
-        {/* Feature cards grid */}
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
             {features.map((feature, index) => (
               <FeatureCard key={feature.title} {...feature} index={index} />
             ))}
@@ -87,37 +87,29 @@ export default function Landing() {
       </section>
 
       {/* CTA Section */}
-      <section className="relative py-20 md:py-32">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <section className="relative py-16 md:py-24">
+        <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
           <motion.div
-            initial={{ opacity: 0, y: 30 }}
+            initial={{ opacity: 0, y: 20 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true }}
-            transition={{ duration: 0.8 }}
-            className="relative backdrop-blur-xl bg-gradient-to-br from-yellow-300/20 to-yellow-500/20 border border-yellow-300/30 rounded-3xl p-12 md:p-16 text-center overflow-hidden"
+            transition={{ duration: 0.6 }}
+            className="relative bg-zinc-900/80 border border-yellow-300/20 rounded-2xl p-10 md:p-14 text-center"
           >
-            {/* Glow effects */}
-            <div className="absolute top-0 left-1/4 w-64 h-64 bg-yellow-300/30 rounded-full blur-3xl" />
-            <div className="absolute bottom-0 right-1/4 w-64 h-64 bg-yellow-500/30 rounded-full blur-3xl" />
-            
-            <div className="relative z-10">
-              <h2 className="text-3xl md:text-5xl font-bold mb-6">
-                <span className="bg-gradient-to-r from-white to-yellow-300 bg-clip-text text-transparent">
-                  Ready to Transform Your Car Care?
-                </span>
-              </h2>
-              <p className="text-xl text-gray-300 mb-8 max-w-2xl mx-auto">
-                Join thousands of drivers using AI to save money, time, and hassle.
-              </p>
-              <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                <button className="px-8 py-4 bg-gradient-to-r from-yellow-300 to-yellow-500 text-zinc-900 rounded-xl font-semibold text-lg hover:from-yellow-400 hover:to-yellow-600 transition-all shadow-lg shadow-yellow-300/30 hover:shadow-yellow-300/50">
-                  Start Free Trial
-                </button>
-                <button className="px-8 py-4 backdrop-blur-md bg-white/10 border border-yellow-300/30 text-yellow-300 rounded-xl font-semibold text-lg hover:bg-white/20 transition-all">
-                  Schedule Demo
-                </button>
-              </div>
-            </div>
+            <h2 className="text-2xl md:text-4xl font-bold mb-4">
+              <span className="bg-gradient-to-r from-white to-yellow-300 bg-clip-text text-transparent">
+                Ready to Transform Your Car Care?
+              </span>
+            </h2>
+            <p className="text-zinc-400 mb-8 max-w-lg mx-auto">
+              Join thousands of drivers using AI to save money, time, and hassle.
+            </p>
+            <Link
+              to={createPageUrl("PredictiveMaintenance")}
+              className="inline-flex items-center gap-2 px-8 py-3.5 bg-yellow-400 text-black rounded-lg font-semibold text-sm hover:bg-yellow-300 transition-colors"
+            >
+              Get Started Free
+            </Link>
           </motion.div>
         </div>
       </section>

@@ -53,7 +53,7 @@ export default function AudioRecorder({
   
   const [debugStats, setDebugStats] = useState(null);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
-  const IS_DEBUG = import.meta.env.DEV || true;
+  const IS_DEBUG = import.meta.env.DEV;
   const { isPro } = useAuth();
   const navigate = useNavigate();
 
@@ -467,45 +467,24 @@ export default function AudioRecorder({
                </button>
             </div>
           ) : !isRecording ? (
-            <motion.button
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
+            <GlassButton
+              variant="primary"
+              size="lg"
+              icon={Mic}
               onClick={startRecording}
               disabled={isAnalyzing}
-              className={`
-                relative group rounded-full px-8 py-4 font-bold text-black
-                bg-gradient-to-r from-yellow-400 to-amber-500
-                shadow-[0_0_20px_rgba(252,211,77,0.3)]
-                hover:shadow-[0_0_30px_rgba(252,211,77,0.5)]
-                transition-shadow duration-300
-                flex items-center gap-2 overflow-hidden
-                ${isAnalyzing ? 'opacity-50 cursor-not-allowed' : ''}
-              `}
             >
-              <div className="absolute inset-0 bg-white/20 translate-y-[-100%] group-hover:translate-y-[100%] transition-transform duration-700 ease-in-out" />
-              <div className="absolute top-0 inset-x-0 h-1/2 bg-gradient-to-b from-white/30 to-transparent rounded-t-full pointer-events-none" />
-              <Mic className="w-5 h-5 relative z-10 animate-pulse" />
-              <span className="relative z-10">Start Recording</span>
-            </motion.button>
+              Start Recording
+            </GlassButton>
           ) : (
-            <motion.button
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
+            <GlassButton
+              variant="danger"
+              size="lg"
+              icon={Square}
               onClick={stopRecording}
-              className={`
-                relative group rounded-full px-8 py-4 font-bold text-white
-                bg-gradient-to-r from-red-500 to-rose-600
-                shadow-[0_0_20px_rgba(239,68,68,0.3)]
-                hover:shadow-[0_0_30px_rgba(239,68,68,0.5)]
-                transition-shadow duration-300
-                flex items-center gap-2 overflow-hidden
-              `}
             >
-              <div className="absolute inset-0 bg-white/20 translate-y-[-100%] group-hover:translate-y-[100%] transition-transform duration-700 ease-in-out" />
-              <div className="absolute top-0 inset-x-0 h-1/2 bg-gradient-to-b from-white/20 to-transparent rounded-t-full pointer-events-none" />
-              <Square className="w-5 h-5 relative z-10" fill="currentColor" />
-              <span className="relative z-10">Stop Recording</span>
-            </motion.button>
+              Stop
+            </GlassButton>
           )}
         </div>
       </div>
