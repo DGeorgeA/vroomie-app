@@ -183,8 +183,8 @@ export default function PredictiveMaintenance() {
 
         {/* MAIN ACTION: Large ECG Visualizer */}
         <div className="mb-8">
-          <GlassCard className={`p-1 ${isFullscreenECG ? 'min-h-[85vh]' : 'mx-auto max-w-5xl'}`}>
-            <div className={`relative bg-zinc-950/80 rounded-xl overflow-hidden border border-yellow-300/20 shadow-2xl shadow-yellow-900/20 ${isFullscreenECG ? 'h-full' : 'h-[400px] md:h-[500px]'}`}>
+          <GlassCard className="p-1 mx-auto max-w-5xl">
+            <div className="relative bg-zinc-950/80 rounded-xl overflow-hidden border border-yellow-300/20 shadow-2xl shadow-yellow-900/20 h-[400px] md:h-[500px]">
               {/* Overlay Content */}
               <div className="absolute top-4 left-4 z-10 flex items-center gap-3">
                 <div className="flex items-center gap-2 px-3 py-1 bg-black/40 backdrop-blur-md rounded-full border border-white/10">
