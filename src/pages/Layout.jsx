@@ -1,4 +1,4 @@
-import React, { useState, useEffect, Suspense } from "react";
+﻿import React, { useState, useEffect, Suspense } from "react";
 import { useLocation } from "react-router-dom";
 import { useAuth } from '@/contexts/AuthContext';
 import { useUIStore } from '@/store/uiStore';
@@ -80,7 +80,7 @@ export default function Layout({ children, currentPageName }) {
               <VroomieLogo size="sm" />
               <span className="font-bold text-zinc-400">Vroomie</span>
             </div>
-            <p>© 2026 Vroomie AI Car Diagnostics. All rights reserved.</p>
+            <p>┬⌐ 2026 Vroomie AI Car Diagnostics. All rights reserved.</p>
           </div>
         </footer>
       </div>

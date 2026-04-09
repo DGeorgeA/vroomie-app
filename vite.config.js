@@ -71,7 +71,7 @@ export default defineConfig({
       }
     })
   ],
-  base: mode === 'staging' ? '/staging/' : '/',
+  base: '/',
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src')

@@ -1,9 +1,9 @@
-import React, { Suspense, lazy } from "react";
+﻿import React, { Suspense, lazy } from "react";
 import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
 import Layout from "./Layout.jsx";
 import LoginPage from "./LoginPage.jsx";
 
-// ── Performance: Lazy-loaded page chunks ──────────────────────────────────────
+// ΓöÇΓöÇ Performance: Lazy-loaded page chunks ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 const PredictiveMaintenance = lazy(() => import(/* webpackChunkName: "predictive" */ "./PredictiveMaintenance"));
 const SubscriptionPage = lazy(() => import(/* webpackChunkName: "subscription" */ "./SubscriptionPage"));
 

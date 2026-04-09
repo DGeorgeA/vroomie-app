@@ -1,7 +1,7 @@
-import React, { useState } from "react";
+﻿import React, { useState } from "react";
 import { motion } from "framer-motion";
 import { format } from "date-fns";
-import { AlertTriangle, CheckCircle, Clock, ExternalLink, Download, FileText, FileSpreadsheet, TrendingUp, Activity, ChevronDown } from "lucide-react";
+import { AlertTriangle, CheckCircle, Clock, ExternalLink, Download, FileText, FileSpreadsheet, TrendingUp, Activity, ChevronDown, Trash2 } from "lucide-react";
 import GlassCard from "../ui/GlassCard";
 import { Skeleton } from "@/components/ui/skeleton";
 import { calculateRecurrence } from "../../lib/diagnosticsAggregator";
@@ -11,7 +11,8 @@ import { getDiagnosticMetadata } from "../../lib/diagnosticDictionary";
 export default function AnalysisHistory({ 
   analyses = [], 
   isLoading = false,
-  onSelectAnalysis 
+  onSelectAnalysis,
+  onClearHistory
 }) {
   const [showDropdown, setShowDropdown] = useState(false);
 
@@ -48,11 +49,13 @@ export default function AnalysisHistory({
 
   if (analyses.length === 0) {
     return (
-      <GlassCard className="p-8 text-center">
-        <Clock className="w-12 h-12 text-gray-500 mx-auto mb-3" />
-        <p className="text-gray-400">No analyses yet.</p>
-        <p className="text-gray-500 text-sm mt-1">
-          Start hardware recording to generate engine health diagnostics.
+      <GlassCard className="p-12 text-center border border-dashed border-white/10 bg-black/20">
+        <div className="w-16 h-16 rounded-full bg-zinc-900/50 flex items-center justify-center mx-auto mb-4 border border-white/5">
+           <Activity className="w-8 h-8 text-zinc-500" />
+        </div>
+        <h3 className="text-xl font-bold text-white mb-2 tracking-tight">No analysis records yet.</h3>
+        <p className="text-zinc-400 text-sm max-w-md mx-auto">
+          Start a hardware recording session to generate active engine health diagnostics. Live reports will appear here automatically upon completion.
         </p>
       </GlassCard>
     );
@@ -73,31 +76,47 @@ export default function AnalysisHistory({
   return (
     <div className="space-y-6">
       {/* Workshop Executive Actions */}
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-bold text-white flex items-center gap-2">
-          <Activity className="w-5 h-5 text-blue-400" /> Diagnostics Record
-        </h2>
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-3">
+           <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center border border-blue-500/20 shadow-[0_0_15px_rgba(59,130,246,0.15)]">
+             <Activity className="w-5 h-5 text-blue-400" />
+           </div>
+           <div>
+             <h2 className="text-xl font-bold text-white tracking-tight leading-tight">Diagnostics Record</h2>
+             <p className="text-xs text-zinc-400 font-medium">Auto-syncing from hardware sensors</p>
+           </div>
+        </div>
         
-        <div className="relative">
+        <div className="flex items-center gap-3">
           <button 
-            onClick={() => setShowDropdown(!showDropdown)}
-            className="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-blue-800 hover:from-blue-500 hover:to-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-lg hover:shadow-blue-500/25 border border-blue-400/20 z-10"
+            onClick={() => onClearHistory && onClearHistory()}
+            title="Clear all records"
+            className="flex items-center justify-center w-10 h-10 rounded-lg bg-zinc-900 border border-red-900/40 text-red-500/80 hover:bg-red-950/40 hover:text-red-400 hover:border-red-500/50 transition-all"
           >
-            <Download className="w-4 h-4" />
-            Download Report
-            <ChevronDown className="w-4 h-4 ml-1" />
+            <Trash2 className="w-4 h-4" />
           </button>
-          
-          {showDropdown && (
-            <div className="absolute right-0 mt-2 w-56 bg-zinc-900 border border-zinc-800/80 rounded-lg shadow-2xl z-50 overflow-hidden">
-              <button onClick={triggerPDF} className="w-full text-left px-4 py-3 text-sm text-gray-300 hover:bg-zinc-800 hover:text-white flex items-center gap-2 transition-colors border-b border-zinc-800/50">
-                <FileText className="w-4 h-4 text-red-400" /> Export Professional PDF
-              </button>
-              <button onClick={triggerCSV} className="w-full text-left px-4 py-3 text-sm text-gray-300 hover:bg-zinc-800 hover:text-white flex items-center gap-2 transition-colors">
-                <FileSpreadsheet className="w-4 h-4 text-green-400" /> Export Raw CSV Metrics
-              </button>
-            </div>
-          )}
+        
+          <div className="relative">
+            <button 
+              onClick={() => setShowDropdown(!showDropdown)}
+              className="flex items-center gap-2 bg-white text-black hover:bg-zinc-200 px-5 py-2.5 rounded-lg text-sm font-bold transition-all shadow-[0_0_20px_rgba(255,255,255,0.1)] z-10"
+            >
+              <Download className="w-4 h-4" />
+              Download Report
+              <ChevronDown className="w-3 h-3 text-zinc-600 ml-1" />
+            </button>
+            
+            {showDropdown && (
+              <div className="absolute right-0 mt-2 w-56 bg-zinc-900 border border-zinc-800/80 rounded-xl shadow-2xl z-50 overflow-hidden">
+                <button onClick={triggerPDF} className="w-full text-left px-4 py-3 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-white flex items-center gap-3 transition-colors border-b border-zinc-800/50">
+                  <FileText className="w-4 h-4 text-red-400" /> Export Professional PDF
+                </button>
+                <button onClick={triggerCSV} className="w-full text-left px-4 py-3 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-white flex items-center gap-3 transition-colors">
+                  <FileSpreadsheet className="w-4 h-4 text-green-400" /> Export Raw CSV Metrics
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -113,7 +132,7 @@ export default function AnalysisHistory({
                     <p className="text-orange-100 font-medium text-sm flex items-center gap-2">
                       <TrendingUp className="w-3.5 h-3.5 text-orange-400" /> {trend.name}
                     </p>
-                    <p className="text-xs text-gray-400 mt-0.5">Caught {trend.count}x • Status: <span className="text-gray-300 font-medium">{trend.trend}</span></p>
+                    <p className="text-xs text-gray-400 mt-0.5">Caught {trend.count}x ΓÇó Status: <span className="text-gray-300 font-medium">{trend.trend}</span></p>
                   </div>
                   <div className={`px-2 py-1 rounded-md text-xs font-bold border ${getSeverityColor(trend.highestSeverity)}`}>
                     {trend.highestSeverity.toUpperCase()}
@@ -142,16 +161,16 @@ export default function AnalysisHistory({
           
           let cardBorder = 'border-green-500/10';
           let badgeClass = "bg-green-500/20 text-green-400 border-green-500/30";
-          let badgeText = "✅ NO ANOMALY DETECTED";
+          let badgeText = "Γ£à NO ANOMALY DETECTED";
           
           if (dominantStatus === 'anomaly') {
              cardBorder = 'border-red-500/20 bg-red-900/5';
              badgeClass = getSeverityColor(anomalies[0]?.severity);
-             badgeText = `❗ ANOMALY DETECTED: ${anomalies[0]?.type.toUpperCase()}`;
+             badgeText = `Γ¥ù ANOMALY DETECTED: ${anomalies[0]?.type.toUpperCase()}`;
           } else if (dominantStatus === 'potential_anomaly') {
              cardBorder = 'border-yellow-500/20 bg-yellow-900/5';
              badgeClass = "bg-yellow-500/20 text-yellow-400 border-yellow-500/30";
-             badgeText = `⚠️ POTENTIAL ANOMALY: ${anomalies[0]?.type.toUpperCase()}`;
+             badgeText = `ΓÜá∩╕Å POTENTIAL ANOMALY: ${anomalies[0]?.type.toUpperCase()}`;
           }
           
           return (
@@ -160,79 +179,82 @@ export default function AnalysisHistory({
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: index * 0.05 }}
+              whileHover={{ scale: 1.01, transition: { duration: 0.2 } }}
             >
-              <GlassCard 
-                className={`p-4 cursor-pointer border ${cardBorder}`}
-                hover
-                onClick={() => onSelectAnalysis && onSelectAnalysis(analysis)}
-              >
-                <div className="flex items-start justify-between mb-3">
-                  <div className="flex items-center gap-3">
-                    {getHealthIcon(dominantStatus)}
+              <GlassCard className={`p-5 transition-colors border-l-4 ${cardBorder}`}>
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div className="flex items-start gap-4">
+                    <div className="mt-1">
+                      {getHealthIcon(dominantStatus)}
+                    </div>
                     <div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span
-                          className={`px-2 py-1 rounded-full text-[10px] font-bold tracking-wide border uppercase ${badgeClass}`}
-                        >
-                          {badgeText}
-                        </span>
-                        {analysis.detection_mode === 'hybrid' && analysis.mlConfidence !== undefined ? (
-                          <div className="flex gap-2">
-                            <span className="text-[10px] bg-blue-500/10 text-blue-400 px-1.5 py-0.5 rounded border border-blue-500/20">
-                              ML: {(analysis.mlConfidence * 100).toFixed(1)}%
-                            </span>
-                            <span className="text-[10px] bg-emerald-500/10 text-emerald-400 px-1.5 py-0.5 rounded border border-emerald-500/20">
-                              Signal: {(analysis.signalSimilarity * 100).toFixed(1)}%
-                            </span>
-                          </div>
-                        ) : analysis.confidence_score ? (
-                          <span className="text-xs text-gray-400 font-mono">
-                            {analysis.confidence_score.toFixed(1)}% conf
+                      <div className="flex flex-wrap items-center gap-2 mb-1.5">
+                        <h3 className="text-base font-bold text-white tracking-tight">
+                          Session {analysis.id?.substring(0, 8)}
+                        </h3>
+                        {analysis.status === 'flagged' && (
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold border uppercase tracking-widest ${badgeClass}`}>
+                            {badgeText}
                           </span>
-                        ) : null}
+                        )}
+                        {analysis.status !== 'flagged' && (
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold border uppercase tracking-widest ${badgeClass}`}>
+                            {badgeText}
+                          </span>
+                        )}
                         {analysis.detection_mode && (
-                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold border uppercase tracking-widest ${
                             analysis.detection_mode === 'ml' 
                               ? 'bg-blue-500/15 text-blue-300 border-blue-500/30' 
                               : 'bg-zinc-800 text-zinc-400 border-zinc-700'
                           }`}>
-                            {analysis.detection_mode === 'ml' ? '🤖 ML' : '🔊 Basic'}
+                            {analysis.detection_mode === 'ml' ? '≡ƒñû ML' : '≡ƒöè Basic'}
                           </span>
                         )}
                       </div>
-                      <p className="text-sm text-gray-400 mt-1">
-                        {analysis.processed_at
-                          ? format(new Date(analysis.processed_at), "MMM d, yyyy 'at' h:mm a")
-                          : analysis.created_date 
-                            ? format(new Date(analysis.created_date), "MMM d, yyyy 'at' h:mm a")
-                            : "Unknown Date"}
-                      </p>
+                      
+                      <div className="flex items-center gap-3 text-sm">
+                        <p className="text-zinc-400 font-medium">
+                          {analysis.processed_at
+                            ? format(new Date(analysis.processed_at), "MMM d, yyyy 'at' h:mm a")
+                            : analysis.created_date 
+                              ? format(new Date(analysis.created_date), "MMM d, yyyy 'at' h:mm a")
+                              : "Unknown Date"}
+                        </p>
+                        <span className="text-zinc-600">ΓÇó</span>
+                        <div className="flex items-center gap-1.5 text-zinc-400 font-medium">
+                          <Activity className="w-4 h-4 text-yellow-500/80" /> 
+                          {(analysis.confidence_score || 0).toFixed(1)}% Confidence
+                        </div>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="flex gap-2">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        generateSingleEntryPDFReport(analysis);
-                      }}
-                      className="p-1.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 hover:text-blue-300 transition-colors border border-blue-500/20"
-                      title="Download Report"
-                    >
-                      <Download className="w-4 h-4" />
-                    </button>
-                    {analysis.audio_file_url && (
-                      <a
-                        href={analysis.audio_file_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition-colors border border-white/5"
-                        title="View Audio File"
-                      >
-                        <ExternalLink className="w-4 h-4" />
-                      </a>
-                    )}
+                  <div className="flex flex-wrap items-center gap-3 md:ml-auto border-t md:border-t-0 pt-4 md:pt-0 border-white/5">
+                     <button
+                        onClick={() => generateSingleEntryPDFReport(analysis)}
+                        className="p-2.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors border border-transparent hover:border-zinc-700"
+                        title="Download Evidence"
+                     >
+                        <Download className="w-5 h-5" />
+                     </button>
+                     {analysis.audio_file_url && (
+                        <a
+                           href={analysis.audio_file_url}
+                           target="_blank"
+                           rel="noopener noreferrer"
+                           className="p-2.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors border border-transparent hover:border-zinc-700"
+                           title="View Audio File"
+                        >
+                           <ExternalLink className="w-5 h-5" />
+                        </a>
+                     )}
+                     <button
+                        onClick={() => onSelectAnalysis && onSelectAnalysis(analysis)}
+                        className="flex items-center gap-2 bg-zinc-800 hover:bg-zinc-700 text-white px-5 py-2.5 rounded-lg text-sm font-semibold transition-colors border border-zinc-700 shadow-[0_0_10px_rgba(0,0,0,0.5)]"
+                     >
+                        View Analysis
+                     </button>
                   </div>
                 </div>
 
@@ -266,7 +288,7 @@ export default function AnalysisHistory({
                                  Est: ${diagnosticMeta.usd} USD
                                </p>
                                <p className="text-xs text-blue-400 font-mono bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">
-                                 ₹{diagnosticMeta.inr.toLocaleString()} INR
+                                 Γé╣{diagnosticMeta.inr.toLocaleString()} INR
                                </p>
                             </div>
                           </div>

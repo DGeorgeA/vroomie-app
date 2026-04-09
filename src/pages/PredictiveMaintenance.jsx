@@ -8,6 +8,7 @@ import AnalysisHistory from "../components/predictive/AnalysisHistory";
 import AnalysisDetails from "../components/predictive/AnalysisDetails";
 import { toast } from 'sonner';
 import { LANGUAGES } from '@/utils/voice';
+import { supabase } from '../lib/supabase';
 
 export default function PredictiveMaintenance() {
   const [selectedVehicle, setSelectedVehicle] = useState(null);
@@ -23,59 +24,67 @@ export default function PredictiveMaintenance() {
   // Voice & Language State — default English (US)
   const [language, setLanguage] = useState('en-US');
 
-  // MOCK DATA: Vehicles
+  // ─── Data fetching: ALL analyses, no vehicle filter ────────────────────────
+  // Reports are fetched ONLY from persisted DB entries, NEVER generated on render.
   useEffect(() => {
-    // Simulate API fetch delay
-    setTimeout(() => {
-      const mockVehicles = [
-        { id: 'v1', make: 'Porsche', model: '911 GT3', vin: 'WP0ZZZ99ZTS390', year: 2023 },
-        { id: 'v2', make: 'BMW', model: 'M4 Competition', vin: 'WBS33AZ050FM', year: 2024 },
-        { id: 'v3', make: 'Audi', model: 'RS6 Avant', vin: 'WAUZZZ4A0MN0', year: 2023 }
-      ];
-      setVehicles(mockVehicles);
-      if (mockVehicles.length > 0 && !selectedVehicle) {
-        setSelectedVehicle(mockVehicles[0]);
-      }
-    }, 800);
-  }, []); // Run once on mount
-
-  // MOCK DATA: Analyses (whenever selectedVehicle changes)
-  useEffect(() => {
-    if (!selectedVehicle) return;
-
+    let isMounted = true;
     setAnalysesLoading(true);
-    // Simulate API fetch delay
-    setTimeout(() => {
-      // Different mock data based on vehicle to show variety
-      const isHealthy = selectedVehicle.id === 'v1';
 
-      const mockAnalyses = Array.from({ length: 5 }).map((_, i) => ({
-        id: `analysis-${selectedVehicle.id}-${i}`,
-        created_date: new Date(Date.now() - i * 86400000).toISOString(),
-        vehicle_id: selectedVehicle.id,
-        duration_seconds: 15,
-        confidence_score: isHealthy ? 98 - i : 85 - i * 5, // Healthy vehicle has higher scores across history
-        status: (isHealthy || i > 0) ? 'success' : 'flagged',
-        analysis_result: {
-          overall_health: (isHealthy || i > 0) ? 'healthy' : 'warning',
-          anomalies_detected: (isHealthy || i > 0) ? [] : [
-            { type: "Knocking", severity: "medium", timestamp: 2.5 },
-            { type: "Belt Squeal", severity: "low", timestamp: 8.2 }
-          ]
+    const fetchAnalyses = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('analyses')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(100);
+
+        if (error) throw error;
+        if (isMounted) {
+          // Always use server-assigned created_at — never regenerate on refresh
+          setAnalyses((data || []).map(row => ({ ...row, created_date: row.created_at })));
         }
-      }));
+      } catch (err) {
+        console.error('Error fetching analyses:', err);
+      } finally {
+        if (isMounted) setAnalysesLoading(false);
+      }
+    };
 
-      setAnalyses(mockAnalyses);
-      setAnalysesLoading(false);
-    }, 600);
-  }, [selectedVehicle]);
+    fetchAnalyses();
 
-  const refetchAnalyses = () => {
-    // Re-trigger the effect logic basically, or just re-set loading
+    // Realtime: push new rows automatically — triggered ONLY by recording completion
+    const channel = supabase
+      .channel('realtime:analyses:all')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'analyses' },
+        (payload) => {
+          if (isMounted) {
+            setAnalyses(prev => [{ ...payload.new, created_date: payload.new.created_at }, ...prev]);
+            toast.success('New diagnostic session recorded.');
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      isMounted = false;
+      supabase.removeChannel(channel);
+    };
+  }, []); // Mount-only — never re-runs on navigation or refresh
+
+  const refetchAnalyses = async () => {
     setAnalysesLoading(true);
-    setTimeout(() => {
+    try {
+      const { data } = await supabase
+        .from('analyses')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(100);
+      setAnalyses((data || []).map(row => ({ ...row, created_date: row.created_at })));
+    } finally {
       setAnalysesLoading(false);
-    }, 1000);
+    }
   };
 
   // Calculate stats from analyses
@@ -93,9 +102,31 @@ export default function PredictiveMaintenance() {
   }, [analyses]);
 
   const handleRecordingComplete = () => {
-    setTimeout(() => {
-      refetchAnalyses();
-    }, 1000);
+    // Small delay to let the DB write propagate before refetch
+    setTimeout(() => refetchAnalyses(), 1500);
+  };
+
+  const handleClearHistory = async () => {
+    const confirmed = window.confirm(
+      'This will permanently delete ALL diagnostic records. This cannot be undone. Continue?'
+    );
+    if (!confirmed) return;
+
+    try {
+      // Delete ALL rows — no vehicle_id filter since old records may have any/no vehicle_id
+      const { error } = await supabase
+        .from('analyses')
+        .delete()
+        .gte('created_at', '2000-01-01');
+
+      if (error) throw error;
+
+      setAnalyses([]);
+      toast.success('All diagnostic records cleared.');
+    } catch (err) {
+      console.error('Failed to clear history:', err);
+      toast.error('Unable to clear records. Check Supabase RLS policies.');
+    }
   };
 
   const handleAnomalyDetected = (anomaly) => {
@@ -296,6 +327,7 @@ export default function PredictiveMaintenance() {
                 analyses={analyses}
                 isLoading={analysesLoading}
                 onSelectAnalysis={setSelectedAnalysis}
+                onClearHistory={handleClearHistory}
               />
             </GlassCard>
           </motion.div>
