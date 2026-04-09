@@ -88,4 +88,31 @@
     border-bottom: 1px solid rgba(252, 211, 77, 0.4);
     padding-bottom: 1px;
   }
+
+  /* Skeleton Loading Animation */
+  .skeleton-pulse {
+    background: linear-gradient(
+      90deg,
+      var(--color-surface) 0%,
+      var(--color-surface-2) 50%,
+      var(--color-surface) 100%
+    );
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.5s infinite linear;
+  }
+
+  @keyframes skeleton-shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+
+  /* Premium Card Hover Micro-interaction */
+  .card-hover {
+    transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease;
+  }
+  .card-hover:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 12px 24px -10px rgba(252, 211, 77, 0.15);
+    border-color: rgba(255, 255, 255, 0.12);
+  }
 }

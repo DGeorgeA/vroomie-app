@@ -1,58 +1,59 @@
+import React, { Suspense, lazy } from "react";
+import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
 import Layout from "./Layout.jsx";
-import PredictiveMaintenance from "./PredictiveMaintenance";
-import LoginPage from "./LoginPage";
-import SubscriptionPage from "./SubscriptionPage";
+import LoginPage from "./LoginPage.jsx";
 
-import { BrowserRouter as Router, Route, Routes, useLocation } from 'react-router-dom';
+// ── Performance: Lazy-loaded page chunks ──────────────────────────────────────
+const PredictiveMaintenance = lazy(() => import(/* webpackChunkName: "predictive" */ "./PredictiveMaintenance"));
+const SubscriptionPage = lazy(() => import(/* webpackChunkName: "subscription" */ "./SubscriptionPage"));
 
-const PAGES = {
-    PredictiveMaintenance: PredictiveMaintenance,
+function PageSkeleton() {
+  return (
+    <div className="animate-skeleton-pulse h-[80vh] w-full rounded-2xl border border-white/5" />
+  );
 }
 
-function _getCurrentPage(url) {
-    if (url.endsWith('/')) {
-        url = url.slice(0, -1);
-    }
-    let urlLastPart = url.split('/').pop();
-    if (urlLastPart.includes('?')) {
-        urlLastPart = urlLastPart.split('?')[0];
-    }
-
-    const pageName = Object.keys(PAGES).find(page => page.toLowerCase() === urlLastPart.toLowerCase());
-    return pageName || Object.keys(PAGES)[0];
-}
-
-// Create a wrapper component that uses useLocation inside the Router context
 function PagesContent() {
-    const location = useLocation();
-    const currentPage = _getCurrentPage(location.pathname);
+  return (
+    <Suspense fallback={<PageSkeleton />}>
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
 
-    return (
-        <Routes>
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/subscribe" element={
-                <Layout currentPageName={currentPage}>
-                    <SubscriptionPage />
-                </Layout>
-            } />
-            <Route path="/" element={
-                <Layout currentPageName={currentPage}>
-                    <PredictiveMaintenance />
-                </Layout>
-            } />
-            <Route path="*" element={
-                <Layout currentPageName={currentPage}>
-                    <PredictiveMaintenance />
-                </Layout>
-            } />
-        </Routes>
-    );
+        <Route path="/subscribe" element={
+          <Layout currentPageName="Subscription">
+            <SubscriptionPage />
+          </Layout>
+        } />
+
+        {/* New Empty Routes for Sidebar Map */}
+        <Route path="/carops" element={<Layout currentPageName="Explore Vehicles"><div /></Layout>} />
+        <Route path="/bookings" element={<Layout currentPageName="Bookings"><div /></Layout>} />
+        <Route path="/trips" element={<Layout currentPageName="My Trips"><div /></Layout>} />
+        <Route path="/saved" element={<Layout currentPageName="Saved"><div /></Layout>} />
+        <Route path="/payments" element={<Layout currentPageName="Payments"><div /></Layout>} />
+        <Route path="/settings" element={<Layout currentPageName="Settings"><div /></Layout>} />
+
+        {/* Default */}
+        <Route path="/" element={
+          <Layout currentPageName="PredictiveMaintenance">
+            <PredictiveMaintenance />
+          </Layout>
+        } />
+
+        <Route path="*" element={
+          <Layout currentPageName="PredictiveMaintenance">
+            <PredictiveMaintenance />
+          </Layout>
+        } />
+      </Routes>
+    </Suspense>
+  );
 }
 
 export default function Pages() {
-    return (
-        <Router>
-            <PagesContent />
-        </Router>
-    );
+  return (
+    <Router basename={import.meta.env.BASE_URL}>
+      <PagesContent />
+    </Router>
+  );
 }
