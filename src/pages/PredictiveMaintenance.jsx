@@ -8,6 +8,7 @@ import AnalysisHistory from "../components/predictive/AnalysisHistory";
 import AnalysisDetails from "../components/predictive/AnalysisDetails";
 import { toast } from 'sonner';
 import { LANGUAGES } from '@/utils/voice';
+import { supabase } from '../lib/supabase';
 
 export default function PredictiveMaintenance() {
   const [selectedVehicle, setSelectedVehicle] = useState(null);
@@ -39,43 +40,72 @@ export default function PredictiveMaintenance() {
     }, 800);
   }, []); // Run once on mount
 
-  // MOCK DATA: Analyses (whenever selectedVehicle changes)
+  // REAL DATA: Fetch Analyses & Configure Realtime Subscriptions
   useEffect(() => {
     if (!selectedVehicle) return;
 
+    let isMounted = true;
     setAnalysesLoading(true);
-    // Simulate API fetch delay
-    setTimeout(() => {
-      // Different mock data based on vehicle to show variety
-      const isHealthy = selectedVehicle.id === 'v1';
 
-      const mockAnalyses = Array.from({ length: 5 }).map((_, i) => ({
-        id: `analysis-${selectedVehicle.id}-${i}`,
-        created_date: new Date(Date.now() - i * 86400000).toISOString(),
-        vehicle_id: selectedVehicle.id,
-        duration_seconds: 15,
-        confidence_score: isHealthy ? 98 - i : 85 - i * 5, // Healthy vehicle has higher scores across history
-        status: (isHealthy || i > 0) ? 'success' : 'flagged',
-        analysis_result: {
-          overall_health: (isHealthy || i > 0) ? 'healthy' : 'warning',
-          anomalies_detected: (isHealthy || i > 0) ? [] : [
-            { type: "Knocking", severity: "medium", timestamp: 2.5 },
-            { type: "Belt Squeal", severity: "low", timestamp: 8.2 }
-          ]
+    const fetchAnalyses = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('analyses')
+          .select('*')
+          .eq('vehicle_id', selectedVehicle.id)
+          .order('created_at', { ascending: false })
+          .limit(50);
+          
+        if (error) throw error;
+        if (isMounted) {
+           // Normalize existing dates to prevent UI jitter
+           const normalizedData = data.map(row => ({
+             ...row,
+             created_date: row.created_at // Use Supabase absolute UTC inserted timestamp
+           }));
+           setAnalyses(normalizedData || []);
         }
-      }));
+      } catch (err) {
+        console.error("Error fetching analyses:", err);
+        toast.error("Failed to sync diagnostics log.");
+      } finally {
+        if (isMounted) setAnalysesLoading(false);
+      }
+    };
 
-      setAnalyses(mockAnalyses);
-      setAnalysesLoading(false);
-    }, 600);
+    fetchAnalyses();
+
+    // Supabase Realtime strict injection
+    const channel = supabase
+      .channel('public:analyses')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'analyses', filter: `vehicle_id=eq.${selectedVehicle.id}` },
+        (payload) => {
+          if (isMounted) {
+            setAnalyses(prev => [{...payload.new, created_date: payload.new.created_at}, ...prev]);
+            toast.success("New acoustic diagnostic imported.");
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      isMounted = false;
+      supabase.removeChannel(channel);
+    };
   }, [selectedVehicle]);
 
   const refetchAnalyses = () => {
-    // Re-trigger the effect logic basically, or just re-set loading
+    // Relying on postgres_changes WebSocket for strict real-time injection.
+    // Fallback manual refetch if explicitly requested.
     setAnalysesLoading(true);
-    setTimeout(() => {
-      setAnalysesLoading(false);
-    }, 1000);
+    supabase.from('analyses').select('*').eq('vehicle_id', selectedVehicle.id).order('created_at', { ascending: false }).limit(50)
+      .then(({data}) => {
+         const normalizedData = data?.map(row => ({...row, created_date: row.created_at})) || [];
+         setAnalyses(normalizedData);
+      })
+      .finally(() => setAnalysesLoading(false));
   };
 
   // Calculate stats from analyses

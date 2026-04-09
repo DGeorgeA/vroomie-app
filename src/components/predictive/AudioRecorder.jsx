@@ -13,6 +13,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { canAccess } from "@/lib/featureGate";
 import UpgradeModal from "./UpgradeModal";
 import { motion } from "framer-motion";
+import { supabase } from "@/lib/supabase";
 
 export default function AudioRecorder({
   onRecordingComplete,
@@ -293,9 +294,28 @@ export default function AudioRecorder({
 
   const handleAudioUpload = async (blob) => {
     try {
-      const mockId = `analysis-live-${Date.now()}`;
-      const activeMode = getDetectionMode();
+      toast.info("Uploading audio signature to secure vault...");
+      const timestamp = new Date().toISOString();
+      const fileId = `engine_${vehicleId}_${Date.now()}.webm`;
       
+      const file = new File([blob], fileId, { type: 'audio/webm' });
+      
+      // Upload to Supabase Storage
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('audio-analyses')
+        .upload(fileId, file, { cacheControl: '3600', upsert: false });
+        
+      if (uploadError) {
+         console.warn("Storage upload failed, falling back to local blob for persistence bypass:", uploadError);
+      }
+      
+      let audioUrl = URL.createObjectURL(blob);
+      if (!uploadError && uploadData) {
+         const { data: publicData } = supabase.storage.from('audio-analyses').getPublicUrl(uploadData.path);
+         audioUrl = publicData.publicUrl;
+      }
+
+      const activeMode = getDetectionMode();
       const realAnomalies = sessionAnomaliesRef.current || [];
       const totalConf = sessionConfidenceRef.current.reduce((a, b) => a + b, 0);
       const avgConfidence = sessionConfidenceRef.current.length > 0 
@@ -308,22 +328,18 @@ export default function AudioRecorder({
           ? "critical"
           : "warning";
 
-      const analysis = {
-        id: mockId,
+      const analysisPayload = {
         vehicle_id: vehicleId,
-        audio_file_url: URL.createObjectURL(blob),
+        audio_file_url: audioUrl,
         duration_seconds: recordingTime,
         status: realAnomalies.length > 0 ? "flagged" : "completed",
         confidence_score: avgConfidence,
         anomalies_detected: realAnomalies,
-        detection_mode: 'hybrid', // Phase 2 mandates hybrid tracking
+        detection_mode: 'hybrid',
         detection_source: 'ML + Deterministic Fusion',
-        
-        // Phase 2 Hybrid Metrics 
         mlConfidence: realAnomalies[0] ? realAnomalies[0].mlConfidence : 0,
         signalSimilarity: realAnomalies[0] ? realAnomalies[0].signalSimilarity : avgConfidence / 100,
         finalDecision: realAnomalies[0] ? realAnomalies[0].finalDecision : 'NO ANOMALY',
-        
         analysis_result: {
           overall_health: overallHealth,
           confidence_score: avgConfidence,
@@ -331,17 +347,25 @@ export default function AudioRecorder({
             ? realAnomalies.map(a => a.type)
             : ["smooth_idle", "consistent_rpm"],
         },
-        processed_at: new Date().toISOString(),
-        created_date: new Date().toISOString(),
+        processed_at: timestamp,
         notes: realAnomalies.length > 0
           ? "Active acoustic signatures met anomaly thresholds."
           : "Engine block returned nominal patterns cleanly across all frequencies.",
       };
+      
+      // We rely on the DB's created_at for absolute truth, but send timestamp explicitly.
+      const { data: insertedData, error: dbError } = await supabase
+        .from('analyses')
+        .insert([{ ...analysisPayload, created_at: timestamp }])
+        .select()
+        .single();
+        
+      if (dbError) throw dbError;
 
-      toast.success("Audio captured and verified fully on-device!");
+      toast.success("Audio captured and securely logged!");
       
       if (onRecordingComplete) {
-        onRecordingComplete(analysis);
+        onRecordingComplete(insertedData);
       }
       
       if (isVoiceAlertsEnabled) {
