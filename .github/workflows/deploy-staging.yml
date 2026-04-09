@@ -1,0 +1,76 @@
+name: Deploy Staging to GitHub Pages
+
+on:
+  push:
+    branches: ["staging-v2"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  deploy-staging:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}/staging
+    runs-on: ubuntu-latest
+    steps:
+      # Step 1: Checkout the PRODUCTION branch (main) first to build the root site
+      - name: Checkout main (Production Base)
+        uses: actions/checkout@v4
+        with:
+          ref: 'main'
+          path: 'main-branch'
+
+      # Step 2: Checkout the STAGING branch to build the staging site
+      - name: Checkout staging (Feature Branch)
+        uses: actions/checkout@v4
+        with:
+          path: 'staging-branch'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: 'main-branch/package-lock.json'
+
+      # Step 3: Build Production into a unified 'dist' folder
+      - name: Install & Build Production
+        run: |
+          cd main-branch
+          npm ci
+          npm run build:production
+          cd ..
+          mkdir -p unified-dist
+          cp -r main-branch/dist/* unified-dist/
+
+      # Step 4: Build Staging and place inside /staging subfolder
+      - name: Install & Build Staging
+        run: |
+          cd staging-branch
+          npm ci
+          npm run build:staging
+          cd ..
+          mkdir -p unified-dist/staging
+          cp -r staging-branch/dist/* unified-dist/staging/
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+        
+      # Step 5: Upload the combined unified-dist to GitHub Pages
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: './unified-dist'
+
+      # Step 6: Deploy everything simultaneously
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
