@@ -9,13 +9,16 @@ import { N_MELS, TARGET_TIME_FRAMES } from './spectrogramGenerator';
 const LIVE_WINDOW_FRAMES = 8; // ~2 seconds of 250ms chunks
 const SMOOTHING_WINDOW = 8;
 
-// Real-world calibrated thresholds
-const ANOMALY_THRESHOLD = 0.65;
-const PROBABLE_THRESHOLD = 0.55;
+// ─── Calibrated real-world thresholds ────────────────────────────────────────
+// MFCC cosine similarity between live mic and WAV reference is inherently lower
+// than embedding-to-embedding comparison (different acoustic conditions, hardware)
+// Calibrated against known serpentine belt, bearing, and knocking test recordings.
+const ANOMALY_THRESHOLD   = 0.42; // was 0.65 — too strict for cross-condition MFCC match
+const PROBABLE_THRESHOLD  = 0.30; // was 0.55 — must catch "potential anomaly" cases
 
-// Hysteresis
-const STABILITY_DURATION_MS = 8000;
-const THRESHOLD_FRAMES = 4;
+// ─── Hysteresis / stability requirements ─────────────────────────────────────
+const STABILITY_DURATION_MS = 5000; // was 8000 — faster lock-in
+const THRESHOLD_FRAMES      = 2;    // was 4 — require 2 consecutive hits (not 4)
 
 // ═══════════════════════════════════════════════
 // STATE
@@ -177,7 +180,7 @@ function computeSignalMatch(features) {
     // Cosine similarity against first N_ALIGN dims of the stored 1024-dim vector
     const cos = alignAndCompare(liveVec, ref.embedding_vector);
 
-    if (cos < 0.35) continue; // Fast rejection threshold
+    if (cos < 0.25) continue; // Widened fast rejection (was 0.35)
 
     // Spectrogram DTW refinement (if available)
     let dtw = 0;
@@ -188,7 +191,7 @@ function computeSignalMatch(features) {
     // Weighted fusion: embedding primary (0.7), DTW refinement (0.3)
     const finalScore = dtw > 0 ? 0.70 * cos + 0.30 * dtw : cos;
 
-    Logger.debug(`Match [${ref.label}] cos=${cos.toFixed(3)} dtw=${dtw.toFixed(3)} => ${finalScore.toFixed(3)}`);
+    Logger.debug(`[MATCH] ${ref.label?.padEnd(45)} | cos=${cos.toFixed(4)} dtw=${dtw.toFixed(4)} final=${finalScore.toFixed(4)}`);
 
     if (finalScore > bestScore) {
       bestScore = finalScore;
@@ -244,17 +247,40 @@ export function matchBuffer(features) {
     status,
     mlConfidence: mlConf,
     signalSimilarity: smoothed,
-    finalDecision: status === 'anomaly' ? 'ANOMALY DETECTED' : (status === 'potential_anomaly' ? 'PROBABLE ANOMALY' : 'NO ANOMALY'),
-    mode: 'hybrid_yamnet',
+    finalDecision: status === 'anomaly'
+      ? 'ANOMALY DETECTED'
+      : status === 'potential_anomaly'
+        ? 'PROBABLE ANOMALY — FURTHER ANALYSIS RECOMMENDED'
+        : 'NO ANOMALY',
+    mode: 'hybrid_mfcc',
     confidence: Math.max(mlConf, smoothed),
     detectedClass: anomalyName,
-    classifierSource: 'yamnet_dtw_fusion',
+    classifierSource: 'mfcc_cosine_dtw',
     source: sigMatch.matchedFile,
-    severity: (anomalyName && anomalyName.includes('critical')) ? 'critical' : 'medium',
+    severity: (
+      anomalyName?.includes('critical') ? 'critical' :
+      anomalyName?.includes('high')     ? 'high'     :
+      anomalyName?.includes('medium')   ? 'medium'   : 'low'
+    ),
     _cosine: sigMatch.cosine,
     _dtw: sigMatch.dtwScore,
     _rawScore: sigMatch.finalScore,
   };
+
+  // ── Structured diagnostic log (visible in browser DevTools > Console) ──────
+  if (sigMatch.finalScore > 0.1 || smoothed > 0.1) {
+    console.log('[Vroomie Detection]', JSON.stringify({
+      matched_pattern:   sigMatch.matchedFile,
+      similarity_score:  parseFloat(sigMatch.finalScore.toFixed(4)),
+      cosine:            parseFloat(sigMatch.cosine.toFixed(4)),
+      smoothed_score:    parseFloat(smoothed.toFixed(4)),
+      anomaly_threshold: ANOMALY_THRESHOLD,
+      probable_threshold: PROBABLE_THRESHOLD,
+      decision:          rawResult.finalDecision,
+      status:            rawResult.status,
+    }));
+  }
+
   
   const now = Date.now();
   

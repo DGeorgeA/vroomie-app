@@ -12,7 +12,8 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.jpg'],
+      // Force new service worker to activate immediately — no waiting for tabs to close
+      injectRegister: 'auto',
       manifest: {
         name: 'Vroomie Predictive Diagnostics',
         short_name: 'Vroomie',
@@ -35,7 +36,12 @@ export default defineConfig({
         ]
       },
       workbox: {
-        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // Increase limit to 5MB
+        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
+        // Skip waiting forces the new SW to take control immediately on next load
+        skipWaiting: true,
+        clientsClaim: true,
+        // Purge old caches from previous builds automatically
+        cleanupOutdatedCaches: true,
         globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,jpeg,woff2,wasm}'],
         runtimeCaching: [
           {
