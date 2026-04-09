@@ -122,44 +122,74 @@ function cnnClassToLabel(cnnClass) {
   }[cnnClass] || cnnClass;
 }
 
-import { calculateCosineSimilarity } from './mlEmbeddingEngine';
-
 // ═══════════════════════════════════════════════
 // CORE: HYBRID EMBEDDING MATCHING
+// Handles three cases:
+//   1. YAMNet live (1024-dim) vs MFCC-padded ref (1024-dim) → use first N_ALIGN dims
+//   2. Meyda MFCC live (13-dim) vs MFCC-padded ref (1024-dim) → use first 13 dims
+//   3. No reference embeddings → returns zero match
 // ═══════════════════════════════════════════════
 
+const N_ALIGN = 40; // Compare first 40 dims — covers the full MFCC spectral content
+
+function alignAndCompare(liveVec, refVec) {
+  if (!liveVec || !refVec) return 0;
+  // Take the shorter of the two aligned windows
+  const n = Math.min(liveVec.length, refVec.length, N_ALIGN);
+  const live = liveVec.slice(0, n);
+  const ref  = refVec.slice(0, n);
+  return cosineSimilarity(live, ref);
+}
+
 function computeSignalMatch(features) {
-  if (!referenceIndex || referenceIndex.length === 0 || !features.liveEmbedding) {
+  if (!referenceIndex || referenceIndex.length === 0) {
     return { matchedFile: null, finalScore: 0, cosine: 0, dtwScore: 0 };
   }
-  
+
+  // ── Build the live comparison vector ──────────────────────────────────────
+  // Priority: YAMNet 1024-dim > Meyda MFCC 13-dim array > null
+  let liveVec = null;
+
+  if (features.liveEmbedding && features.liveEmbedding.length >= N_ALIGN) {
+    // YAMNet embedding — use first N_ALIGN dims
+    liveVec = Array.from(features.liveEmbedding).slice(0, N_ALIGN);
+  } else if (features.mfcc && features.mfcc.length > 0) {
+    // Meyda MFCC (13-dim by default) — pad with zeros to N_ALIGN
+    liveVec = Array.from(features.mfcc);
+    while (liveVec.length < N_ALIGN) liveVec.push(0);
+  }
+
+  if (!liveVec) {
+    return { matchedFile: null, finalScore: 0, cosine: 0, dtwScore: 0 };
+  }
+
+  // L2-normalise the live vector
+  const norm = Math.sqrt(liveVec.reduce((s, v) => s + v * v, 0)) || 1;
+  liveVec = liveVec.map(v => v / norm);
+
   let bestMatch = null;
   let bestScore = 0;
   let bestCos = 0, bestDtw = 0;
-  
+
   for (const ref of referenceIndex) {
-    // We expect the Supabase dataset to now have `embedding_vector`
     if (!ref.embedding_vector) continue;
-    
-    // Step 1: FAST FILTER — Cosine Similarity on YAMNet Embeddings
-    const cos = calculateCosineSimilarity(ref.embedding_vector, features.liveEmbedding);
-    
-    // Low-confidence embeddings are immediately rejected as noise
-    if (cos < 0.45) continue;
-    
-    // Step 2: PRECISE MATCH — Spectrogram DTW Refinement
+
+    // Cosine similarity against first N_ALIGN dims of the stored 1024-dim vector
+    const cos = alignAndCompare(liveVec, ref.embedding_vector);
+
+    if (cos < 0.35) continue; // Fast rejection threshold
+
+    // Spectrogram DTW refinement (if available)
     let dtw = 0;
     if (features.liveSpectrogram && ref.spectrogram) {
       dtw = spectrogramDTW(ref.spectrogram, features.liveSpectrogram);
     }
-    
-    // WEIGHTED FUSION: ML Embeddings are primary (0.7), Temporal DTW is secondary (0.3)
-    const finalScore = (dtw > 0)
-      ? 0.70 * cos + 0.30 * dtw
-      : cos; // Fallback if spectrograms missing
-    
-    Logger.debug(`Match [${ref.label}] | YAMNet Cos=${cos.toFixed(3)} DTW=${dtw.toFixed(3)} => ${finalScore.toFixed(3)}`);
-    
+
+    // Weighted fusion: embedding primary (0.7), DTW refinement (0.3)
+    const finalScore = dtw > 0 ? 0.70 * cos + 0.30 * dtw : cos;
+
+    Logger.debug(`Match [${ref.label}] cos=${cos.toFixed(3)} dtw=${dtw.toFixed(3)} => ${finalScore.toFixed(3)}`);
+
     if (finalScore > bestScore) {
       bestScore = finalScore;
       bestMatch = ref;
@@ -167,14 +197,15 @@ function computeSignalMatch(features) {
       bestDtw = dtw;
     }
   }
-  
+
   return {
-    matchedFile: bestMatch ? bestMatch.label : null,
+    matchedFile: bestMatch ? (bestMatch.label || bestMatch.source_file) : null,
     finalScore: bestScore,
     cosine: bestCos,
     dtwScore: bestDtw,
   };
 }
+
 
 // ═══════════════════════════════════════════════
 // MAIN ENTRY: matchBuffer

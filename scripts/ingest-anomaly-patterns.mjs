@@ -232,22 +232,22 @@ async function main() {
         process.stdout.write(`fingerprint OK ... `);
       }
       
-      // Infer metadata from filename
+      // Infer category and label from filename
       const meta = inferMetadata(file.name);
       
-      // Insert into anomaly_references
+      // Pad 40-dim MFCC to 1024-dim to match pgvector(1024) column
+      // Repeat the pattern harmonically to preserve frequency relationships
+      const padded1024 = new Array(1024).fill(0).map((_, i) => embedding[i % embedding.length]);
+      
+      // Only insert columns that exist in the live schema:
+      // id, label, category, source_file, embedding_vector, spectrogram_url, created_at
       const { data: inserted, error: insertErr } = await supabase
         .from('anomaly_references')
         .insert([{
           label: meta.label,
           category: meta.category,
-          severity: meta.severity,
           source_file: file.name,
-          storage_path: file.name,
-          public_url: publicUrl,
-          embedding_vector: embedding,
-          duration_ms: Math.round((buffer.length / 2) / 44100 * 1000), // rough estimate
-          notes: `Auto-ingested from ${BUCKET} bucket`
+          embedding_vector: padded1024,
         }])
         .select()
         .single();
@@ -255,7 +255,7 @@ async function main() {
       if (insertErr) {
         console.error(`\n   ❌ Insert failed: ${insertErr.message}`);
       } else {
-        console.log(`✅ Inserted [${meta.category}/${meta.severity}]`);
+        console.log(`✅ Inserted [${meta.category}] ${meta.label}`);
         results.push(inserted);
       }
       

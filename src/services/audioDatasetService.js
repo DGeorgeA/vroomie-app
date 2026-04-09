@@ -142,20 +142,20 @@ export async function initializeAudioDataset() {
       
       for (const ref of dbRefs) {
         let vec = ref.embedding_vector;
+        // pgvector returns as array directly from supabase-js
         if (typeof vec === 'string') {
           try { vec = JSON.parse(vec); } catch { continue; }
         }
         if (!Array.isArray(vec) || vec.length === 0) continue;
-        
+
         referenceIndex.push({
           id: ref.id,
           label: ref.label,
           category: ref.category,
-          severity: ref.severity || 'medium',
+          source_file: ref.source_file,
           source: 'supabase_db',
-          embedding_vector: vec,
-          public_url: ref.public_url,
-          audioBufferPath: ref.source_file,
+          embedding_vector: vec,   // 1024-dim padded MFCC — first 40 dims used for matching
+          spectrogram: null,
         });
       }
       
