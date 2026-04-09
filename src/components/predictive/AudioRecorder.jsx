@@ -13,6 +13,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { canAccess } from "@/lib/featureGate";
 import UpgradeModal from "./UpgradeModal";
 import { motion } from "framer-motion";
+import { supabase } from "@/lib/supabase";
 
 export default function AudioRecorder({
   onRecordingComplete,
@@ -293,70 +294,106 @@ export default function AudioRecorder({
 
   const handleAudioUpload = async (blob) => {
     try {
-      const mockId = `analysis-live-${Date.now()}`;
       const activeMode = getDetectionMode();
-      
       const realAnomalies = sessionAnomaliesRef.current || [];
       const totalConf = sessionConfidenceRef.current.reduce((a, b) => a + b, 0);
-      const avgConfidence = sessionConfidenceRef.current.length > 0 
-        ? (totalConf / sessionConfidenceRef.current.length) * 100 
-        : 85; 
+      const avgConfidence = sessionConfidenceRef.current.length > 0
+        ? (totalConf / sessionConfidenceRef.current.length) * 100
+        : 75;
 
       const overallHealth = realAnomalies.length === 0
-        ? "healthy"
-        : realAnomalies.some(a => a.severity === "critical" || a.severity === "high")
-          ? "critical"
-          : "warning";
+        ? 'healthy'
+        : realAnomalies.some(a => a.severity === 'critical' || a.severity === 'high')
+          ? 'critical'
+          : 'warning';
 
-      const analysis = {
-        id: mockId,
-        vehicle_id: vehicleId,
-        audio_file_url: URL.createObjectURL(blob),
+      // ── Step 1: Upload audio to Supabase Storage ──────────────────────────
+      let audioFileUrl = null;
+      try {
+        const sessionId = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+        const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
+        const filePath = `recordings/${sessionId}.${ext}`;
+
+        const { error: uploadErr } = await supabase.storage
+          .from('audio-analyses')
+          .upload(filePath, blob, { contentType: blob.type, upsert: false });
+
+        if (!uploadErr) {
+          const { data: urlData } = supabase.storage
+            .from('audio-analyses')
+            .getPublicUrl(filePath);
+          audioFileUrl = urlData.publicUrl;
+        } else {
+          console.warn('Audio upload skipped:', uploadErr.message);
+        }
+      } catch (uploadEx) {
+        console.warn('Storage upload error:', uploadEx.message);
+      }
+
+      // ── Step 2: Build the analysis payload ───────────────────────────────
+      const primaryAnomaly = realAnomalies[0] || null;
+
+      const dbPayload = {
+        // created_at is server-generated — never set by client
+        vehicle_id: vehicleId || null,
+        audio_file_url: audioFileUrl,
         duration_seconds: recordingTime,
-        status: realAnomalies.length > 0 ? "flagged" : "completed",
-        confidence_score: avgConfidence,
+        status: realAnomalies.length > 0 ? 'flagged' : 'completed',
+        confidence_score: parseFloat(avgConfidence.toFixed(2)),
         anomalies_detected: realAnomalies,
-        detection_mode: 'hybrid', // Phase 2 mandates hybrid tracking
-        detection_source: 'ML + Deterministic Fusion',
-        
-        // Phase 2 Hybrid Metrics 
-        mlConfidence: realAnomalies[0] ? realAnomalies[0].mlConfidence : 0,
-        signalSimilarity: realAnomalies[0] ? realAnomalies[0].signalSimilarity : avgConfidence / 100,
-        finalDecision: realAnomalies[0] ? realAnomalies[0].finalDecision : 'NO ANOMALY',
-        
+        detection_mode: activeMode,
+        detection_source: activeMode === 'ml' ? 'YAMNet + DTW Fusion' : 'Signal Analysis',
+        ml_confidence: primaryAnomaly?.mlConfidence ?? null,
+        signal_similarity: primaryAnomaly?.signalSimilarity ?? null,
+        final_decision: primaryAnomaly?.finalDecision ?? 'NO ANOMALY',
         analysis_result: {
           overall_health: overallHealth,
           confidence_score: avgConfidence,
           detected_patterns: realAnomalies.length > 0
             ? realAnomalies.map(a => a.type)
-            : ["smooth_idle", "consistent_rpm"],
+            : ['smooth_idle', 'consistent_rpm'],
         },
         processed_at: new Date().toISOString(),
-        created_date: new Date().toISOString(),
-        notes: realAnomalies.length > 0
-          ? "Active acoustic signatures met anomaly thresholds."
-          : "Engine block returned nominal patterns cleanly across all frequencies.",
       };
 
-      toast.success("Audio captured and verified fully on-device!");
-      
+      // ── Step 3: Insert into analyses table ────────────────────────────────
+      const { data: inserted, error: insertErr } = await supabase
+        .from('analyses')
+        .insert([dbPayload])
+        .select()
+        .single();
+
+      if (insertErr) {
+        console.error('Failed to save analysis to DB:', insertErr.message);
+        toast.error('Recording saved locally only. DB write failed.');
+        // Still notify UI with local data so UI doesn't break
+        if (onRecordingComplete) {
+          onRecordingComplete({ ...dbPayload, id: `local-${Date.now()}`, created_date: new Date().toISOString() });
+        }
+        return;
+      }
+
+      toast.success('Analysis saved and synced!');
+
+      // onRecordingComplete triggers the realtime refetch
       if (onRecordingComplete) {
-        onRecordingComplete(analysis);
+        onRecordingComplete(inserted);
       }
-      
+
+      // ── Step 4: Voice alerts ───────────────────────────────────────────────
       if (isVoiceAlertsEnabled) {
-          if (realAnomalies.length > 0) {
-            const primary = realAnomalies[0].type;
-            const meta = getDiagnosticMetadata(primary);
-            speakText(`Analysis complete. Priority issue: ${primary}. Estimated repair costs around ${meta.usd} dollars.`);
-          } else {
-            speakText("No anomalies detected. Vehicle is operating normally.");
-          }
+        if (realAnomalies.length > 0) {
+          const primary = realAnomalies[0].type;
+          const meta = getDiagnosticMetadata(primary);
+          speakText(`Analysis complete. Priority issue: ${primary}. Estimated repair cost around ${meta.usd} dollars.`);
+        } else {
+          speakText('Analysis complete. No anomalies detected. Vehicle is operating normally.');
+        }
       }
-      
+
     } catch (error) {
-      console.error("Error processing audio:", error);
-      toast.error("Failed to process audio");
+      console.error('Error processing audio:', error);
+      toast.error('Failed to process audio recording.');
     }
   };
 
