@@ -128,6 +128,24 @@ export default function PredictiveMaintenance() {
     }, 1000);
   };
 
+  const handleClearHistory = async () => {
+    if (!selectedVehicle) return;
+    try {
+      const { error } = await supabase
+        .from('analyses')
+        .delete()
+        .eq('vehicle_id', selectedVehicle.id);
+      
+      if (error) throw error;
+      
+      setAnalyses([]);
+      toast.success("Diagnostic history securely purged.");
+    } catch (err) {
+      console.error("Failed to clear history:", err);
+      toast.error("Error wiping old diagnostic records.");
+    }
+  };
+
   const handleAnomalyDetected = (anomaly) => {
     toast.warning(`${anomaly.severity.toUpperCase()} anomaly detected!`, {
       description: anomaly.type,
@@ -326,6 +344,7 @@ export default function PredictiveMaintenance() {
                 analyses={analyses}
                 isLoading={analysesLoading}
                 onSelectAnalysis={setSelectedAnalysis}
+                onClearHistory={handleClearHistory}
               />
             </GlassCard>
           </motion.div>
