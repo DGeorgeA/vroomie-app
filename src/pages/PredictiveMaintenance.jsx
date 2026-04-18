@@ -26,9 +26,30 @@ export default function PredictiveMaintenance() {
   const [language, setLanguage] = useState('en-US');
 
   // ─── Post-recording feedback popup ────────────────────────────────
-  // Shown 5 seconds after recording stops if user doesn't restart
+  // Trigger: recording stops → 5s inactivity → show modal
+  // Cancel:  any click / touchstart / keydown during the 5s window
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const feedbackTimerRef = React.useRef(null);
+  const interactionListenersAttached = React.useRef(false);
+
+  // Remove global interaction listeners (cleanup)
+  const removeInteractionListeners = React.useCallback(() => {
+    if (!interactionListenersAttached.current) return;
+    window.removeEventListener('click',      cancelFeedbackTimer);
+    window.removeEventListener('touchstart', cancelFeedbackTimer);
+    window.removeEventListener('keydown',    cancelFeedbackTimer);
+    interactionListenersAttached.current = false;
+  }, []);
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  function cancelFeedbackTimer() {
+    // User interacted — reset the inactivity timer back to 5s from now
+    if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+    feedbackTimerRef.current = setTimeout(() => {
+      removeInteractionListeners();
+      setShowFeedbackModal(true);
+    }, 5000);
+  }
 
   // ─── Data fetching: ALL analyses, no vehicle filter ────────────────────────
   // Reports are fetched ONLY from persisted DB entries, NEVER generated on render.
@@ -108,24 +129,37 @@ export default function PredictiveMaintenance() {
   }, [analyses]);
 
   const handleRecordingComplete = () => {
-    // DB write propagation delay
+    // DB write propagation delay before refetch
     setTimeout(() => refetchAnalyses(), 1500);
 
-    // ── Inactivity-based feedback popup ──────────────────────────────────
-    // Wait 5 seconds: if user doesn't start a new recording, show the modal.
-    // Clear any existing timer first so rapid stop/start doesn't stack timers.
+    // ── Inactivity-based feedback popup ────────────────────────────────
+    // Clear any existing timer so rapid stop/start doesn't stack timers.
     if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+
+    // Start 5-second inactivity countdown
     feedbackTimerRef.current = setTimeout(() => {
+      removeInteractionListeners();
       setShowFeedbackModal(true);
     }, 5000);
+
+    // Attach global listeners: any interaction resets the countdown
+    if (!interactionListenersAttached.current) {
+      window.addEventListener('click',      cancelFeedbackTimer);
+      window.addEventListener('touchstart', cancelFeedbackTimer, { passive: true });
+      window.addEventListener('keydown',    cancelFeedbackTimer);
+      interactionListenersAttached.current = true;
+    }
+
+    console.log('[Vroomie Feedback] Inactivity timer started (5s). Interaction listeners attached.');
   };
 
-  // Cancel the feedback timer whenever recording restarts
+  // Cancel the feedback timer and listeners whenever recording restarts
   const handleRecordingStart = () => {
     if (feedbackTimerRef.current) {
       clearTimeout(feedbackTimerRef.current);
       feedbackTimerRef.current = null;
     }
+    removeInteractionListeners();
     setShowFeedbackModal(false);
   };
 

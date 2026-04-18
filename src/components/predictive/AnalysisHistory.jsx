@@ -215,19 +215,20 @@ export default function AnalysisHistory({
                       
                       <div className="flex items-center gap-3 text-sm">
                       <p className="text-zinc-400 font-medium">
-                          {/* ── TIMESTAMP FIX ───────────────────────────────────
-                           *  Priority order:
-                           *  1. created_at  — server-generated on INSERT, always unique
-                           *  2. processed_at — client-set fallback (less reliable)
-                           *  3. created_date — legacy alias of created_at at fetch time
-                           *  NEVER share a single variable across rows — each entry
-                           *  maps independently from its own row object.
-                           * ────────────────────────────────────── */}
+                          {/* ── TIMESTAMP: server created_at is authoritative ──────────────
+                           *  Priority: created_at (DB DEFAULT now()) > processed_at > created_date
+                           *  Format includes SECONDS so same-minute recordings are distinct.
+                           *  Each entry reads from its OWN `analysis` object — no shared state.
+                           * ─────────────────────────────────────────────────────── */}
                           {(() => {
+                            // Each row provides its own timestamp — never shared across entries
                             const ts = analysis.created_at || analysis.processed_at || analysis.created_date;
                             if (!ts) return 'Unknown Date';
                             try {
-                              return format(new Date(ts), "MMM d, yyyy 'at' h:mm a");
+                              const parsed = new Date(ts);
+                              // Console validation: proves uniqueness per row
+                              console.log(`[Vroomie History] Row ${analysis.id} → created_at: ${ts}`);
+                              return format(parsed, "MMM d, yyyy 'at' h:mm:ss a");
                             } catch {
                               return 'Invalid Date';
                             }

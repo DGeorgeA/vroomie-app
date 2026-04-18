@@ -42,9 +42,12 @@ export default function AnalysisDetails({ analysis, onClose }) {
                 Analysis Details
               </h2>
               <p className="text-gray-400">
-                {analysis.processed_at
-                  ? format(new Date(analysis.processed_at), "MMMM d, yyyy 'at' h:mm a")
-                  : format(new Date(analysis.created_date), "MMMM d, yyyy 'at' h:mm a")}
+                {(() => {
+                  const ts = analysis.created_at || analysis.processed_at || analysis.created_date;
+                  if (!ts) return 'Unknown Date';
+                  try { return format(new Date(ts), "MMMM d, yyyy 'at' h:mm:ss a"); }
+                  catch { return 'Invalid Date'; }
+                })()}
               </p>
             </div>
             <button
