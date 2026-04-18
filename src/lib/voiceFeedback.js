@@ -1,19 +1,29 @@
+/**
+ * voiceFeedback.js — Vroomie TTS Engine
+ *
+ * FIXED:
+ *  1. triggerContinuousAlert no longer repeats on a loop (10s interval removed).
+ *     One-shot TTS per confirmed anomaly, de-bounced by anomaly label.
+ *  2. No pricing mentioned anywhere in TTS output.
+ *  3. Message format: "Potential [name] detected. Please visit a workshop..."
+ *  4. speakText is public so handleAudioUpload can call it for post-recording summary.
+ */
+
 import { Logger } from './logger';
-import { getDiagnosticMetadata } from './diagnosticDictionary';
 
 const voiceProfiles = {
-  'hi-IN': { pitch: 1.1, rate: 0.9, priorityParams: ['aurora', 'natural', 'premium'] },
+  'hi-IN': { pitch: 1.1, rate: 0.9,  priorityParams: ['aurora', 'natural', 'premium'] },
   'fr-FR': { pitch: 1.0, rate: 1.05, priorityParams: ['premium', 'natural'] },
   'ar-SA': { pitch: 0.9, rate: 0.95, priorityParams: ['natural'] },
-  'ml-IN': { pitch: 1.0, rate: 0.9, priorityParams: ['natural'] },
-  'en-US': { pitch: 1.0, rate: 1.0, priorityParams: ['google', 'natural'] },
+  'ml-IN': { pitch: 1.0, rate: 0.9,  priorityParams: ['natural'] },
+  'en-US': { pitch: 1.0, rate: 1.0,  priorityParams: ['google', 'natural'] },
 };
 
-let activeVoice = null;
+let activeVoice   = null;
 let activeProfile = null;
 
-let alertInterval = null;
-let currentAnomalyName = null;
+// ─── De-bounce state — prevents speaking the same anomaly more than once ──────
+let lastSpokenAnomaly = null;
 
 function initVoices() {
   if (!window.speechSynthesis) return;
@@ -22,114 +32,86 @@ function initVoices() {
   window.speechSynthesis.onvoiceschanged = () => assignBestVoice(window.speechSynthesis.getVoices());
 }
 
-/**
- * Iterative fallback matching to ensure the best possible native tone.
- */
 function assignBestVoice(voices) {
-  const lang = navigator.language || 'en-US';
+  const lang     = navigator.language || 'en-US';
   const baseLang = lang.split('-')[0];
-  activeProfile = voiceProfiles[lang] || voiceProfiles[baseLang] || voiceProfiles['en-US'];
-  
+  activeProfile  = voiceProfiles[lang] || voiceProfiles[baseLang] || voiceProfiles['en-US'];
+
   const keywords = activeProfile.priorityParams || ['natural'];
-  
-  // 1. Exact dialect + Premium/Natural
+
   let match = voices.find(v => v.lang === lang && keywords.some(k => v.name.toLowerCase().includes(k)));
-  // 2. Exact dialect purely
   if (!match) match = voices.find(v => v.lang === lang);
-  // 3. Base language + Natural
   if (!match) match = voices.find(v => v.lang.startsWith(baseLang) && keywords.some(k => v.name.toLowerCase().includes(k)));
-  // 4. Base language purely
   if (!match) match = voices.find(v => v.lang.startsWith(baseLang));
-  // 5. Ultimate Fallback
   if (!match) match = voices.find(v => v.lang === 'en-US');
-  
+
   activeVoice = match || voices[0];
-  Logger.debug('Voice Feedback assigned', { voice: activeVoice?.name, lang: activeVoice?.lang });
+  Logger.debug('Voice assigned', { voice: activeVoice?.name });
 }
 
 export function speakText(text) {
-  if (!window.speechSynthesis) {
-    Logger.error('Speech Synthesis API not supported');
-    return;
-  }
+  if (!window.speechSynthesis) return;
   if (!activeVoice) initVoices();
-  
-  // Prevent TTS overlap/clipping on continuous streams
+
+  // Cancel any in-flight utterance to prevent overlap
   window.speechSynthesis.cancel();
-  
+
   const utterance = new SpeechSynthesisUtterance(text);
-  if (activeVoice) {
-    utterance.voice = activeVoice;
-    utterance.lang = activeVoice.lang;
-  }
-  if (activeProfile) {
-    utterance.pitch = activeProfile.pitch;
-    utterance.rate = activeProfile.rate;
-  }
-  
-  Logger.info('Dispatching TTS Announcement', { text });
+  if (activeVoice)  { utterance.voice = activeVoice; utterance.lang = activeVoice.lang; }
+  if (activeProfile){ utterance.pitch = activeProfile.pitch; utterance.rate = activeProfile.rate; }
+
+  Logger.info('TTS', { text });
   window.speechSynthesis.speak(utterance);
 }
 
 /**
- * Initiates a continuous 10-second repeating alert loop for severe anomalies.
+ * Speaks a ONE-SHOT alert for a confirmed anomaly.
+ * Will NOT speak again if the same anomaly label is already active.
+ * Does NOT loop — avoids the double-speech problem.
+ *
+ * @param {string}  anomalyRawLabel  - raw label from matching engine (e.g. "bearing_fault_alternator_bearing_fault_critical")
+ * @param {boolean} isVoiceEnabled   - from settings store
  */
-export function triggerContinuousAlert(anomalyRawName, isVoiceEnabled = true) {
+export function triggerContinuousAlert(anomalyRawLabel, isVoiceEnabled = true) {
   if (!isVoiceEnabled) return;
 
-  // Debounce if the exact same anomaly is already triggering to prevent overlapping intervals
-  if (currentAnomalyName === anomalyRawName && alertInterval !== null) return;
+  // De-bounce: same anomaly already spoken this session
+  if (lastSpokenAnomaly === anomalyRawLabel) return;
+  lastSpokenAnomaly = anomalyRawLabel;
 
-  clearContinuousAlert(); // Safely wipe any previous state before starting
-  
-  currentAnomalyName = anomalyRawName;
-  
-  // Parse <category>_<anomalyName>_<severity> from the file name
-  const parts = anomalyRawName.split('_');
-  let severityStr = 'Unknown';
-  let readableNameStr = anomalyRawName;
-  
+  // Build a clean human-readable name from the raw label
+  // Format: <category>_<descriptive_parts...>_<severity>
+  const parts = anomalyRawLabel.split('_');
+  let readableName = anomalyRawLabel;
+
   if (parts.length >= 3) {
-    severityStr = parts.pop();
-    // Reconstruct the descriptive name dropping the category prefix
-    readableNameStr = parts.slice(1).join(' ');
+    // Drop the category prefix (first part) and severity suffix (last part)
+    const severity = parts[parts.length - 1].toLowerCase();
+    const isKnownSeverity = ['critical', 'high', 'medium', 'low'].includes(severity);
+    const middleParts = isKnownSeverity ? parts.slice(1, -1) : parts.slice(1);
+    readableName = middleParts.join(' ');
   } else if (parts.length === 2) {
-    severityStr = parts.pop();
-    readableNameStr = parts[0];
+    readableName = parts[1];
   }
-  
-  readableNameStr = readableNameStr.replace(/\b\w/g, l => l.toUpperCase());
-  severityStr = severityStr.toUpperCase();
-  
-  const dict = getDiagnosticMetadata(readableNameStr);
-  
-  let alertMessage = `Warning. Anomaly detected: ${readableNameStr}. Estimated repair cost is ${dict.usd} dollars.`;
-  
-  // Specific Voice Override for Bearing Faults
-  if (readableNameStr.toLowerCase().includes('bearing')) {
-    alertMessage = "Warning. Bearing fault detected. Immediate inspection recommended.";
-  }
-  
-  // Speak immediately
-  speakText(alertMessage);
-  
-  // Register strict 10-second looping repeater
-  alertInterval = setInterval(() => {
-    speakText(alertMessage);
-  }, 10000);
+
+  // Title-case
+  readableName = readableName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()).trim();
+
+  // NO PRICING. Workshop referral only.
+  const message = `Potential ${readableName} detected. Please visit a workshop and share your Vroomie report for further inspection.`;
+
+  speakText(message);
+  Logger.info(`[TTS] Anomaly alert spoken: "${message}"`);
 }
 
 /**
- * Safely terminates the active repeating TTS alarm.
+ * Clears the active anomaly de-bounce so the next detection cycle
+ * can speak again (called when recording stops or restarts).
  */
 export function clearContinuousAlert() {
-  if (alertInterval) {
-    clearInterval(alertInterval);
-    alertInterval = null;
-  }
-  currentAnomalyName = null;
+  lastSpokenAnomaly = null;
   if (window.speechSynthesis) window.speechSynthesis.cancel();
 }
 
-// Ensure pre-population before button click required
+// Pre-populate voices before first button click
 initVoices();

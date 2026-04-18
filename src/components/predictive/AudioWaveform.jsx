@@ -40,16 +40,7 @@ export default function AudioWaveform({
 
       oscillator.start(audioCtx.currentTime);
       oscillator.stop(audioCtx.currentTime + 0.5);
-
-      if ('speechSynthesis' in window) {
-        const utterance = new SpeechSynthesisUtterance(
-          `${severity} severity anomaly detected. Please review the analysis when you exit the vehicle.`
-        );
-        utterance.rate = 1.0;
-        utterance.pitch = 1.0;
-        utterance.volume = 0.8;
-        window.speechSynthesis.speak(utterance);
-      }
+      // NOTE: TTS is handled exclusively by voiceFeedback.js — do NOT speak here
     } catch (error) {
       console.error('Error playing alert tone:', error);
     }

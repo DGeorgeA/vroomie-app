@@ -162,8 +162,8 @@ export default function AudioRecorder({
             });
           }
           
-          // STRICT RULE: Bind Voice Output ONLY to CONFIRMED ANOMALY 
-          if (result.finalDecision === 'CONFIRMED ANOMALY') {
+          // STRICT RULE: Voice ONLY on CONFIRMED ANOMALY (matches engine's 'ANOMALY DETECTED' output)
+          if (result.finalDecision === 'ANOMALY DETECTED') {
              triggerContinuousAlert(result.anomaly, isVoiceAlertsEnabled);
           }
         } else {
@@ -226,14 +226,6 @@ export default function AudioRecorder({
       timerRef.current = setInterval(() => {
         setRecordingTime((prev) => {
           const newTime = prev + 1;
-
-          if (newTime % 20 === 0 && newTime < 120) {
-            try { speakText("No anomalies found. Continuing scan."); } catch (e) {}
-            toast.info("Scanning in progress...", {
-              description: `Time elapsed: ${newTime}s. Analyzing patterns...`,
-              duration: 3000,
-            });
-          }
 
           if (newTime === 20) {
             toast.info("Sufficient data collected.", {
@@ -387,14 +379,14 @@ export default function AudioRecorder({
         onRecordingComplete(inserted);
       }
 
-      // ── Step 4: Voice alerts ───────────────────────────────────────────────
+      // ── Step 4: Post-recording voice summary ──────────────────────────────
       if (isVoiceAlertsEnabled) {
         if (realAnomalies.length > 0) {
-          const primary = realAnomalies[0].type;
-          const meta = getDiagnosticMetadata(primary);
-          speakText(`Analysis complete. Priority issue: ${primary}. Estimated repair cost around ${meta.usd} dollars.`);
+          // Name is already readable (built above). Use it directly.
+          const primaryName = realAnomalies[0].type;
+          speakText(`Scan complete. ${primaryName} detected. Please visit a workshop and share your Vroomie report for further inspection.`);
         } else {
-          speakText('Analysis complete. No anomalies detected. Vehicle is operating normally.');
+          speakText('Scan complete. No anomalies found.');
         }
       }
 
