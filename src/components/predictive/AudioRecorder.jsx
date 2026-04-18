@@ -108,14 +108,51 @@ export default function AudioRecorder({
 
   const startRecording = async () => {
     try {
-      sessionAnomaliesRef.current = [];
+      // ══════════════════════════════════════════════════════════════
+      // STEP 1 — INSTANT UI RESPONSE (0ms, no await, no async)
+      // The waveform burst animation fires here. Timer starts here.
+      // User sees immediate feedback before mic even initialises.
+      // ══════════════════════════════════════════════════════════════
+      sessionAnomaliesRef.current  = [];
       sessionConfidenceRef.current = [];
-      
+
+      setIsRecording(true);    // ← triggers waveform BURST immediately
+      setRecordingTime(0);
+      setRemainingTime(120);
+
+      // Notify parent now (cancels feedback popup timer)
+      if (onRecordingStart) onRecordingStart();
+
+      // Start the display timer instantly
       const activeMode = getDetectionMode();
-      
+      timerRef.current = setInterval(() => {
+        setRecordingTime((prev) => {
+          const newTime = prev + 1;
+          if (newTime === 20) {
+            toast.info("Sufficient data collected.", {
+              description: "You can stop now, or keep running for a deep scan.",
+              duration: 5000,
+              action: { label: "Stop", onClick: () => stopRecording() }
+            });
+          }
+          return newTime;
+        });
+        setRemainingTime((prev) => {
+          const next = prev - 1;
+          if (next <= 0) { stopRecording(); return 0; }
+          return next;
+        });
+      }, 1000);
+
+      const modeLabel = activeMode === 'ml' ? 'ML Mode' : 'Basic Mode';
+      toast.success(`Recording started [${modeLabel}]`);
+
+      // ══════════════════════════════════════════════════════════════
+      // STEP 2 — ASYNC: Initialise audio processing in background
+      // UI already shows "recording". Mic permission happens here.
+      // On fast browsers / pre-granted permission, this is <50ms.
+      // ══════════════════════════════════════════════════════════════
       await startExtraction((features) => {
-        // The worker result is in features._workerResult (new architecture)
-        // features may also contain compositeEmbedding for legacy matchBuffer compat
         const workerResult = features._workerResult || {};
         const status     = workerResult.status     || 'normal';
         const confidence = workerResult.confidence  || 0;
@@ -126,8 +163,8 @@ export default function AudioRecorder({
         if (confidence > 0) {
           sessionConfidenceRef.current.push(confidence);
         }
-        
-        // Debounced debug stats update — max 4x per second, not per audio frame
+
+        // Debounced debug stats — max 4 re-renders/sec
         if (IS_DEBUG) {
           pendingDebugRef.current = {
             rms:      rms.toFixed(4),
@@ -146,123 +183,91 @@ export default function AudioRecorder({
             }, 250);
           }
         }
-        
-        // ── ONLY accumulate CONFIRMED anomalies (status === 'anomaly') ──────
+
+        // Accumulate confirmed anomalies only
         if (status === 'anomaly' && anomaly) {
           const cleanLabel = buildReadableLabel(anomaly);
           const anomalyData = {
             type:             cleanLabel,
             rawLabel:         anomaly,
-            severity:         severity,
+            severity,
             timestamp:        recordingTime,
             status:           'anomaly',
             signalSimilarity: confidence,
             finalDecision:    'ANOMALY DETECTED',
           };
-
           if (!sessionAnomaliesRef.current.some(a => a.rawLabel === anomaly)) {
             sessionAnomaliesRef.current.push(anomalyData);
             Logger.info(`Session anomaly added: ${cleanLabel}`);
           }
         }
       });
-      
-      // Reuse the stream and context from the extractor (already initialised above)
+
+      // ══════════════════════════════════════════════════════════════
+      // STEP 3 — Wire up waveform analyser + MediaRecorder
+      // These are non-blocking once startExtraction resolves.
+      // ══════════════════════════════════════════════════════════════
       const stream   = getActiveMediaStream();
       const audioCtx = getActiveAudioContext();
-      
-      if (!stream) {
-        throw new Error("Feature extractor started but no stream available");
-      }
+
+      if (!stream) throw new Error("Feature extractor started but no stream available");
 
       streamRef.current = stream;
 
-      // Lightweight analyser for waveform UI only (read-only, 1024 vs old 2048)
+      // Lightweight analyser for waveform UI (read-only, 1024 fftSize)
       const waveformAnalyser = audioCtx.createAnalyser();
       waveformAnalyser.fftSize = 1024;
       const waveformSource = audioCtx.createMediaStreamSource(stream);
       waveformSource.connect(waveformAnalyser);
-
       setAudioContext(audioCtx);
-      setAnalyser(waveformAnalyser);
+      setAnalyser(waveformAnalyser); // ← waveform switches from simulated → live data here
 
+      // MediaRecorder for audio blob upload
       const mediaRecorder = new MediaRecorder(stream);
-
       mediaRecorderRef.current = mediaRecorder;
       chunksRef.current = [];
 
       mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          chunksRef.current.push(e.data);
-        }
+        if (e.data.size > 0) chunksRef.current.push(e.data);
       };
 
       mediaRecorder.onstop = async () => {
         try {
           const blob = new Blob(chunksRef.current, { type: "audio/webm" });
           await handleAudioUpload(blob);
-
           if (streamRef.current) {
-            streamRef.current.getTracks().forEach(track => track.stop());
+            streamRef.current.getTracks().forEach(t => t.stop());
             streamRef.current = null;
           }
-        } catch (uploadObjErr) {
-          console.error("Failed to upload audio at end of recording:", uploadObjErr);
+        } catch (uploadErr) {
+          console.error("Failed to upload audio:", uploadErr);
         }
       };
 
       mediaRecorder.start(1000);
-      setIsRecording(true);
-      setRecordingTime(0);
-      setRemainingTime(120);
 
-      // Notify parent so it can cancel the feedback popup timer
-      if (onRecordingStart) onRecordingStart();
-
-      timerRef.current = setInterval(() => {
-        setRecordingTime((prev) => {
-          const newTime = prev + 1;
-
-          if (newTime === 20) {
-            toast.info("Sufficient data collected.", {
-              description: "You can stop now, or keep running for a deep scan.",
-              duration: 5000,
-              action: {
-                label: "Stop",
-                onClick: () => stopRecording()
-              }
-            });
-          }
-
-          return newTime;
-        });
-
-        setRemainingTime((prev) => {
-          const next = prev - 1;
-          if (next <= 0) {
-            stopRecording();
-            return 0;
-          }
-          return next;
-        });
-      }, 1000);
-
-      const modeLabel = activeMode === 'ml' ? 'ML Mode' : 'Basic Mode';
-      toast.success(`Recording started [${modeLabel}] - recommended: 2 minutes`);
     } catch (error) {
+      // Revert all UI state if async setup failed
       console.error("🚨 Error in startRecording:", error);
-      if (error.name === 'NotAllowedError' || error.message.includes('Permission')) {
+      setIsRecording(false);
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (debugDebounceRef.current) {
+        clearTimeout(debugDebounceRef.current);
+        debugDebounceRef.current = null;
+      }
+      stopExtraction();
+
+      if (error.name === 'NotAllowedError' || error.message?.includes('Permission')) {
         setMicPermissionDenied(true);
         toast.error("Microphone access is required for real-time analysis.");
       } else {
         toast.error("Failed to start the audio engine. Ensure your device has a working microphone.");
       }
-      setIsRecording(false);
-      stopExtraction();
     }
   };
 
   const stopRecording = useCallback(() => {
+
     try {
       // Clear any pending debug debounce
       if (debugDebounceRef.current) {
