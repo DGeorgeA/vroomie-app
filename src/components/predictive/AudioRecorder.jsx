@@ -4,10 +4,9 @@ import { Mic, Square, Upload, Loader2, Clock, Bug, Cpu, AudioWaveform as Wavefor
 import GlassButton from "../ui/GlassButton";
 import { toast } from "sonner";
 import { startExtraction, stopExtraction, getActiveMediaStream, getActiveAudioContext } from "@/lib/audioFeatureExtractor";
-import { matchBuffer, resetMatchState } from "@/lib/audioMatchingEngine";
-import { triggerContinuousAlert, clearContinuousAlert, speakText } from "@/lib/voiceFeedback";
+import { matchBuffer, resetMatchState, buildReadableLabel } from "@/lib/audioMatchingEngine";
+import { clearContinuousAlert, speakText } from "@/lib/voiceFeedback";
 import { Logger } from "@/lib/logger";
-import { getDiagnosticMetadata } from "@/lib/diagnosticDictionary";
 import { getDetectionMode, setDetectionMode } from "@/lib/detectionMode";
 import { useAuth } from "@/contexts/AuthContext";
 import { canAccess } from "@/lib/featureGate";
@@ -132,42 +131,27 @@ export default function AudioRecorder({
           });
         }
         
-        if (result.status === 'anomaly' || result.status === 'potential_anomaly') {
+        // ── ONLY accumulate CONFIRMED anomalies (status === 'anomaly') ──────
+        // potential_anomaly and normal are completely silent during recording.
+        if (result.status === 'anomaly') {
+          // Build a clean, deduplicated readable label
+          const cleanLabel = buildReadableLabel(result.anomaly);
           const anomalyData = {
-             type: result.anomaly?.split('_').filter(a => a !== result.severity).join(' ').replace(/\b\w/g, l => l.toUpperCase()),
-             severity: result.severity || 'high',
-             timestamp: recordingTime,
-             status: result.status,
-             matchedFile: result.source,
-             detectedClass: result.detectedClass,
-             cnnConfidence: result.cnnConfidence,
-             classifierSource: result.classifierSource,
-             mode: result.mode || activeMode,
-             // Phase 2 Hybrid Metrics
-             mlConfidence: result.mlConfidence || 0,
-             signalSimilarity: result.signalSimilarity || 0,
-             finalDecision: result.finalDecision || 'NO ANOMALY'
+            type:             cleanLabel,
+            rawLabel:         result.anomaly,
+            severity:         result.severity || 'medium',
+            timestamp:        recordingTime,
+            status:           'anomaly',
+            signalSimilarity: result.signalSimilarity || 0,
+            finalDecision:    'ANOMALY DETECTED',
           };
-          
-          if (!sessionAnomaliesRef.current.some(a => a.type === anomalyData.type)) {
+
+          // Deduplicate by raw label — only store first occurrence
+          if (!sessionAnomaliesRef.current.some(a => a.rawLabel === result.anomaly)) {
             sessionAnomaliesRef.current.push(anomalyData);
+            Logger.info(`Session anomaly added: ${cleanLabel}`);
           }
-          
-          Logger.info(`Real-time Alert (${result.status}) [HYBRID]`, { anomaly: result.anomaly, finalDecision: result.finalDecision });
-          
-          // Only pop toast if it's confirmed or probable (not transient tracking)
-          if (result.finalDecision !== 'NO ANOMALY') {
-            toast.warning(`${result.finalDecision}: ${anomalyData.type}`, {
-              description: `ML: ${(anomalyData.mlConfidence * 100).toFixed(1)}% | Signal: ${(anomalyData.signalSimilarity * 100).toFixed(1)}%`
-            });
-          }
-          
-          // STRICT RULE: Voice ONLY on CONFIRMED ANOMALY (matches engine's 'ANOMALY DETECTED' output)
-          if (result.finalDecision === 'ANOMALY DETECTED') {
-             triggerContinuousAlert(result.anomaly, isVoiceAlertsEnabled);
-          }
-        } else {
-          clearContinuousAlert();
+          // NO toast, NO TTS during recording — all output is post-stop.
         }
       });
       
@@ -379,12 +363,12 @@ export default function AudioRecorder({
         onRecordingComplete(inserted);
       }
 
-      // ── Step 4: Post-recording voice summary ──────────────────────────────
+      // ── Step 4: Post-recording voice summary (ONLY place TTS fires) ────────
       if (isVoiceAlertsEnabled) {
         if (realAnomalies.length > 0) {
-          // Name is already readable (built above). Use it directly.
-          const primaryName = realAnomalies[0].type;
-          speakText(`Scan complete. ${primaryName} detected. Please visit a workshop and share your Vroomie report for further inspection.`);
+          // Deduplicated list of clean names
+          const names = [...new Set(realAnomalies.map(a => a.type))].join(', ');
+          speakText(`Scan complete. Issue detected: ${names}. Please visit a workshop and share your Vroomie report.`);
         } else {
           speakText('Scan complete. No anomalies found.');
         }

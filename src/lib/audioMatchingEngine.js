@@ -1,63 +1,48 @@
 /**
- * audioMatchingEngine.js — Vroomie Hybrid Matching Engine (v3 — MFCC-Consistent)
+ * audioMatchingEngine.js — Vroomie Detection Engine (v4 — STRICT)
  *
- * FIXED ROOT CAUSES:
- *  1. All comparison now uses the same 42-dim extended MFCC vector (MFCC-40 + RMS + Centroid)
- *     on BOTH the live signal and the stored references.
- *  2. Threshold logic tightened: minimum cosine ≥ 0.65 for anomaly, ≥ 0.50 for probable.
- *  3. Silence/noise rejection via RMS gate: skip if live RMS < 0.008.
- *  4. 3-frame hysteresis: must see consistent hits before declaring.
- *  5. Speech/music fingerprint rejection: discard if spectral centroid indicates broadband noise.
- *  6. Structured per-cycle debug log with: input_detected, best_match, confidence, decision.
+ * RULES:
+ *  1. Confidence < 0.75  → NO ANOMALY. Period.
+ *  2. No live TTS — all voice output is post-recording only.
+ *  3. 4-frame hysteresis on the same label before confirming.
+ *  4. Silence gate: RMS < 0.010 → reject.
+ *  5. Centroid gate: > 40% Nyquist → reject (speech/music).
  */
 
 import { referenceIndex } from '../services/audioDatasetService';
 import { Logger } from './logger';
 
-// ═══════════════════════════════════════════════
-// CONFIGURATION
-// ═══════════════════════════════════════════════
+// ── Configurable thresholds (mutated by settingsStore) ───────────────────────
+let ANOMALY_THRESHOLD  = 0.75;  // STRICT: only strong confirmed matches
+let MIN_LIVE_RMS       = 0.010; // ~-40 dBFS floor
 
-// Thresholds tuned for MFCC-to-MFCC comparison (same feature space on both sides)
-// These are mutable so Settings > Sensitivity can override them at runtime
-let ANOMALY_THRESHOLD   = 0.65;  // Confirmed anomaly — strong spectral match
-let PROBABLE_THRESHOLD  = 0.50;  // Potential anomaly — moderate match
-let MIN_LIVE_RMS        = 0.008; // Below ~-42 dBFS — silence / breath / ambient noise
+const ENGINE_CENTROID_MAX = 0.40;  // Rejects speech / music / broadband noise
+const SMOOTHING_WINDOW    = 8;     // ~2s of 250ms frames
+const THRESHOLD_FRAMES    = 4;     // Same label 4 consecutive frames = confirmed
+const FAST_REJECT_COSINE  = 0.40;  // Hard pre-filter — saves CPU
 
-// Spectral centroid range for automotive engine sounds (Hz, normalized to [0,1] vs Nyquist)
-const ENGINE_CENTROID_MAX = 0.40; // If centroid > 0.40 of Nyquist, likely speech/music → reject
+// ── Runtime state ─────────────────────────────────────────────────────────────
+let scoreHistory     = [];
+let consecutiveHits  = 0;
+let consecutiveLabel = null;
 
-const SMOOTHING_WINDOW      = 6;  // ~1.5s of 250ms chunks
-const STABILITY_DURATION_MS = 4000;
-const THRESHOLD_FRAMES      = 3;  // Need 3 consecutive qualifying frames
-
-const FAST_REJECT_COSINE = 0.30; // Pre-filter: skip refs with cosine < this
-
-/**
- * Called by settingsStore when sensitivity changes.
- * Takes effect immediately on the next matchBuffer() call.
- */
-export function applyThresholdOverride({ anomalyThreshold, probableThreshold, rmsGate }) {
-  ANOMALY_THRESHOLD  = anomalyThreshold;
-  PROBABLE_THRESHOLD = probableThreshold;
-  MIN_LIVE_RMS       = rmsGate;
-  console.log(`[Vroomie Engine] Thresholds updated: anomaly=${anomalyThreshold} probable=${probableThreshold} rmsGate=${rmsGate}`);
+// ── Public: called by settingsStore sensitivity change ────────────────────────
+export function applyThresholdOverride({ anomalyThreshold, rmsGate }) {
+  ANOMALY_THRESHOLD = Math.max(anomalyThreshold, 0.75); // Never below 0.75
+  MIN_LIVE_RMS      = rmsGate;
+  console.log(`[Vroomie Engine] Thresholds: anomaly=${ANOMALY_THRESHOLD} rmsGate=${MIN_LIVE_RMS}`);
 }
 
-// ═══════════════════════════════════════════════
-// STATE
-// ═══════════════════════════════════════════════
-let scoreHistory       = [];
-let consecutiveHits    = 0;
-let consecutiveLabel   = null;
-let activeAnomaly      = null;
-let activeAnomalyTime  = 0;
+// ── Public: reset between sessions ────────────────────────────────────────────
+export function resetMatchState() {
+  scoreHistory     = [];
+  consecutiveHits  = 0;
+  consecutiveLabel = null;
+  Logger.info('[Match] State reset.');
+}
 
-// ═══════════════════════════════════════════════
-// MATH
-// ═══════════════════════════════════════════════
-
-function cosineSimilarity(a, b) {
+// ── Cosine similarity ─────────────────────────────────────────────────────────
+function cosine(a, b) {
   let dot = 0, nA = 0, nB = 0;
   const len = Math.min(a.length, b.length);
   for (let i = 0; i < len; i++) {
@@ -69,139 +54,103 @@ function cosineSimilarity(a, b) {
   return dot / (Math.sqrt(nA) * Math.sqrt(nB));
 }
 
-// ═══════════════════════════════════════════════
-// RESET
-// ═══════════════════════════════════════════════
+// ── Match live vector against all references ──────────────────────────────────
+function findBestMatch(liveVec) {
+  if (!referenceIndex || referenceIndex.length === 0) return { score: 0, label: null };
 
-export function resetMatchState() {
-  scoreHistory       = [];
-  consecutiveHits    = 0;
-  consecutiveLabel   = null;
-  activeAnomaly      = null;
-  activeAnomalyTime  = 0;
-  Logger.info('[Match] State reset.');
-}
-
-// ═══════════════════════════════════════════════
-// INTERNAL: Find best match from referenceIndex
-// ═══════════════════════════════════════════════
-
-function computeSignalMatch(liveVec) {
-  if (!referenceIndex || referenceIndex.length === 0) {
-    return { label: null, score: 0, category: null };
-  }
-
-  // L2-normalize live vector
   const norm = Math.sqrt(liveVec.reduce((s, v) => s + v * v, 0)) || 1;
   const live = liveVec.map(v => v / norm);
 
-  let bestScore = 0;
-  let bestRef   = null;
+  let bestScore = 0, bestRef = null;
 
   for (const ref of referenceIndex) {
     const refVec = ref.embedding_vector;
-    if (!refVec || !Array.isArray(refVec) || refVec.length === 0) continue;
-
-    // Skip if marked as YAMNet vectors and live vector is MFCC — dimension mismatch would give garbage
+    if (!Array.isArray(refVec) || refVec.length === 0) continue;
     if (ref.isYAMNet && live.length < 100) continue;
 
-    const cos = cosineSimilarity(live, refVec);
-
-    // Fast reject — saves CPU
-    if (cos < FAST_REJECT_COSINE) continue;
-
-    // Structured per-comparison log (throttled — only when cos passes fast reject)
-    Logger.debug(`[MATCH] ${(ref.label || '').padEnd(40)} cos=${cos.toFixed(4)}`);
-
-    if (cos > bestScore) {
-      bestScore = cos;
-      bestRef   = ref;
-    }
+    const c = cosine(live, refVec);
+    if (c < FAST_REJECT_COSINE) continue;
+    if (c > bestScore) { bestScore = c; bestRef = ref; }
   }
 
   return {
-    label:    bestRef ? bestRef.label    : null,
-    category: bestRef ? bestRef.category : null,
-    severity: bestRef ? (bestRef.severity || 'medium') : 'low',
     score:    bestScore,
+    label:    bestRef?.label    ?? null,
+    category: bestRef?.category ?? null,
+    severity: bestRef?.severity ?? 'medium',
   };
 }
 
-// ═══════════════════════════════════════════════
-// MAIN ENTRY: matchBuffer
-// Called every ~250ms with Meyda feature object
-// ═══════════════════════════════════════════════
+// ── Clean human-readable label from raw storage label ────────────────────────
+export function buildReadableLabel(rawLabel) {
+  if (!rawLabel) return 'Unknown';
 
+  // Raw format: <category>_<descriptive_words>_<severity>
+  // e.g. "bearing_fault_alternator_bearing_fault_critical"
+  //   or "piston_knock_piston_high"
+  //   or "anomaly_motorstarter"
+  const KNOWN_SEVERITIES = new Set(['critical', 'high', 'medium', 'low']);
+  const KNOWN_CATEGORIES = new Set([
+    'bearing_fault', 'engine_knocking', 'exhaust_leak', 'misfire',
+    'belt_squeal', 'valve_issue', 'starter_issue', 'anomaly',
+    'piston_knock', 'water_pump', 'steering_pump',
+  ]);
+
+  const parts = rawLabel.split('_');
+  // Remove trailing severity word
+  if (parts.length > 1 && KNOWN_SEVERITIES.has(parts[parts.length - 1])) {
+    parts.pop();
+  }
+
+  // Deduplicate consecutive identical words (e.g. "piston piston" → "piston")
+  const deduped = parts.filter((word, i) => i === 0 || word !== parts[i - 1]);
+
+  // Title-case and join
+  return deduped.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
+// ── Main entry: called every ~250ms ──────────────────────────────────────────
 export function matchBuffer(features) {
   const rms = features.rms || 0;
 
-  // ── Gate 1: Silence / noise rejection ────────────────────────────────────
+  // Gate 1: Silence
   if (rms < MIN_LIVE_RMS) {
-    console.debug(`[Vroomie Detection] Gate(silence): RMS=${rms.toFixed(5)} < ${MIN_LIVE_RMS}`);
-    // Still drain the score history toward silent baseline
     scoreHistory.push(0);
     if (scoreHistory.length > SMOOTHING_WINDOW) scoreHistory.shift();
     consecutiveHits = 0;
     return _noAnomaly(rms, 'silence_gate');
   }
 
-  // ── Gate 2: Non-engine spectral centroid (speech/music rejection) ─────────
-  // features.spectralCentroid from Meyda is in Hz
-  const centroid = features.spectralCentroid || 0;
-  const centroidNorm = centroid / (features.sampleRate || 16000) * 2; // normalize to [0,1] vs Nyquist
+  // Gate 2: Speech / music centroid rejection
+  const centroid     = features.spectralCentroid || 0;
+  const centroidNorm = centroid / ((features.sampleRate || 16000) * 0.5);
   if (centroid > 0 && centroidNorm > ENGINE_CENTROID_MAX) {
-    console.debug(`[Vroomie Detection] Gate(centroid): centroid=${centroid.toFixed(0)}Hz (norm=${centroidNorm.toFixed(3)}) — likely speech/music, skipping`);
     scoreHistory.push(0);
     if (scoreHistory.length > SMOOTHING_WINDOW) scoreHistory.shift();
     consecutiveHits = 0;
     return _noAnomaly(rms, 'centroid_gate');
   }
 
-  // ── Build live feature vector (42-dim: MFCC-40 + RMS + centroidNorm) ─────
-  // This matches exactly what computeExtendedFeatures() produces for references
-  let liveVec = null;
-
-  if (features.mfcc && features.mfcc.length >= 13) {
-    // Meyda returns 13-dim MFCC by default; extend with zeros to 40 dims
-    const mfccs = Array.from(features.mfcc);
-    while (mfccs.length < 40) mfccs.push(0);
-    // Append RMS + centroidNorm as dims 41-42
-    mfccs.push(rms);
-    mfccs.push(centroidNorm);
-    liveVec = mfccs;
-  }
-
-  if (!liveVec) {
-    console.debug('[Vroomie Detection] No MFCC features available, skipping cycle');
+  // Build 42-dim live vector: MFCC(40) + RMS + centroid_norm
+  if (!features.mfcc || features.mfcc.length < 13) {
     return _noAnomaly(rms, 'no_features');
   }
+  const mfccs = Array.from(features.mfcc);
+  while (mfccs.length < 40) mfccs.push(0);
+  mfccs.push(rms, centroidNorm);
 
-  // ── Run matching ──────────────────────────────────────────────────────────
-  const match = computeSignalMatch(liveVec);
+  const match = findBestMatch(mfccs);
 
-  // ── Smooth score over window ──────────────────────────────────────────────
+  // Smooth score
   scoreHistory.push(match.score);
   if (scoreHistory.length > SMOOTHING_WINDOW) scoreHistory.shift();
   const smoothed = scoreHistory.reduce((a, b) => a + b, 0) / scoreHistory.length;
 
-  // ── Structured diagnostic log ─────────────────────────────────────────────
-  if (match.score > 0.1 || smoothed > 0.1) {
-    console.log(JSON.stringify({
-      input_detected: true,
-      best_match: match.label || 'none',
-      confidence: parseFloat(smoothed.toFixed(4)),
-      raw_score: parseFloat(match.score.toFixed(4)),
-      rms: parseFloat(rms.toFixed(5)),
-      centroid_hz: parseFloat(centroid.toFixed(1)),
-      decision: smoothed >= ANOMALY_THRESHOLD ? 'ANOMALY' : smoothed >= PROBABLE_THRESHOLD ? 'PROBABLE' : 'NORMAL',
-    }));
-  }
+  // Diagnostic log
+  console.debug(`[VM] score=${match.score.toFixed(3)} smoothed=${smoothed.toFixed(3)} rms=${rms.toFixed(4)} label=${match.label}`);
 
-  // ── Decision logic ────────────────────────────────────────────────────────
-  const now = Date.now();
-
+  // STRICT threshold — nothing below 0.75 becomes an anomaly
   if (smoothed >= ANOMALY_THRESHOLD) {
-    // Check label stability (same label for consecutive frames)
     if (consecutiveLabel === match.label) {
       consecutiveHits++;
     } else {
@@ -210,59 +159,32 @@ export function matchBuffer(features) {
     }
 
     if (consecutiveHits >= THRESHOLD_FRAMES) {
-      const anomalyResult = _buildAnomaly(match, smoothed, rms, 'anomaly');
-      activeAnomaly     = anomalyResult;
-      activeAnomalyTime = now;
-      Logger.info(`❗ CONFIRMED ANOMALY: ${match.label} (smoothed=${smoothed.toFixed(3)})`);
-      return anomalyResult;
+      Logger.info(`❗ CONFIRMED: ${match.label} (smoothed=${smoothed.toFixed(3)})`);
+      return _anomaly(match, smoothed, rms);
     }
-
-  } else if (smoothed >= PROBABLE_THRESHOLD) {
-    consecutiveHits = Math.max(0, consecutiveHits - 1); // Don't fully reset on probable hits
-    const result = _buildAnomaly(match, smoothed, rms, 'potential_anomaly');
-    return result;
-
   } else {
-    // Below both thresholds — reset streak
+    // Reset streak — below threshold = no anomaly
     consecutiveHits  = 0;
     consecutiveLabel = null;
-  }
-
-  // ── Hysteresis: sustain confirmed anomaly through brief dropouts ──────────
-  if (activeAnomaly && (now - activeAnomalyTime) < STABILITY_DURATION_MS) {
-    if (smoothed < PROBABLE_THRESHOLD) {
-      // Gradually release
-    } else {
-      activeAnomalyTime = now; // renew
-    }
-    return { ...activeAnomaly, signalSimilarity: smoothed, isPersistentState: true };
-  } else if (activeAnomaly) {
-    Logger.info(`✅ Anomaly cleared: ${activeAnomaly.anomaly}`);
-    activeAnomaly = null;
   }
 
   return _noAnomaly(rms, 'below_threshold');
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function _buildAnomaly(match, smoothed, rms, status) {
-  const severity = match.label?.includes('critical') ? 'critical'
-                 : match.label?.includes('high')     ? 'high'
-                 : match.label?.includes('medium')   ? 'medium' : 'low';
-
+// ── Result builders ───────────────────────────────────────────────────────────
+function _anomaly(match, smoothed, rms) {
   return {
-    anomaly:          match.label || 'unknown_anomaly',
-    status,
+    anomaly:          match.label,
+    status:           'anomaly',
     confidence:       smoothed,
     signalSimilarity: smoothed,
     mlConfidence:     0,
-    finalDecision:    status === 'anomaly' ? 'ANOMALY DETECTED' : 'PROBABLE ANOMALY — FURTHER ANALYSIS RECOMMENDED',
+    finalDecision:    'ANOMALY DETECTED',
     mode:             'mfcc_cosine',
     detectedClass:    match.label,
-    classifierSource: 'mfcc_cosine_extended',
+    classifierSource: 'mfcc_cosine_v4',
     source:           match.label,
-    severity,
+    severity:         match.severity || 'medium',
     rms,
   };
 }

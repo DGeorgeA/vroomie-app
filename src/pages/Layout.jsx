@@ -57,8 +57,8 @@ export default function Layout({ children, currentPageName }) {
         className="transition-all duration-300 min-h-screen flex flex-col w-full"
       >
         <header
-          className={`sticky top-0 z-40 transition-all duration-300 ${
-            scrolled ? "backdrop-blur-xl bg-black/80 border-b border-white/5 shadow-2xl" : "bg-transparent"
+          className={`sticky top-0 z-50 transition-all duration-300 ${
+            scrolled ? "backdrop-blur-xl bg-black/80 border-b border-white/5 shadow-2xl" : "bg-black/30 backdrop-blur-sm"
           }`}
         >
           <div className="flex justify-between items-center h-16 px-6 lg:px-10">
