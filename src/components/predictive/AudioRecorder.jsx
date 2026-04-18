@@ -1,15 +1,14 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Mic, Square, Upload, Loader2, Clock, Bug, Cpu, AudioWaveform as WaveformIcon, Lock, Sparkles } from "lucide-react";
+import { Mic, Square, Bug, Lock, Sparkles } from "lucide-react";
 import GlassButton from "../ui/GlassButton";
 import { toast } from "sonner";
 import { startExtraction, stopExtraction, getActiveMediaStream, getActiveAudioContext } from "@/lib/audioFeatureExtractor";
-import { matchBuffer, resetMatchState, buildReadableLabel } from "@/lib/audioMatchingEngine";
+import { buildReadableLabel, resetMatchState } from "@/lib/audioMatchingEngine";
 import { clearContinuousAlert, speakText } from "@/lib/voiceFeedback";
 import { Logger } from "@/lib/logger";
 import { getDetectionMode, setDetectionMode } from "@/lib/detectionMode";
 import { useAuth } from "@/contexts/AuthContext";
-import { canAccess } from "@/lib/featureGate";
 import UpgradeModal from "./UpgradeModal";
 import { motion } from "framer-motion";
 import { supabase } from "@/lib/supabase";
@@ -59,6 +58,9 @@ export default function AudioRecorder({
   const IS_DEBUG = import.meta.env.DEV;
   const { isPro } = useAuth();
   const navigate = useNavigate();
+  // Debounce ref for debug stats — prevents re-render on every audio callback
+  const debugDebounceRef = useRef(null);
+  const pendingDebugRef  = useRef(null);
 
   // ─── Desktop Keyboard Shortcuts ─────────────────────────
   useEffect(() => {
@@ -112,52 +114,61 @@ export default function AudioRecorder({
       const activeMode = getDetectionMode();
       
       await startExtraction((features) => {
-        const result = matchBuffer(features);
-        
-        if (result.confidence > 0) {
-          sessionConfidenceRef.current.push(result.confidence);
+        // The worker result is in features._workerResult (new architecture)
+        // features may also contain compositeEmbedding for legacy matchBuffer compat
+        const workerResult = features._workerResult || {};
+        const status     = workerResult.status     || 'normal';
+        const confidence = workerResult.confidence  || 0;
+        const anomaly    = workerResult.anomaly     || null;
+        const severity   = workerResult.severity    || 'medium';
+        const rms        = workerResult.rms         || features.rms || 0;
+
+        if (confidence > 0) {
+          sessionConfidenceRef.current.push(confidence);
         }
         
+        // Debounced debug stats update — max 4x per second, not per audio frame
         if (IS_DEBUG) {
-          setDebugStats({
-            rms: features.rms?.toFixed(4) ?? '0.0000',
-            centroid: features.spectralCentroid?.toFixed(1) ?? '0.0',
-            conf: result.confidence.toFixed(3),
-            status: result.status?.toUpperCase() || 'NORMAL',
-            cnnClass: result.detectedClass || 'N/A',
-            cnnConf: result.cnnConfidence ? (result.cnnConfidence * 100).toFixed(1) + '%' : 'N/A',
-            source: result.classifierSource || 'temporal_embed',
-            mode: result.mode || activeMode
-          });
+          pendingDebugRef.current = {
+            rms:      rms.toFixed(4),
+            centroid: '0.0',
+            conf:     confidence.toFixed(3),
+            status:   status.toUpperCase(),
+            cnnClass: 'N/A',
+            cnnConf:  'N/A',
+            source:   'off_thread_worker',
+            mode:     activeMode
+          };
+          if (!debugDebounceRef.current) {
+            debugDebounceRef.current = setTimeout(() => {
+              if (pendingDebugRef.current) setDebugStats(pendingDebugRef.current);
+              debugDebounceRef.current = null;
+            }, 250);
+          }
         }
         
         // ── ONLY accumulate CONFIRMED anomalies (status === 'anomaly') ──────
-        // potential_anomaly and normal are completely silent during recording.
-        if (result.status === 'anomaly') {
-          // Build a clean, deduplicated readable label
-          const cleanLabel = buildReadableLabel(result.anomaly);
+        if (status === 'anomaly' && anomaly) {
+          const cleanLabel = buildReadableLabel(anomaly);
           const anomalyData = {
             type:             cleanLabel,
-            rawLabel:         result.anomaly,
-            severity:         result.severity || 'medium',
+            rawLabel:         anomaly,
+            severity:         severity,
             timestamp:        recordingTime,
             status:           'anomaly',
-            signalSimilarity: result.signalSimilarity || 0,
+            signalSimilarity: confidence,
             finalDecision:    'ANOMALY DETECTED',
           };
 
-          // Deduplicate by raw label — only store first occurrence
-          if (!sessionAnomaliesRef.current.some(a => a.rawLabel === result.anomaly)) {
+          if (!sessionAnomaliesRef.current.some(a => a.rawLabel === anomaly)) {
             sessionAnomaliesRef.current.push(anomalyData);
             Logger.info(`Session anomaly added: ${cleanLabel}`);
           }
-          // NO toast, NO TTS during recording — all output is post-stop.
         }
       });
       
-      // CRITICAL FIX: Do NOT call getUserMedia twice.
-      // startExtraction already got the mic. Reuse that stream.
-      const stream = getActiveMediaStream();
+      // Reuse the stream and context from the extractor (already initialised above)
+      const stream   = getActiveMediaStream();
       const audioCtx = getActiveAudioContext();
       
       if (!stream) {
@@ -166,16 +177,17 @@ export default function AudioRecorder({
 
       streamRef.current = stream;
 
-      const analyserNode = audioCtx.createAnalyser();
-      analyserNode.fftSize = 2048;
-
-      const source = audioCtx.createMediaStreamSource(stream);
-      source.connect(analyserNode);
+      // Lightweight analyser for waveform UI only (read-only, 1024 vs old 2048)
+      const waveformAnalyser = audioCtx.createAnalyser();
+      waveformAnalyser.fftSize = 1024;
+      const waveformSource = audioCtx.createMediaStreamSource(stream);
+      waveformSource.connect(waveformAnalyser);
 
       setAudioContext(audioCtx);
-      setAnalyser(analyserNode);
+      setAnalyser(waveformAnalyser);
 
       const mediaRecorder = new MediaRecorder(stream);
+
       mediaRecorderRef.current = mediaRecorder;
       chunksRef.current = [];
 
@@ -250,14 +262,20 @@ export default function AudioRecorder({
     }
   };
 
-  const stopRecording = () => {
+  const stopRecording = useCallback(() => {
     try {
+      // Clear any pending debug debounce
+      if (debugDebounceRef.current) {
+        clearTimeout(debugDebounceRef.current);
+        debugDebounceRef.current = null;
+      }
+
       if (mediaRecorderRef.current && isRecording) {
         if (mediaRecorderRef.current.state === "recording") {
           mediaRecorderRef.current.stop();
         }
         setIsRecording(false);
-        stopExtraction(); // This handles closing stream and audioContext
+        stopExtraction(); // releases AudioWorklet + Worker + stream
 
         if (timerRef.current) {
           clearInterval(timerRef.current);
@@ -272,7 +290,7 @@ export default function AudioRecorder({
       setIsRecording(false);
       stopExtraction();
     }
-  };
+  }, [isRecording]);
 
   const handleAudioUpload = async (blob) => {
     try {

@@ -125,7 +125,10 @@ export function matchBuffer(features) {
   // Execute Temporal 80-dim Match
   const match = findBestMatch(features.compositeEmbedding);
   
-  console.debug(`[VM] Temporal Match: raw=${match.score.toFixed(3)} label=${match.label ?? 'none'}`);
+  // Only log in dev — console.debug is expensive in hot paths (DevTools serialisation)
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    Logger.debug(`[VM] Temporal Match: raw=${match.score.toFixed(3)} label=${match.label ?? 'none'}`);
+  }
 
   // STRICT RULE: If < 0.80, ALWAYS return No anomalies found
   if (match.score >= ANOMALY_THRESHOLD && match.label) {

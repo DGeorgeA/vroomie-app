@@ -1,214 +1,266 @@
-// import Meyda from 'meyda';
+/**
+ * audioFeatureExtractor.js — Vroomie Audio Pipeline Orchestrator (v8 — Off-Thread)
+ *
+ * Architecture:
+ *   [Mic] → [AudioWorklet: vroomie-processor] → postMessage PCM (every 500ms, zero-copy)
+ *         → [Main Thread relay] → [featureWorker Web Worker: preprocess + FFT + embed + match]
+ *         → postMessage result → [callback on Main Thread]
+ *
+ * Main thread only manages lifecycle. All audio math is off-thread.
+ */
+
 import { getDetectionMode } from './detectionMode';
 import { Logger } from './logger';
-import { preprocessSignal, mixToMonoFromRaw, logSignalStats } from './audioPreprocessor';
-import { generateMelSpectrogram } from './spectrogramGenerator';
-import { predictCNN, isCNNReady } from './cnnClassifier';
+import { referenceIndex, initializeAudioDataset, computeCompositeEmbedding } from '../services/audioDatasetService';
 import { initializeEmbeddingEngine, getAudioEmbedding, isEngineReady } from './mlEmbeddingEngine';
-import { initializeAudioDataset, computeCompositeEmbedding } from '../services/audioDatasetService';
 
-let isExtracting = false;
-let audioContext = null;
+// ─── Module-level state ───────────────────────────────────
+let isExtracting        = false;
+let audioContext        = null;
+let workletNode         = null;
+let mediaStreamSource   = null;
+let mediaStream         = null;
+let featureWorker       = null;
+let onFeaturesCallback  = null;
+let datasetInitialized  = false;
+
+// For waveform rendering (analyser stays on main thread — lightweight)
+let analyserNode = null;
+
+// Fallback ScriptProcessor for browsers without AudioWorklet support
 let scriptProcessor = null;
-let mediaStreamSource = null;
-let mediaStream = null;
-let onFeaturesExtractedCallback = null;
-
-// Rolling 2-second PCM buffer for spectrogram generation
-let rollingPCMBuffer = [];
-let lastLogTime = 0;
-let lastCNNTime = 0;
-let lastCNNResult = { class: 'normal', confidence: 0 };
-let lastEmbeddingTime = 0;
-let latestEmbedding = null;
-
-const FEATURE_SET = ['mfcc', 'rms', 'spectralCentroid', 'zcr', 'spectralFlatness', 'spectralRolloff'];
-let datasetInitialized = false;
-
-// CRITICAL: Must be power-of-2 for createScriptProcessor
 const SCRIPT_BUFFER_SIZE = 4096;
 
-export function registerCNNClassifier(classifier) {
-  // CNN is imported directly
-}
+// ─── Public API ───────────────────────────────────────────
 
-export function getActiveMediaStream() {
-  return mediaStream;
-}
+export function getActiveMediaStream()   { return mediaStream; }
+export function getActiveAudioContext()  { return audioContext; }
+export function registerCNNClassifier()  { /* CNN handled in worker */ }
 
-export function getActiveAudioContext() {
-  return audioContext;
-}
+// ─── Dataset initialisation (called once by App.jsx startup) ─────────────────
 
 export async function startExtraction(callback) {
   if (isExtracting) {
     Logger.warn('Extraction already running.');
     return;
   }
-  
-  isExtracting = true;
-  onFeaturesExtractedCallback = callback;
-  rollingPCMBuffer = [];
-  latestEmbedding = null;
 
-  // Initialize reference dataset (first time only, cached in IDB after)
+  isExtracting       = true;
+  onFeaturesCallback = callback;
+
+  // Kick off dataset + YAMNet loading in background (if not done)
   if (!datasetInitialized) {
     datasetInitialized = true;
     initializeAudioDataset().catch(err => Logger.error('Dataset init failed', err));
   }
+  initializeEmbeddingEngine().catch(err => Logger.error('YAMNet init failed', err));
 
-  // Async background initialization of YAMNet
-  initializeEmbeddingEngine().catch(err => Logger.error("Failed to load ML Embedding Engine", err));
-  
-  console.log('🎤 [START] Requesting microphone permission...');
-  
+  Logger.info('🎤 [START] Requesting microphone...');
+
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false,
-      }
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
     });
-    
-    console.log('✅ [MIC] Permission granted, stream active:', mediaStream.active);
-    
-    // Use browser's native sample rate — do NOT force 16kHz (most browsers reject it)
-    audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    
-    const actualSR = audioContext.sampleRate;
-    console.log(`✅ [AUDIO] AudioContext created, sampleRate=${actualSR}`);
-    
-    mediaStreamSource = audioContext.createMediaStreamSource(mediaStream);
-    
-    // CRITICAL: buffer size MUST be power of 2 (256, 512, 1024, 2048, 4096, 8192, 16384)
-    scriptProcessor = audioContext.createScriptProcessor(SCRIPT_BUFFER_SIZE, 1, 1);
-    
-    // window.Meyda = undefined; // No longer used
-    
-    // Compute window size in samples at the actual sample rate (~2 seconds)
-    const windowSamples = actualSR * 2;
-    
-    let frameTick = 0;
-    
-    console.log('✅ [PIPELINE] ScriptProcessor connected, processing started');
-    
-    scriptProcessor.onaudioprocess = (e) => {
-      if (!isExtracting) return;
-      
-      const rawInput = mixToMonoFromRaw(e.inputBuffer);
-      
-      // Apply domain-robust preprocessing
-      const processed = preprocessSignal(rawInput, actualSR);
-      
-      // Throttled signal stats
-      const now = Date.now();
-      if (now - lastLogTime > 5000) {
-        logSignalStats(processed, 'LIVE POST-PREPROCESS');
-        lastLogTime = now;
-      }
-      
-      // Accumulate rolling 2-second PCM buffer
-      for (let i = 0; i < processed.length; i++) {
-        rollingPCMBuffer.push(processed[i]);
-      }
-      if (rollingPCMBuffer.length > windowSamples) {
-        rollingPCMBuffer.splice(0, rollingPCMBuffer.length - windowSamples);
-      }
-      
-      // Removed single-frame Meyda extraction
-      frameTick++;
-      
-      // Generate live spectrogram from rolling 2s buffer (every ~1s = 4 frames)
-      let liveSpectrogram = null;
-      if (rollingPCMBuffer.length >= windowSamples && frameTick % 4 === 0) {
-        const pcm32 = new Float32Array(rollingPCMBuffer);
-        liveSpectrogram = generateMelSpectrogram(pcm32, actualSR);
-      }
-      
-      // Run CNN inference periodically
-      let cnnResult = lastCNNResult;
-      if (isCNNReady() && liveSpectrogram && now - lastCNNTime > 2000) {
-        try {
-          const pred = predictCNN(liveSpectrogram);
-          if (pred) {
-            lastCNNResult = pred;
-            cnnResult = pred;
-            Logger.debug(`CNN: ${pred.class} (${(pred.confidence * 100).toFixed(1)}%)`);
-          }
-        } catch (err) {
-          Logger.error('CNN inference error', err);
-        }
-        lastCNNTime = now;
-      }
-      
-      // RUN COMPOSITE EMBEDDING EVERY 500ms
-      let compositeEmbedding = null;
-      if (rollingPCMBuffer.length >= windowSamples && now - lastEmbeddingTime > 500) {
-        const pcmToEmbed = new Float32Array(rollingPCMBuffer);
-        
-        // 1. Generate local 80-dim embedding for Vroomie Engine
-        compositeEmbedding = computeCompositeEmbedding(pcmToEmbed, actualSR);
 
-        // 2. Run YAMNet asynchronously (live mode)
-        if (isEngineReady()) {
-          getAudioEmbedding(pcmToEmbed).then(emb => {
-            if (emb) latestEmbedding = emb;
-          });
-        }
-        
-        lastEmbeddingTime = now;
-      }
-      
-      if (onFeaturesExtractedCallback) {
-        onFeaturesExtractedCallback({
-          compositeEmbedding, // 80-dim sequence feature array (can be null if < 500ms or buffering)
-          rawSignalFrame: processed,
-          liveSpectrogram,
-          liveEmbedding: latestEmbedding,
-          cnnResult: getDetectionMode() === 'ml' ? cnnResult : null,
-          sampleRate: actualSR,
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const sr = audioContext.sampleRate;
+    Logger.info(`✅ AudioContext sampleRate=${sr}`);
+
+    mediaStreamSource = audioContext.createMediaStreamSource(mediaStream);
+
+    // Lightweight analyser for waveform UI only — does NOT block
+    analyserNode = audioContext.createAnalyser();
+    analyserNode.fftSize = 1024; // smaller than before (was 2048)
+    mediaStreamSource.connect(analyserNode);
+
+    // Spawn the Web Worker (module worker for ESM support)
+    featureWorker = new Worker(
+      new URL('../workers/featureWorker.js', import.meta.url),
+      { type: 'module' }
+    );
+
+    // Set thresholds in worker
+    featureWorker.postMessage({ type: 'setThresholds', payload: { anomalyThreshold: 0.80, rmsGate: 0.005 } });
+
+    // Pass reference index to worker immediately if already loaded
+    if (referenceIndex && referenceIndex.length > 0) {
+      featureWorker.postMessage({ type: 'setReferenceIndex', payload: referenceIndex });
+    }
+
+    // Handle results coming BACK from worker (tiny objects, fast)
+    featureWorker.onmessage = (ev) => {
+      const { type, payload } = ev.data;
+      if (type === 'result' && onFeaturesCallback) {
+        // Translate worker result to the format AudioRecorder.jsx expects
+        onFeaturesCallback({
+          compositeEmbedding: payload.compositeEmbedding || null,
+          rawSignalFrame:     null, // not needed on main thread
+          liveSpectrogram:    null,
+          liveEmbedding:      null,
+          cnnResult:          null,
+          sampleRate:         sr,
+          // Pass through matching result fields directly
+          _workerResult:      payload,
+          rms:                payload.rms || 0,
+          spectralCentroid:   0,
         });
+      } else if (type === 'error') {
+        Logger.error('Worker error:', payload);
       }
     };
-    
-    mediaStreamSource.connect(scriptProcessor);
-    scriptProcessor.connect(audioContext.destination);
-    
-    console.log('🟢 [RECORDING] Live extraction started successfully');
-    Logger.info(`Live Extraction Started (SR=${actualSR}, buffer=${SCRIPT_BUFFER_SIZE})`);
+
+    featureWorker.onerror = (err) => {
+      Logger.error('Feature worker crashed:', err.message);
+    };
+
+    // Try AudioWorklet first, fall back to ScriptProcessor
+    const useWorklet = !!audioContext.audioWorklet;
+
+    if (useWorklet) {
+      try {
+        await audioContext.audioWorklet.addModule('/audio-processor.worklet.js');
+
+        workletNode = new AudioWorkletNode(audioContext, 'vroomie-processor', {
+          processorOptions: { sampleRate: sr },
+          numberOfInputs:  1,
+          numberOfOutputs: 0, // no audio output needed
+        });
+
+        // Relay PCM from AudioWorklet thread → Web Worker (zero-copy)
+        workletNode.port.onmessage = (ev) => {
+          if (!isExtracting || !featureWorker) return;
+          const { buffer, sampleRate } = ev.data;
+          // Pass reference index on every batch in case it loaded after start
+          if (referenceIndex && referenceIndex.length > 0) {
+            featureWorker.postMessage({ type: 'setReferenceIndex', payload: referenceIndex });
+          }
+          // Transfer buffer ownership to worker — zero allocation
+          featureWorker.postMessage(
+            { type: 'process', payload: { buffer, sampleRate } },
+            [buffer.buffer]
+          );
+        };
+
+        mediaStreamSource.connect(workletNode);
+        Logger.info('🟢 AudioWorklet pipeline active');
+      } catch (workletErr) {
+        Logger.warn('AudioWorklet failed, falling back to ScriptProcessor:', workletErr.message);
+        useScriptProcessorFallback(sr);
+      }
+    } else {
+      Logger.warn('AudioWorklet not supported, using ScriptProcessor fallback');
+      useScriptProcessorFallback(sr);
+    }
+
+    Logger.info(`🎙️ Recording started (SR=${sr})`);
   } catch (error) {
-    console.error('❌ [RECORDING] Failed to start:', error);
-    Logger.error('Failed to start extraction', error);
+    Logger.error('Failed to start extraction:', error);
     isExtracting = false;
     throw error;
   }
 }
 
+// ─── ScriptProcessor fallback (for Safari < 14.1) ────────
+// Still does processing in worker, just the PCM capture is on main thread
+function useScriptProcessorFallback(sr) {
+  const windowSamples  = sr * 2; // 2-second window
+  const dispatchEvery  = Math.ceil(sr * 0.5); // every 500ms
+  
+  // Use a typed circular ring buffer (avoids push/splice GC)
+  const ring       = new Float32Array(windowSamples);
+  let writeHead    = 0;
+  let sinceDispatch = 0;
+  let totalSamples = 0;
+
+  scriptProcessor = audioContext.createScriptProcessor(SCRIPT_BUFFER_SIZE, 1, 1);
+  scriptProcessor.onaudioprocess = (e) => {
+    if (!isExtracting) return;
+
+    const input = e.inputBuffer;
+    const numCh = input.numberOfChannels;
+    const ch0   = input.getChannelData(0);
+    const blockSize = ch0.length;
+
+    // Mix mono into ring buffer — O(blockSize) only, no allocation
+    for (let i = 0; i < blockSize; i++) {
+      let sample = ch0[i];
+      if (numCh > 1) sample = (sample + input.getChannelData(1)[i]) / 2;
+      ring[writeHead % windowSamples] = sample;
+      writeHead++;
+    }
+
+    totalSamples  += blockSize;
+    sinceDispatch += blockSize;
+
+    if (sinceDispatch >= dispatchEvery && totalSamples >= windowSamples) {
+      sinceDispatch = 0;
+
+      // Snapshot 2s window in order from ring buffer
+      const snapshot = new Float32Array(windowSamples);
+      const start = writeHead; // oldest sample
+      for (let i = 0; i < windowSamples; i++) {
+        snapshot[i] = ring[(start + i) % windowSamples];
+      }
+
+      if (referenceIndex && referenceIndex.length > 0) {
+        featureWorker.postMessage({ type: 'setReferenceIndex', payload: referenceIndex });
+      }
+      featureWorker.postMessage(
+        { type: 'process', payload: { buffer: snapshot, sampleRate: sr } },
+        [snapshot.buffer]
+      );
+    }
+  };
+
+  // ScriptProcessor must connect to destination to fire (silent output)
+  mediaStreamSource.connect(scriptProcessor);
+  scriptProcessor.connect(audioContext.destination);
+  Logger.info('ScriptProcessor fallback active');
+}
+
+// ─── Stop Extraction ───────────────────────────────────────
 export function stopExtraction() {
   isExtracting = false;
-  
+
+  // Signal worklet to stop
+  if (workletNode) {
+    workletNode.port.postMessage('stop');
+    workletNode.disconnect();
+    workletNode = null;
+  }
+
   if (scriptProcessor) {
     scriptProcessor.disconnect();
     scriptProcessor.onaudioprocess = null;
     scriptProcessor = null;
   }
+
+  // Terminate worker
+  if (featureWorker) {
+    featureWorker.terminate();
+    featureWorker = null;
+  }
+
+  if (analyserNode) {
+    analyserNode.disconnect();
+    analyserNode = null;
+  }
+
   if (mediaStreamSource) {
     mediaStreamSource.disconnect();
     mediaStreamSource = null;
   }
+
   if (audioContext && audioContext.state !== 'closed') {
     audioContext.close();
     audioContext = null;
   }
+
   if (mediaStream) {
     mediaStream.getTracks().forEach(t => t.stop());
     mediaStream = null;
   }
-  
-  onFeaturesExtractedCallback = null;
-  rollingPCMBuffer = [];
-  lastCNNResult = { class: 'normal', confidence: 0 };
-  console.log('🔴 [RECORDING] Extraction stopped');
-  Logger.info('Feature Extraction Stopped');
+
+  onFeaturesCallback = null;
+  Logger.info('🔴 Extraction stopped — all resources released');
 }

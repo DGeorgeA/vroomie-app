@@ -12,8 +12,20 @@ export default function AudioWaveform({
 }) {
   const canvasRef = useRef(null);
   const animationRef = useRef(null);
+  const throttleRef  = useRef(null);
+  const mountedRef   = useRef(true);
   const [waveformData, setWaveformData] = useState([]);
   const [isListening, setIsListening] = useState(false);
+
+  // Clean up on unmount
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (animationRef.current) cancelAnimationFrame(animationRef.current);
+      if (throttleRef.current)  clearTimeout(throttleRef.current);
+    };
+  }, []);
 
   // Play alert tone when anomaly is detected
   const playAlertTone = (severity) => {
@@ -150,66 +162,54 @@ export default function AudioWaveform({
 
         animationRef.current = requestAnimationFrame(drawWaveform);
       } else if (isListening) {
-        // Dynamic ECG animation when idle/listening
+        // Dynamic ECG animation when idle — throttled to 20fps (no Math.random noise)
         ctx.strokeStyle = "#FCD34D";
         ctx.lineWidth = 2;
-        ctx.shadowBlur = 8; // Reduced glow
+        ctx.shadowBlur = 8;
         ctx.shadowColor = "#FCD34D";
         ctx.beginPath();
 
-        const points = Math.max(150, width / 4);
+        const points = Math.max(100, Math.floor(width / 5));  // fewer points than before
         const sliceWidth = width / points;
 
         for (let i = 0; i < points; i++) {
           const x = i * sliceWidth;
-          
-          // Create realistic ECG pattern
           const normalizedX = i / points;
           let y = height / 2;
           
-          // P wave (small bump before main spike)
+          // P wave
           if (normalizedX % 0.25 < 0.05) {
             y += Math.sin((normalizedX % 0.05) / 0.05 * Math.PI) * 15;
           }
-          
-          // QRS complex (main sharp spike)
+          // QRS complex
           else if (normalizedX % 0.25 >= 0.08 && normalizedX % 0.25 < 0.12) {
             const qrsPos = (normalizedX % 0.25 - 0.08) / 0.04;
-            if (qrsPos < 0.3) {
-              y -= 30; // Q wave
-            } else if (qrsPos < 0.7) {
-              y += 80 * Math.sin((qrsPos - 0.3) / 0.4 * Math.PI); // R wave (peak)
-            } else {
-              y -= 20; // S wave
-            }
+            if (qrsPos < 0.3) y -= 30;
+            else if (qrsPos < 0.7) y += 80 * Math.sin((qrsPos - 0.3) / 0.4 * Math.PI);
+            else y -= 20;
           }
-          
-          // T wave (rounded bump after spike)
+          // T wave
           else if (normalizedX % 0.25 >= 0.15 && normalizedX % 0.25 < 0.22) {
             y += Math.sin(((normalizedX % 0.25 - 0.15) / 0.07) * Math.PI) * 25;
           }
           
-          // Add slight noise for realism
-          y += (Math.random() - 0.5) * 3;
-          
-          // Apply phase shift for animation
-          const phaseOffset = Math.sin(phase + i * 0.1) * 2;
-          y += phaseOffset;
+          // Phase animation (smooth, no random noise)
+          y += Math.sin(phase + i * 0.1) * 2;
 
-          if (i === 0) {
-            ctx.moveTo(x, y);
-          } else {
-            ctx.lineTo(x, y);
-          }
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
         }
 
         ctx.stroke();
         ctx.shadowBlur = 0;
 
-        phase += 0.15; // Speed of ECG animation
+        phase += 0.15;
         if (phase > Math.PI * 2) phase = 0;
 
-        animationRef.current = requestAnimationFrame(drawWaveform);
+        // Throttle idle animation to ~20fps using setTimeout
+        throttleRef.current = setTimeout(() => {
+          if (mountedRef.current) animationRef.current = requestAnimationFrame(drawWaveform);
+        }, 50); // 50ms = 20fps
       } else if (waveformData.length > 0) {
         // Static playback waveform
         ctx.strokeStyle = "#FCD34D";
@@ -277,9 +277,8 @@ export default function AudioWaveform({
 
     return () => {
       window.removeEventListener('resize', updateCanvasSize);
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
+      if (animationRef.current) cancelAnimationFrame(animationRef.current);
+      if (throttleRef.current)  clearTimeout(throttleRef.current);
     };
   }, [isRecording, analyser, waveformData, anomalies, duration, isListening]);
 
