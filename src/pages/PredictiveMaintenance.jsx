@@ -6,7 +6,7 @@ import AudioWaveform from "../components/predictive/AudioWaveform";
 import AudioRecorder from "../components/predictive/AudioRecorder";
 import AnalysisHistory from "../components/predictive/AnalysisHistory";
 import AnalysisDetails from "../components/predictive/AnalysisDetails";
-import CustomerFeedback from "../components/feedback/CustomerFeedback";
+import CustomerFeedback, { FeedbackModal } from "../components/feedback/CustomerFeedback";
 import { toast } from 'sonner';
 import { LANGUAGES } from '@/utils/voice';
 import { supabase } from '../lib/supabase';
@@ -24,6 +24,11 @@ export default function PredictiveMaintenance() {
 
   // Voice & Language State — default English (US)
   const [language, setLanguage] = useState('en-US');
+
+  // ─── Post-recording feedback popup ────────────────────────────────
+  // Shown 5 seconds after recording stops if user doesn't restart
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const feedbackTimerRef = React.useRef(null);
 
   // ─── Data fetching: ALL analyses, no vehicle filter ────────────────────────
   // Reports are fetched ONLY from persisted DB entries, NEVER generated on render.
@@ -103,8 +108,25 @@ export default function PredictiveMaintenance() {
   }, [analyses]);
 
   const handleRecordingComplete = () => {
-    // Small delay to let the DB write propagate before refetch
+    // DB write propagation delay
     setTimeout(() => refetchAnalyses(), 1500);
+
+    // ── Inactivity-based feedback popup ──────────────────────────────────
+    // Wait 5 seconds: if user doesn't start a new recording, show the modal.
+    // Clear any existing timer first so rapid stop/start doesn't stack timers.
+    if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+    feedbackTimerRef.current = setTimeout(() => {
+      setShowFeedbackModal(true);
+    }, 5000);
+  };
+
+  // Cancel the feedback timer whenever recording restarts
+  const handleRecordingStart = () => {
+    if (feedbackTimerRef.current) {
+      clearTimeout(feedbackTimerRef.current);
+      feedbackTimerRef.current = null;
+    }
+    setShowFeedbackModal(false);
   };
 
   const handleClearHistory = async () => {
@@ -138,6 +160,7 @@ export default function PredictiveMaintenance() {
   };
 
   return (
+    <>
     <div className="min-h-screen py-6 md:py-12 px-2 md:px-4 lg:px-8">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
@@ -247,6 +270,7 @@ export default function PredictiveMaintenance() {
                   <AudioRecorder
                     vehicleId={selectedVehicle?.id || 'guest-vehicle'}
                     onRecordingComplete={handleRecordingComplete}
+                    onRecordingStart={handleRecordingStart}
                     language={language}
                   />
                 </div>
@@ -381,5 +405,19 @@ export default function PredictiveMaintenance() {
 
       </div>
     </div>
+
+    {/* ─── Post-recording feedback popup (outside page scroll container) ────── */}
+    {/* Triggered 5s after recording stops. Doesn't block any UI. */}
+    <FeedbackModal
+      isOpen={showFeedbackModal}
+      onClose={() => {
+        setShowFeedbackModal(false);
+        if (feedbackTimerRef.current) {
+          clearTimeout(feedbackTimerRef.current);
+          feedbackTimerRef.current = null;
+        }
+      }}
+    />
+    </>
   );
 }

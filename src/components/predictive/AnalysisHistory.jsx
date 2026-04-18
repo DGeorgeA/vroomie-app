@@ -1,4 +1,4 @@
-﻿import React, { useState } from "react";
+import React, { useState } from "react";
 import { motion } from "framer-motion";
 import { format } from "date-fns";
 import { AlertTriangle, CheckCircle, Clock, ExternalLink, Download, FileText, FileSpreadsheet, TrendingUp, Activity, ChevronDown, Trash2 } from "lucide-react";
@@ -214,12 +214,24 @@ export default function AnalysisHistory({
                       </div>
                       
                       <div className="flex items-center gap-3 text-sm">
-                        <p className="text-zinc-400 font-medium">
-                          {analysis.processed_at
-                            ? format(new Date(analysis.processed_at), "MMM d, yyyy 'at' h:mm a")
-                            : analysis.created_date 
-                              ? format(new Date(analysis.created_date), "MMM d, yyyy 'at' h:mm a")
-                              : "Unknown Date"}
+                      <p className="text-zinc-400 font-medium">
+                          {/* ── TIMESTAMP FIX ───────────────────────────────────
+                           *  Priority order:
+                           *  1. created_at  — server-generated on INSERT, always unique
+                           *  2. processed_at — client-set fallback (less reliable)
+                           *  3. created_date — legacy alias of created_at at fetch time
+                           *  NEVER share a single variable across rows — each entry
+                           *  maps independently from its own row object.
+                           * ────────────────────────────────────── */}
+                          {(() => {
+                            const ts = analysis.created_at || analysis.processed_at || analysis.created_date;
+                            if (!ts) return 'Unknown Date';
+                            try {
+                              return format(new Date(ts), "MMM d, yyyy 'at' h:mm a");
+                            } catch {
+                              return 'Invalid Date';
+                            }
+                          })()}
                         </p>
                         <span className="text-zinc-600">ΓÇó</span>
                         <div className="flex items-center gap-1.5 text-zinc-400 font-medium">

@@ -17,6 +17,7 @@ import { supabase } from "@/lib/supabase";
 
 export default function AudioRecorder({
   onRecordingComplete,
+  onRecordingStart,
   vehicleId,
   isAnalyzing = false,
   language = 'en-US'
@@ -216,6 +217,9 @@ export default function AudioRecorder({
       setIsRecording(true);
       setRecordingTime(0);
       setRemainingTime(120);
+
+      // Notify parent so it can cancel the feedback popup timer
+      if (onRecordingStart) onRecordingStart();
 
       timerRef.current = setInterval(() => {
         setRecordingTime((prev) => {
