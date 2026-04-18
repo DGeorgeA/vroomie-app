@@ -19,14 +19,12 @@ import { Logger } from './logger';
 // ═══════════════════════════════════════════════
 
 // Thresholds tuned for MFCC-to-MFCC comparison (same feature space on both sides)
-const ANOMALY_THRESHOLD   = 0.65;  // Confirmed anomaly — strong spectral match
-const PROBABLE_THRESHOLD  = 0.50;  // Potential anomaly — moderate match
-const MIN_LIVE_RMS        = 0.008; // Below ~-42 dBFS — silence / breath / ambient noise
+// These are mutable so Settings > Sensitivity can override them at runtime
+let ANOMALY_THRESHOLD   = 0.65;  // Confirmed anomaly — strong spectral match
+let PROBABLE_THRESHOLD  = 0.50;  // Potential anomaly — moderate match
+let MIN_LIVE_RMS        = 0.008; // Below ~-42 dBFS — silence / breath / ambient noise
 
 // Spectral centroid range for automotive engine sounds (Hz, normalized to [0,1] vs Nyquist)
-// Engine knock/bearing: 200-2500Hz, normalized to 16kHz Nyquist → 0.025 to 0.31
-// Speech: typically 1000-4000Hz → 0.125 to 0.5
-// Music: full spectrum
 const ENGINE_CENTROID_MAX = 0.40; // If centroid > 0.40 of Nyquist, likely speech/music → reject
 
 const SMOOTHING_WINDOW      = 6;  // ~1.5s of 250ms chunks
@@ -34,6 +32,17 @@ const STABILITY_DURATION_MS = 4000;
 const THRESHOLD_FRAMES      = 3;  // Need 3 consecutive qualifying frames
 
 const FAST_REJECT_COSINE = 0.30; // Pre-filter: skip refs with cosine < this
+
+/**
+ * Called by settingsStore when sensitivity changes.
+ * Takes effect immediately on the next matchBuffer() call.
+ */
+export function applyThresholdOverride({ anomalyThreshold, probableThreshold, rmsGate }) {
+  ANOMALY_THRESHOLD  = anomalyThreshold;
+  PROBABLE_THRESHOLD = probableThreshold;
+  MIN_LIVE_RMS       = rmsGate;
+  console.log(`[Vroomie Engine] Thresholds updated: anomaly=${anomalyThreshold} probable=${probableThreshold} rmsGate=${rmsGate}`);
+}
 
 // ═══════════════════════════════════════════════
 // STATE

@@ -3,11 +3,13 @@ import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
 import Layout from "./Layout.jsx";
 import LoginPage from "./LoginPage.jsx";
 
-// ΓöÇΓöÇ Performance: Lazy-loaded page chunks ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+// ── Performance: Lazy-loaded page chunks ─────────────────────────────────────
 const PredictiveMaintenance = lazy(() => import(/* webpackChunkName: "predictive" */ "./PredictiveMaintenance"));
-const SubscriptionPage = lazy(() => import(/* webpackChunkName: "subscription" */ "./SubscriptionPage"));
-const Trips = lazy(() => import(/* webpackChunkName: "trips" */ "./Trips"));
-const Settings = lazy(() => import(/* webpackChunkName: "settings" */ "./Settings"));
+const SubscriptionPage      = lazy(() => import(/* webpackChunkName: "subscription" */ "./SubscriptionPage"));
+const Trips                 = lazy(() => import(/* webpackChunkName: "trips" */ "./Trips"));
+const Settings              = lazy(() => import(/* webpackChunkName: "settings" */ "./Settings"));
+const AIUpdates             = lazy(() => import(/* webpackChunkName: "ai-updates" */ "./AIUpdates"));
+const ComingSoon            = lazy(() => import(/* webpackChunkName: "coming-soon" */ "./ComingSoon"));
 
 function PageSkeleton() {
   return (
@@ -27,15 +29,52 @@ function PagesContent() {
           </Layout>
         } />
 
-        {/* New Empty Routes for Sidebar Map */}
-        <Route path="/carops" element={<Layout currentPageName="Explore Vehicles"><div /></Layout>} />
-        <Route path="/bookings" element={<Layout currentPageName="Bookings"><div /></Layout>} />
-        <Route path="/trips" element={<Layout currentPageName="My Trips"><Trips /></Layout>} />
-        <Route path="/saved" element={<Layout currentPageName="Saved"><div /></Layout>} />
-        <Route path="/payments" element={<Layout currentPageName="Payments"><div /></Layout>} />
-        <Route path="/settings" element={<Layout currentPageName="Settings"><Settings /></Layout>} />
+        {/* ── Fully implemented routes ─────────────────────────────────── */}
+        <Route path="/ai-updates" element={
+          <Layout currentPageName="Latest AI Updates">
+            <AIUpdates />
+          </Layout>
+        } />
 
-        {/* Default */}
+        <Route path="/trips" element={
+          <Layout currentPageName="My Trips">
+            <Trips />
+          </Layout>
+        } />
+
+        <Route path="/settings" element={
+          <Layout currentPageName="Settings">
+            <Settings />
+          </Layout>
+        } />
+
+        {/* ── Coming Soon routes ───────────────────────────────────────── */}
+        <Route path="/bookings" element={
+          <Layout currentPageName="Bookings">
+            <ComingSoon featureName="Bookings" />
+          </Layout>
+        } />
+
+        <Route path="/saved" element={
+          <Layout currentPageName="Saved">
+            <ComingSoon featureName="Saved Vehicles" />
+          </Layout>
+        } />
+
+        <Route path="/payments" element={
+          <Layout currentPageName="Payments">
+            <ComingSoon featureName="Payments" />
+          </Layout>
+        } />
+
+        {/* Legacy path — redirect to ai-updates */}
+        <Route path="/carops" element={
+          <Layout currentPageName="Latest AI Updates">
+            <AIUpdates />
+          </Layout>
+        } />
+
+        {/* ── Default / Dashboard ──────────────────────────────────────── */}
         <Route path="/" element={
           <Layout currentPageName="PredictiveMaintenance">
             <PredictiveMaintenance />

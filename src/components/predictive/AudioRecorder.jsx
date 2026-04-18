@@ -14,6 +14,7 @@ import { canAccess } from "@/lib/featureGate";
 import UpgradeModal from "./UpgradeModal";
 import { motion } from "framer-motion";
 import { supabase } from "@/lib/supabase";
+import { useSettingsStore } from "@/store/settingsStore";
 
 export default function AudioRecorder({
   onRecordingComplete,
@@ -34,8 +35,9 @@ export default function AudioRecorder({
   const sessionConfidenceRef = useRef([]); 
   
   const [remainingTime, setRemainingTime] = useState(120);
-  const [isVoiceAlertsEnabled, setIsVoiceAlertsEnabled] = useState(true);
-  const [detectionMode, setDetectionModeState] = useState(getDetectionMode());
+  // Read voice alerts + detection mode from global settings store (persisted)
+  const { voiceAlertsEnabled: isVoiceAlertsEnabled, detectionMode: storedMode } = useSettingsStore();
+  const [detectionMode, setDetectionModeState] = useState(storedMode || getDetectionMode());
   
   // PWA UX States
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
@@ -531,18 +533,6 @@ export default function AudioRecorder({
         </div>
       </div>
 
-      {/* Voice Alert Settings Toggle (Moved to bottom corner, subtle) */}
-      <div className="absolute bottom-[-40px] right-0 flex items-center">
-        <label className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-zinc-600 cursor-pointer hover:text-zinc-400 transition-colors">
-          <input 
-            type="checkbox" 
-            checked={isVoiceAlertsEnabled}
-            onChange={(e) => setIsVoiceAlertsEnabled(e.target.checked)}
-            className="w-3 h-3 rounded-sm border-zinc-700 bg-zinc-800 text-amber-500 focus:ring-amber-500/50 cursor-pointer opacity-50"
-          />
-          Voice Alerts
-        </label>
-      </div>
 
       {/* Pass analyser to parent for waveform visualization */}
       {isRecording && analyser && (

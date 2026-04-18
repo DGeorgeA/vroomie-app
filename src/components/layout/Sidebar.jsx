@@ -5,23 +5,28 @@ import { useUIStore } from '@/store/uiStore';
 import VroomieLogo from '@/components/ui/VroomieLogo';
 import {
   LayoutDashboard,
-  CarFront,
-  CalendarCheck,
+  Sparkles,
   Map,
+  Settings,
+  ChevronLeft,
+  CalendarCheck,
   Bookmark,
   CreditCard,
-  Settings,
-  ChevronLeft
 } from 'lucide-react';
 
-const MENU_ITEMS = [
-  { name: 'Dashboard',       path: '/',         icon: LayoutDashboard },
-  { name: 'Explore Vehicles',path: '/carops',   icon: CarFront },
-  { name: 'Bookings',        path: '/bookings', icon: CalendarCheck },
-  { name: 'My Trips',        path: '/trips',    icon: Map },
-  { name: 'Saved',           path: '/saved',    icon: Bookmark },
-  { name: 'Payments',        path: '/payments', icon: CreditCard },
-  { name: 'Settings',        path: '/settings', icon: Settings },
+// ─── Active routes (fully implemented) ──────────────────────────────────────
+const ACTIVE_ITEMS = [
+  { name: 'Dashboard',        path: '/',           icon: LayoutDashboard },
+  { name: 'Latest AI Updates',path: '/ai-updates', icon: Sparkles },
+  { name: 'My Trips',         path: '/trips',      icon: Map },
+  { name: 'Settings',         path: '/settings',   icon: Settings },
+];
+
+// ─── Coming Soon items ────────────────────────────────────────────────────────
+const SOON_ITEMS = [
+  { name: 'Bookings',  path: '/bookings', icon: CalendarCheck },
+  { name: 'Saved',     path: '/saved',    icon: Bookmark },
+  { name: 'Payments',  path: '/payments', icon: CreditCard },
 ];
 
 export default function Sidebar() {
@@ -53,11 +58,14 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 py-4 px-3 flex flex-col gap-1 overflow-y-auto">
-        {MENU_ITEMS.map((item) => (
+
+        {/* Active items */}
+        {ACTIVE_ITEMS.map((item) => (
           <NavLink
             key={item.path}
             to={item.path}
             onClick={toggleSidebar}
+            end={item.path === '/'}
             className={({ isActive }) =>
               `flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 ${
                 isActive
@@ -68,6 +76,25 @@ export default function Sidebar() {
           >
             <item.icon className="w-5 h-5 flex-shrink-0" />
             <span className="font-medium whitespace-nowrap text-sm">{item.name}</span>
+          </NavLink>
+        ))}
+
+        {/* Divider */}
+        <div className="mx-3 my-2 border-t border-white/5" />
+
+        {/* Coming Soon items */}
+        {SOON_ITEMS.map((item) => (
+          <NavLink
+            key={item.path}
+            to={item.path}
+            onClick={toggleSidebar}
+            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-zinc-600 hover:bg-white/3 transition-all duration-200 group"
+          >
+            <item.icon className="w-5 h-5 flex-shrink-0 opacity-40" />
+            <span className="font-medium whitespace-nowrap text-sm opacity-40">{item.name}</span>
+            <span className="ml-auto text-[9px] font-bold px-1.5 py-0.5 rounded-full border border-zinc-700 text-zinc-600 bg-zinc-900 tracking-wider">
+              SOON
+            </span>
           </NavLink>
         ))}
       </nav>
