@@ -357,7 +357,8 @@ export default function AudioRecorder({
             ? realAnomalies.map(a => a.type)
             : ['smooth_idle', 'consistent_rpm'],
         },
-        processed_at: new Date().toISOString(),
+        // processed_at intentionally omitted — created_at is server-generated (DEFAULT now())
+        // Never inject client-side timestamps into the primary timestamp chain
       };
 
       // ── Step 3: Insert into analyses table ────────────────────────────────
@@ -372,7 +373,7 @@ export default function AudioRecorder({
         toast.error('Recording saved locally only. DB write failed.');
         // Still notify UI with local data so UI doesn't break
         if (onRecordingComplete) {
-          onRecordingComplete({ ...dbPayload, id: `local-${Date.now()}`, created_date: new Date().toISOString() });
+          onRecordingComplete({ ...dbPayload, id: `local-${crypto.randomUUID()}`, created_date: null });
         }
         return;
       }

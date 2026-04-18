@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Activity, AlertTriangle, CheckCircle, TrendingUp, Globe } from "lucide-react";
 import GlassCard from "../components/ui/GlassCard";
@@ -13,7 +13,6 @@ import { supabase } from '../lib/supabase';
 
 export default function PredictiveMaintenance() {
   const [selectedVehicle, setSelectedVehicle] = useState(null);
-  const [vehicles, setVehicles] = useState([]);
   const [analyses, setAnalyses] = useState([]);
   const [analysesLoading, setAnalysesLoading] = useState(false);
 
@@ -26,30 +25,39 @@ export default function PredictiveMaintenance() {
   const [language, setLanguage] = useState('en-US');
 
   // ─── Post-recording feedback popup ────────────────────────────────
-  // Trigger: recording stops → 5s inactivity → show modal
-  // Cancel:  any click / touchstart / keydown during the 5s window
+  // Trigger: recording stops → 5s of NO interaction → show modal
+  // Cancel:  any click / touchstart / keydown cancels the popup for this session
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
-  const feedbackTimerRef = React.useRef(null);
-  const interactionListenersAttached = React.useRef(false);
+  const feedbackTimerRef = useRef(null);
+  const interactionListenersAttached = useRef(false);
+  // Stable ref to the handler so addEventListener/removeEventListener pair correctly
+  const cancelFeedbackTimerRef = useRef(null);
 
-  // Remove global interaction listeners (cleanup)
-  const removeInteractionListeners = React.useCallback(() => {
+  // Remove global interaction listeners — uses stable ref so removal always works
+  const removeInteractionListeners = useCallback(() => {
     if (!interactionListenersAttached.current) return;
-    window.removeEventListener('click',      cancelFeedbackTimer);
-    window.removeEventListener('touchstart', cancelFeedbackTimer);
-    window.removeEventListener('keydown',    cancelFeedbackTimer);
+    const handler = cancelFeedbackTimerRef.current;
+    if (handler) {
+      window.removeEventListener('click',      handler);
+      window.removeEventListener('touchstart', handler);
+      window.removeEventListener('keydown',    handler);
+    }
     interactionListenersAttached.current = false;
+    console.log('[Vroomie Feedback] Interaction listeners removed.');
   }, []);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  function cancelFeedbackTimer() {
-    // User interacted — reset the inactivity timer back to 5s from now
-    if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
-    feedbackTimerRef.current = setTimeout(() => {
+  // Assign stable handler once on mount
+  useEffect(() => {
+    cancelFeedbackTimerRef.current = () => {
+      // User interacted DURING the 5s window → cancel the popup entirely for this session
+      console.log('[Vroomie Feedback] User interaction detected — cancelling feedback popup.');
+      if (feedbackTimerRef.current) {
+        clearTimeout(feedbackTimerRef.current);
+        feedbackTimerRef.current = null;
+      }
       removeInteractionListeners();
-      setShowFeedbackModal(true);
-    }, 5000);
-  }
+    };
+  }, [removeInteractionListeners]);
 
   // ─── Data fetching: ALL analyses, no vehicle filter ────────────────────────
   // Reports are fetched ONLY from persisted DB entries, NEVER generated on render.
@@ -67,6 +75,20 @@ export default function PredictiveMaintenance() {
 
         if (error) throw error;
         if (isMounted) {
+          // LOG VALIDATION: print all timestamps to prove uniqueness
+          console.group('[Vroomie] Timestamp Validation — Initial Load');
+          (data || []).forEach((row, i) => {
+            console.log(`Row ${i + 1}: id=${row.id?.substring(0, 8)} | created_at=${row.created_at}`);
+          });
+          const tsList = (data || []).map(r => r.created_at);
+          const uniqueTs = new Set(tsList);
+          if (uniqueTs.size === tsList.length) {
+            console.log(`✅ PASS: All ${tsList.length} timestamps are UNIQUE`);
+          } else {
+            console.warn(`❌ FAIL: ${tsList.length - uniqueTs.size} duplicate timestamp(s) found!`);
+          }
+          console.groupEnd();
+
           // Always use server-assigned created_at — never regenerate on refresh
           setAnalyses((data || []).map(row => ({ ...row, created_date: row.created_at })));
         }
@@ -79,7 +101,8 @@ export default function PredictiveMaintenance() {
 
     fetchAnalyses();
 
-    // Realtime: push new rows automatically — triggered ONLY by recording completion
+    // Realtime: push new rows automatically — triggered ONLY by recording completion.
+    // Deduplicates by id to prevent double-entry when refetch also runs.
     const channel = supabase
       .channel('realtime:analyses:all')
       .on(
@@ -87,7 +110,13 @@ export default function PredictiveMaintenance() {
         { event: 'INSERT', schema: 'public', table: 'analyses' },
         (payload) => {
           if (isMounted) {
-            setAnalyses(prev => [{ ...payload.new, created_date: payload.new.created_at }, ...prev]);
+            const newRow = { ...payload.new, created_date: payload.new.created_at };
+            console.log(`[Vroomie Realtime] New row pushed: id=${newRow.id?.substring(0,8)} created_at=${newRow.created_at}`);
+            // Deduplicate: only prepend if this id isn't already present
+            setAnalyses(prev => {
+              if (prev.some(r => r.id === newRow.id)) return prev;
+              return [newRow, ...prev];
+            });
             toast.success('New diagnostic session recorded.');
           }
         }
@@ -108,6 +137,20 @@ export default function PredictiveMaintenance() {
         .select('*')
         .order('created_at', { ascending: false })
         .limit(100);
+
+      // LOG VALIDATION: print timestamps on every refetch
+      console.group('[Vroomie] Timestamp Validation — Refetch');
+      (data || []).forEach((row, i) => {
+        console.log(`Row ${i + 1}: id=${row.id?.substring(0, 8)} | created_at=${row.created_at}`);
+      });
+      const tsList = (data || []).map(r => r.created_at);
+      const uniqueTs = new Set(tsList);
+      console.log(uniqueTs.size === tsList.length
+        ? `✅ PASS: All ${tsList.length} timestamps are UNIQUE`
+        : `❌ FAIL: ${tsList.length - uniqueTs.size} duplicate(s) detected`);
+      console.groupEnd();
+
+      // Full overwrite (authoritative DB state) — no dedup needed here
       setAnalyses((data || []).map(row => ({ ...row, created_date: row.created_at })));
     } finally {
       setAnalysesLoading(false);
@@ -133,24 +176,35 @@ export default function PredictiveMaintenance() {
     setTimeout(() => refetchAnalyses(), 1500);
 
     // ── Inactivity-based feedback popup ────────────────────────────────
-    // Clear any existing timer so rapid stop/start doesn't stack timers.
-    if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+    // Behavior: If user does NOTHING for 5 seconds after stopping → show popup.
+    // If user interacts AT ALL during those 5 seconds → cancel popup entirely.
 
-    // Start 5-second inactivity countdown
+    // Clear any existing timer from a previous stop
+    if (feedbackTimerRef.current) {
+      clearTimeout(feedbackTimerRef.current);
+      feedbackTimerRef.current = null;
+    }
+    // Remove any leftover listeners from prior session
+    removeInteractionListeners();
+
+    console.log('[Vroomie Feedback] Recording stopped. Inactivity timer started (5s)...');
+
+    // Start fresh 5-second inactivity countdown
     feedbackTimerRef.current = setTimeout(() => {
+      console.log('[Vroomie Feedback] 5s of inactivity elapsed → showing feedback popup.');
       removeInteractionListeners();
       setShowFeedbackModal(true);
     }, 5000);
 
-    // Attach global listeners: any interaction resets the countdown
-    if (!interactionListenersAttached.current) {
-      window.addEventListener('click',      cancelFeedbackTimer);
-      window.addEventListener('touchstart', cancelFeedbackTimer, { passive: true });
-      window.addEventListener('keydown',    cancelFeedbackTimer);
+    // Attach stable-ref listener: any interaction cancels the popup
+    const handler = cancelFeedbackTimerRef.current;
+    if (handler && !interactionListenersAttached.current) {
+      window.addEventListener('click',      handler);
+      window.addEventListener('touchstart', handler, { passive: true });
+      window.addEventListener('keydown',    handler);
       interactionListenersAttached.current = true;
+      console.log('[Vroomie Feedback] Interaction listeners attached.');
     }
-
-    console.log('[Vroomie Feedback] Inactivity timer started (5s). Interaction listeners attached.');
   };
 
   // Cancel the feedback timer and listeners whenever recording restarts
