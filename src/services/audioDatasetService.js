@@ -27,8 +27,8 @@ const initDB = async () => {
       if (!db.objectStoreNames.contains('anomaly_references')) {
         db.createObjectStore('anomaly_references', { keyPath: 'id' });
       }
-      if (!db.objectStoreNames.contains('computed_mfcc_refs')) {
-        db.createObjectStore('computed_mfcc_refs', { keyPath: 'label' });
+      if (!db.objectStoreNames.contains('computed_composite_refs')) {
+        db.createObjectStore('computed_composite_refs', { keyPath: 'label' });
       }
     },
   });
@@ -62,13 +62,12 @@ function inferMetadata(filename) {
   return { category: 'unknown_anomaly', severity: 'medium', label: `anomaly_${name}` };
 }
 
-// ─── MFCC computation — IDENTICAL parameters to what live audio uses ──────────
-// N_MFCC=40, N_FFT=512, HOP=256, N_MELS=40 — matches audioDatasetService exactly
-export function computeMFCC(samples, sampleRate) {
-  const N_MFCC = 40;
+// ─── Composite feature vector (Log-Mel(64) + MFCC(13) + RMS(1) + ZCR(1) + Centroid(1) = 80 dims) ─
+export function computeCompositeEmbedding(samples, sampleRate) {
+  const N_MFCC = 13;
   const N_FFT = 512;
-  const HOP = 256;
-  const N_MELS = 40;
+  const HOP = 160;   // 10ms at 16kHz
+  const N_MELS = 64; // Log-Mel specified by user
 
   const melMin = 0;
   const melMax = 2595 * Math.log10(1 + (sampleRate / 2) / 700);
@@ -79,16 +78,29 @@ export function computeMFCC(samples, sampleRate) {
   const fftBins = hzPoints.map(h => Math.floor((N_FFT + 1) * h / sampleRate));
 
   const numFrames = Math.max(1, Math.floor((samples.length - N_FFT) / HOP));
+  
   const melEnergies = new Float32Array(N_MELS);
+  let totalZCR = 0;
+  let totalRMS = 0;
+  let totalCentroid = 0;
 
-  for (let frame = 0; frame < Math.min(numFrames, 200); frame++) {
+  for (let frame = 0; frame < numFrames; frame++) {
     const start = frame * HOP;
     const spectrum = new Float32Array(N_FFT / 2 + 1);
+    let frameRMS = 0;
+    
+    // ZCR calculation
+    let zcr = 0;
+    for (let c = 1; c < N_FFT; c++) {
+      if ((samples[start + c] >= 0) !== (samples[start + c - 1] >= 0)) zcr++;
+    }
+    totalZCR += zcr / N_FFT;
 
     for (let k = 0; k < N_FFT / 2 + 1; k++) {
       let re = 0, im = 0;
       for (let n = 0; n < N_FFT; n++) {
         const s = samples[start + n] || 0;
+        frameRMS += s * s;
         const w = 0.54 - 0.46 * Math.cos(2 * Math.PI * n / (N_FFT - 1));
         const angle = -2 * Math.PI * k * n / N_FFT;
         re += s * w * Math.cos(angle);
@@ -96,15 +108,26 @@ export function computeMFCC(samples, sampleRate) {
       }
       spectrum[k] = Math.sqrt(re * re + im * im);
     }
+    
+    frameRMS = Math.sqrt(frameRMS / N_FFT);
+    totalRMS += frameRMS;
+
+    // Centroid
+    let weightedSum = 0, powerSum = 0;
+    for (let k = 0; k < spectrum.length; k++) {
+      weightedSum += k * spectrum[k];
+      powerSum += spectrum[k];
+    }
+    totalCentroid += powerSum > 0 ? (weightedSum / powerSum) / (spectrum.length) : 0;
 
     for (let m = 0; m < N_MELS; m++) {
       let energy = 0;
       for (let bin = fftBins[m]; bin < fftBins[m + 2]; bin++) {
         if (bin < spectrum.length) {
-          const frac = bin < fftBins[m + 1]
+           const frac = bin < fftBins[m + 1]
             ? (bin - fftBins[m]) / Math.max(1, fftBins[m + 1] - fftBins[m])
             : (fftBins[m + 2] - bin) / Math.max(1, fftBins[m + 2] - fftBins[m + 1]);
-          energy += spectrum[bin] * Math.max(0, frac);
+           energy += spectrum[bin] * Math.max(0, frac);
         }
       }
       melEnergies[m] += Math.log(Math.max(energy, 1e-10));
@@ -112,7 +135,7 @@ export function computeMFCC(samples, sampleRate) {
   }
 
   for (let m = 0; m < N_MELS; m++) melEnergies[m] /= numFrames;
-
+  
   const mfcc = new Float32Array(N_MFCC);
   for (let k = 0; k < N_MFCC; k++) {
     let sum = 0;
@@ -122,36 +145,25 @@ export function computeMFCC(samples, sampleRate) {
     mfcc[k] = sum;
   }
 
-  // L2-normalize
-  const norm = Math.sqrt(mfcc.reduce((a, v) => a + v * v, 0)) || 1;
-  return Array.from(mfcc).map(v => parseFloat((v / norm).toFixed(6)));
-}
+  const avgRMS = totalRMS / numFrames;
+  const avgZCR = totalZCR / numFrames;
+  const avgCentroid = totalCentroid / numFrames;
 
-// ─── Extended feature vector: MFCC(40) + RMS(1) + SpectralCentroid(1) = 42 dims ─
-export function computeExtendedFeatures(samples, sampleRate) {
-  const mfcc = computeMFCC(samples, sampleRate);
+  // L2 Normalize individual vectors before stacking
+  const normalize = (vec) => {
+    const norm = Math.sqrt(vec.reduce((a, v) => a + v * v, 0)) || 1;
+    return Array.from(vec).map(v => v / norm);
+  };
 
-  // RMS energy
-  const rms = Math.sqrt(samples.reduce((s, v) => s + v * v, 0) / samples.length);
-
-  // Spectral centroid (weighted mean frequency)
-  const N_FFT = 512;
-  let weightedSum = 0, powerSum = 0;
-  for (let k = 0; k < N_FFT / 2 + 1; k++) {
-    let mag = 0;
-    for (let n = 0; n < N_FFT; n++) {
-      const s = samples[n] || 0;
-      const w = 0.54 - 0.46 * Math.cos(2 * Math.PI * n / (N_FFT - 1));
-      mag += s * w * Math.cos(-2 * Math.PI * k * n / N_FFT);
-    }
-    mag = Math.abs(mag);
-    const freq = k * sampleRate / N_FFT;
-    weightedSum += freq * mag;
-    powerSum += mag;
-  }
-  const centroidNorm = powerSum > 0 ? (weightedSum / powerSum) / (sampleRate / 2) : 0;
-
-  return [...mfcc, rms, centroidNorm]; // 42-dim total
+  const normMel = normalize(melEnergies);
+  const normMfcc = normalize(mfcc);
+  
+  // Create final composite 80-dim embedding (64 Mel + 13 MFCC + 3 Stats)
+  const embedding = [...normMel, ...normMfcc, avgRMS, avgZCR, avgCentroid];
+  
+  // Global L2 norm
+  const globalNorm = Math.sqrt(embedding.reduce((a, v) => a + v * v, 0)) || 1;
+  return embedding.map(v => parseFloat((v / globalNorm).toFixed(6)));
 }
 
 // ─── Full preprocessing pipeline — MUST BE IDENTICAL TO LIVE PIPELINE ─────────
@@ -251,7 +263,7 @@ async function computeFeaturesFromUrl(url) {
     }
 
     Logger.info(`[Vroomie Dataset] Processed: ${url.split('/').pop()} RMS=${rms.toFixed(4)} len=${processed.length}`);
-    return computeExtendedFeatures(processed, TARGET_SR);
+    return computeCompositeEmbedding(processed, TARGET_SR);
   } catch (err) {
     Logger.warn(`Feature compute failed for ${url}: ${err.message}`);
     return null;
@@ -263,7 +275,7 @@ export function computeFeaturesFromAudioBuffer(audioBuffer) {
   const samples = audioBuffer.getChannelData(0);
   // Apply same preprocessing
   const processed = preprocessAudioBuffer(samples, audioBuffer.sampleRate);
-  return computeExtendedFeatures(processed, TARGET_SR);
+  return computeCompositeEmbedding(processed, TARGET_SR);
 }
 
 // ─── Main: Initialize reference library ──────────────────────────────────────
@@ -273,22 +285,23 @@ export async function initializeAudioDataset() {
 
   const db = await initDB().catch(() => null);
 
-  // ── STEP 1: Try IndexedDB MFCC cache (fastest, offline-capable) ──────────────
+  // ── STEP 1: Try IndexedDB Cache (fastest, offline-capable) ──────────────
   if (db) {
     try {
-      const cached = await db.getAll('computed_mfcc_refs');
+      const cached = await db.getAll('computed_composite_refs');
       if (cached && cached.length > 0) {
-        const valid = cached.filter(c => Array.isArray(c.embedding_vector) && c.embedding_vector.length >= 40);
+        // High fidelity dimension check ~80 dims
+        const valid = cached.filter(c => Array.isArray(c.embedding_vector) && c.embedding_vector.length >= 75);
         if (valid.length > 0) {
           referenceIndex = valid.map(c => ({
             label: c.label,
             category: c.category,
             severity: c.severity || 'medium',
             source_file: c.source_file,
-            source: 'idb_mfcc_cache',
+            source: 'idb_composite_cache',
             embedding_vector: c.embedding_vector,
           }));
-          console.log(`[Vroomie Dataset] ✅ Loaded ${referenceIndex.length} MFCC references from IDB cache:`, referenceIndex.map(r => r.label));
+          console.log(`[Vroomie Dataset] ✅ Loaded ${referenceIndex.length} semantic references from IDB cache:`, referenceIndex.map(r => r.label));
           Logger.info(`Reference engine ready: ${referenceIndex.length} patterns from IDB.`);
           return;
         }
@@ -298,8 +311,8 @@ export async function initializeAudioDataset() {
     }
   }
 
-  // ── STEP 2: Compute MFCC embeddings from Storage bucket files ────────────────
-  Logger.info(`📂 Fetching audio from '${BUCKET}' bucket and computing MFCC embeddings...`);
+  // ── STEP 2: Compute Embeddings from Storage bucket files ────────────────
+  Logger.info(`📂 Fetching audio from '${BUCKET}' bucket and computing composite embeddings...`);
 
   try {
     const { data: files, error: listErr } = await supabase.storage
@@ -360,18 +373,18 @@ export async function initializeAudioDataset() {
     // Cache to IndexedDB for future loads
     if (db && computed.length > 0) {
       try {
-        const tx = db.transaction('computed_mfcc_refs', 'readwrite');
+        const tx = db.transaction('computed_composite_refs', 'readwrite');
         await tx.store.clear();
         for (const entry of computed) await tx.store.put(entry);
         await tx.done;
-        Logger.info(`💾 Cached ${computed.length} MFCC embeddings to IDB.`);
+        Logger.info(`💾 Cached ${computed.length} composite embeddings to IDB.`);
       } catch (e) {
         Logger.warn('IDB write failed:', e.message);
       }
     }
 
     console.log(`[Vroomie Dataset] ✅ Loaded ${referenceIndex.length} anomaly patterns from Storage:`, referenceIndex.map(r => r.label));
-    Logger.info(`🔍 Reference engine ready: ${referenceIndex.length} patterns loaded (MFCC-consistent).`);
+    Logger.info(`🔍 Reference engine ready: ${referenceIndex.length} patterns loaded (Composite-consistent).`);
   } catch (err) {
     Logger.error('Storage-based initialization failed:', err);
     await loadFromSupabaseDB();

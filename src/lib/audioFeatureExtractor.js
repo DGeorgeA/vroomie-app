@@ -1,11 +1,11 @@
-import Meyda from 'meyda';
+// import Meyda from 'meyda';
 import { getDetectionMode } from './detectionMode';
 import { Logger } from './logger';
 import { preprocessSignal, mixToMonoFromRaw, logSignalStats } from './audioPreprocessor';
 import { generateMelSpectrogram } from './spectrogramGenerator';
 import { predictCNN, isCNNReady } from './cnnClassifier';
 import { initializeEmbeddingEngine, getAudioEmbedding, isEngineReady } from './mlEmbeddingEngine';
-import { initializeAudioDataset } from '../services/audioDatasetService';
+import { initializeAudioDataset, computeCompositeEmbedding } from '../services/audioDatasetService';
 
 let isExtracting = false;
 let audioContext = null;
@@ -27,7 +27,6 @@ let datasetInitialized = false;
 
 // CRITICAL: Must be power-of-2 for createScriptProcessor
 const SCRIPT_BUFFER_SIZE = 4096;
-const MEYDA_BUFFER_SIZE = 2048;
 
 export function registerCNNClassifier(classifier) {
   // CNN is imported directly
@@ -85,8 +84,7 @@ export async function startExtraction(callback) {
     // CRITICAL: buffer size MUST be power of 2 (256, 512, 1024, 2048, 4096, 8192, 16384)
     scriptProcessor = audioContext.createScriptProcessor(SCRIPT_BUFFER_SIZE, 1, 1);
     
-    Meyda.bufferSize = MEYDA_BUFFER_SIZE;
-    Meyda.sampleRate = actualSR;
+    // window.Meyda = undefined; // No longer used
     
     // Compute window size in samples at the actual sample rate (~2 seconds)
     const windowSamples = actualSR * 2;
@@ -118,22 +116,7 @@ export async function startExtraction(callback) {
         rollingPCMBuffer.splice(0, rollingPCMBuffer.length - windowSamples);
       }
       
-      // Extract Meyda features from first 2048 samples of this chunk
-      const meydaSlice = processed.length >= MEYDA_BUFFER_SIZE
-        ? processed.slice(0, MEYDA_BUFFER_SIZE) 
-        : (() => {
-            const padded = new Float32Array(MEYDA_BUFFER_SIZE);
-            padded.set(processed);
-            return padded;
-          })();
-      
-      const features = Meyda.extract(FEATURE_SET, meydaSlice);
-      
-      if (!features || !features.mfcc) return;
-      
-      if (frameTick % 30 === 0) {
-        console.log("LIVE MFCC[0:5]:", features.mfcc.slice(0, 5));
-      }
+      // Removed single-frame Meyda extraction
       frameTick++;
       
       // Generate live spectrogram from rolling 2s buffer (every ~1s = 4 frames)
@@ -159,24 +142,32 @@ export async function startExtraction(callback) {
         lastCNNTime = now;
       }
       
-      // EXTRUDED: RUN YAMNET EMBEDDING EVERY 500ms
-      if (isEngineReady() && rollingPCMBuffer.length >= windowSamples && now - lastEmbeddingTime > 500) {
-        // Run asynchronously so we don't block the audio thread
+      // RUN COMPOSITE EMBEDDING EVERY 500ms
+      let compositeEmbedding = null;
+      if (rollingPCMBuffer.length >= windowSamples && now - lastEmbeddingTime > 500) {
         const pcmToEmbed = new Float32Array(rollingPCMBuffer);
-        getAudioEmbedding(pcmToEmbed).then(emb => {
-          if (emb) latestEmbedding = emb;
-        });
+        
+        // 1. Generate local 80-dim embedding for Vroomie Engine
+        compositeEmbedding = computeCompositeEmbedding(pcmToEmbed, actualSR);
+
+        // 2. Run YAMNet asynchronously (live mode)
+        if (isEngineReady()) {
+          getAudioEmbedding(pcmToEmbed).then(emb => {
+            if (emb) latestEmbedding = emb;
+          });
+        }
+        
         lastEmbeddingTime = now;
       }
       
       if (onFeaturesExtractedCallback) {
         onFeaturesExtractedCallback({
-          ...features,
+          compositeEmbedding, // 80-dim sequence feature array (can be null if < 500ms or buffering)
           rawSignalFrame: processed,
           liveSpectrogram,
           liveEmbedding: latestEmbedding,
           cnnResult: getDetectionMode() === 'ml' ? cnnResult : null,
-          sampleRate: actualSR,  // CRITICAL: needed for centroid normalization in matching engine
+          sampleRate: actualSR,
         });
       }
     };

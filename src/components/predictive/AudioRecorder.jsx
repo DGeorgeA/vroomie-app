@@ -120,13 +120,13 @@ export default function AudioRecorder({
         
         if (IS_DEBUG) {
           setDebugStats({
-            rms: features.rms.toFixed(4),
-            centroid: features.spectralCentroid.toFixed(1),
+            rms: features.rms?.toFixed(4) ?? '0.0000',
+            centroid: features.spectralCentroid?.toFixed(1) ?? '0.0',
             conf: result.confidence.toFixed(3),
             status: result.status?.toUpperCase() || 'NORMAL',
             cnnClass: result.detectedClass || 'N/A',
             cnnConf: result.cnnConfidence ? (result.cnnConfidence * 100).toFixed(1) + '%' : 'N/A',
-            source: result.classifierSource || 'meyda',
+            source: result.classifierSource || 'temporal_embed',
             mode: result.mode || activeMode
           });
         }
