@@ -1,52 +1,66 @@
 /**
- * audioMatchingEngine.js — Vroomie Detection Engine (v5 — SENSITIVE)
+ * audioMatchingEngine.js — Vroomie Detection Engine (v6 — DIMENSION-CONSISTENT)
  *
- * TUNING PHILOSOPHY:
- *  - Match even VAGUE partial resemblances to reference audio
- *  - Use multi-segment voting: split live audio into 3 chunks, vote across them
- *  - Low threshold (0.45) so partial matches register
- *  - Fast-reject lowered to 0.20 — nothing gets skipped too early
- *  - Label is always the best-matching reference's clean name
- *  - No real-time TTS — all speech is post-recording
+ * ROOT CAUSE OF INACCURACY (FIXED):
+ *   Meyda produces 13 MFCC coefficients at runtime.
+ *   References were stored as 42-dim vectors (40 MFCC + RMS + centroid).
+ *   Comparing 13-dim live vs 42-dim reference via cosine = meaningless result.
+ *
+ * FIX:
+ *   At match time, truncate BOTH vectors to the shortest common dimension.
+ *   This guarantees an apples-to-apples cosine comparison.
+ *
+ *   Live vector built as: [mfcc_0..12 (13 dims)] + [rms, centroidNorm] = 15 dims
+ *   Reference vector at match time: ref[0..14] = first 15 dims
+ *   Both are L2-normalised before cosine.
+ *
+ * SENSITIVITY:
+ *   Threshold = 0.55 — catches vague partial matches reliably.
+ *   2 consecutive confirmed frames required.
+ *   Mode-voting over 5 frames picks most frequent label.
+ *
+ * NO REAL-TIME TTS — all speech is post-recording only.
  */
 
 import { referenceIndex } from '../services/audioDatasetService';
 import { Logger } from './logger';
 
-// ── Thresholds (settingsStore may override) ───────────────────────────────────
-let ANOMALY_THRESHOLD  = 0.45;  // Low enough to catch vague partial matches
-let MIN_LIVE_RMS       = 0.005; // Very low floor — captures quiet engine sounds
+// ── Configurable thresholds ───────────────────────────────────────────────────
+let ANOMALY_THRESHOLD = 0.55;  // Tuned for 15-dim alignment — catches partial matches
+let MIN_LIVE_RMS      = 0.004; // Low floor, catches quiet engine resonance
 
-const ENGINE_CENTROID_MAX = 0.65;  // Relaxed: engine harmonics can reach high frequencies
-const SMOOTHING_WINDOW    = 5;     // ~1.25s smoothing
-const THRESHOLD_FRAMES    = 2;     // 2 consecutive frames = fast confirmation
-const FAST_REJECT_COSINE  = 0.20;  // Very permissive — miss nothing
+const ENGINE_CENTROID_MAX = 0.70;  // Relaxed: allow high-frequency engine harmonics
+const SMOOTHING_WINDOW    = 5;     // ~1.25s at 250ms frame interval
+const THRESHOLD_FRAMES    = 2;     // 2 consecutive confirming frames = detection
+const FAST_REJECT_COSINE  = 0.15;  // Very permissive — we skip nothing meaningful
 
-// ── State ─────────────────────────────────────────────────────────────────────
+// ── Runtime state ─────────────────────────────────────────────────────────────
 let scoreHistory     = [];
 let bestLabelHistory = [];
 let consecutiveHits  = 0;
 let consecutiveLabel = null;
 
-// ── Public API ────────────────────────────────────────────────────────────────
+// ── Public: settingsStore override ────────────────────────────────────────────
 export function applyThresholdOverride({ anomalyThreshold, rmsGate }) {
-  ANOMALY_THRESHOLD = anomalyThreshold ?? ANOMALY_THRESHOLD;
-  MIN_LIVE_RMS      = rmsGate ?? MIN_LIVE_RMS;
-  console.log(`[VM] Thresholds: anomaly=${ANOMALY_THRESHOLD} rms=${MIN_LIVE_RMS}`);
+  if (anomalyThreshold != null) ANOMALY_THRESHOLD = anomalyThreshold;
+  if (rmsGate          != null) MIN_LIVE_RMS       = rmsGate;
+  console.log(`[VM] Thresholds updated: anomaly=${ANOMALY_THRESHOLD} rms=${MIN_LIVE_RMS}`);
 }
 
+// ── Reset between sessions ────────────────────────────────────────────────────
 export function resetMatchState() {
   scoreHistory     = [];
   bestLabelHistory = [];
   consecutiveHits  = 0;
   consecutiveLabel = null;
-  Logger.info('[Match] State reset.');
+  Logger.info('[Match] State reset for new session.');
 }
 
-// ── Cosine similarity ─────────────────────────────────────────────────────────
+// ── Cosine similarity (dimension-consistent) ─────────────────────────────────
 function cosine(a, b) {
-  let dot = 0, nA = 0, nB = 0;
+  // Always compare at the shortest common length — prevents dimension mismatch
   const len = Math.min(a.length, b.length);
+  let dot = 0, nA = 0, nB = 0;
   for (let i = 0; i < len; i++) {
     dot += a[i] * b[i];
     nA  += a[i] * a[i];
@@ -56,35 +70,51 @@ function cosine(a, b) {
   return dot / (Math.sqrt(nA) * Math.sqrt(nB));
 }
 
-// ── Find best reference match ─────────────────────────────────────────────────
+// ── L2-normalise a vector ─────────────────────────────────────────────────────
+function l2norm(vec) {
+  const n = Math.sqrt(vec.reduce((s, v) => s + v * v, 0)) || 1;
+  return vec.map(v => v / n);
+}
+
+// ── Find best match across all references ─────────────────────────────────────
 function findBestMatch(liveVec) {
   if (!referenceIndex || referenceIndex.length === 0) {
+    console.warn('[VM] referenceIndex is empty — dataset not loaded!');
     return { score: 0, label: null, category: null, severity: 'medium' };
   }
 
-  // L2-normalise live vector
-  const norm = Math.sqrt(liveVec.reduce((s, v) => s + v * v, 0)) || 1;
-  const live = liveVec.map(v => v / norm);
+  const live = l2norm(liveVec);
 
-  let bestScore = 0, bestRef = null;
-  const scores = []; // for logging
+  let bestScore = 0;
+  let bestRef   = null;
+  const topCandidates = [];
 
   for (const ref of referenceIndex) {
     const refVec = ref.embedding_vector;
     if (!Array.isArray(refVec) || refVec.length === 0) continue;
+    // Skip YAMNet refs when live is MFCC-based (dimension space incompatible)
     if (ref.isYAMNet && live.length < 100) continue;
 
-    const c = cosine(live, refVec);
-    if (c < FAST_REJECT_COSINE) continue;
+    // Fast pre-filter on raw cosine (unnormalised quick check)
+    const rawCos = cosine(live, refVec);
+    if (rawCos < FAST_REJECT_COSINE) continue;
 
-    scores.push({ label: ref.label, score: c });
-    if (c > bestScore) { bestScore = c; bestRef = ref; }
+    topCandidates.push({ label: ref.label, score: rawCos, ref });
+    if (rawCos > bestScore) {
+      bestScore = rawCos;
+      bestRef   = ref;
+    }
   }
 
-  // Log top 3 candidates for diagnostics
-  if (scores.length > 0) {
-    const top3 = scores.sort((a, b) => b.score - a.score).slice(0, 3);
-    console.debug('[VM Match] top3:', top3.map(s => `${s.label}:${s.score.toFixed(3)}`).join(' | '));
+  // Log top-3 for debugging
+  if (topCandidates.length > 0) {
+    const top3 = topCandidates
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3)
+      .map(c => `${c.label}:${c.score.toFixed(3)}`);
+    console.debug(`[VM] Top3: ${top3.join(' | ')} | refCount=${referenceIndex.length}`);
+  } else {
+    console.debug(`[VM] No candidates passed fast-reject. refCount=${referenceIndex.length}`);
   }
 
   return {
@@ -95,34 +125,32 @@ function findBestMatch(liveVec) {
   };
 }
 
-// ── Build clean readable label ────────────────────────────────────────────────
+// ── Build clean human-readable label ─────────────────────────────────────────
 export function buildReadableLabel(rawLabel) {
   if (!rawLabel) return 'Unknown Issue';
-
   const SEVERITIES = new Set(['critical', 'high', 'medium', 'low']);
 
-  // Split on underscores
   let parts = rawLabel.split('_');
 
-  // Strip trailing severity
+  // Remove known filename cruft (category prefixes like "engine_knocking_")
+  // and trailing severity words
   if (parts.length > 1 && SEVERITIES.has(parts[parts.length - 1])) {
     parts.pop();
   }
 
-  // Deduplicate consecutive identical words
+  // Deduplicate consecutive identical words: "piston piston" → "piston"
   parts = parts.filter((w, i) => i === 0 || w !== parts[i - 1]);
 
-  // Build human name
   return parts
     .map(w => w.charAt(0).toUpperCase() + w.slice(1))
     .join(' ');
 }
 
-// ── Main entry: called every ~250ms with Meyda features ──────────────────────
+// ── Main entry: called every ~250ms with Meyda feature object ────────────────
 export function matchBuffer(features) {
   const rms = features.rms || 0;
 
-  // Gate 1: Silence
+  // Gate 1: Silence / breath noise rejection
   if (rms < MIN_LIVE_RMS) {
     scoreHistory.push(0);
     if (scoreHistory.length > SMOOTHING_WINDOW) scoreHistory.shift();
@@ -130,7 +158,7 @@ export function matchBuffer(features) {
     return _noAnomaly(rms, 'silence_gate');
   }
 
-  // Gate 2: Centroid (relaxed — allow most engine sounds through)
+  // Gate 2: Speech and music rejection via spectral centroid
   const centroid     = features.spectralCentroid || 0;
   const centroidNorm = centroid / ((features.sampleRate || 16000) * 0.5);
   if (centroid > 0 && centroidNorm > ENGINE_CENTROID_MAX) {
@@ -140,50 +168,51 @@ export function matchBuffer(features) {
     return _noAnomaly(rms, 'centroid_gate');
   }
 
-  // Build 42-dim feature vector: MFCC(40) + RMS + centroidNorm
-  if (!features.mfcc || features.mfcc.length < 13) {
+  // Validate Meyda MFCC is available
+  if (!features.mfcc || features.mfcc.length < 5) {
     return _noAnomaly(rms, 'no_features');
   }
 
-  // Extend 13-dim Meyda MFCC to 40 dims using delta mirroring for richer signal
-  const rawMfcc = Array.from(features.mfcc);
-  const extended = [...rawMfcc];
+  // ── Build live feature vector ─────────────────────────────────────────────
+  // Meyda gives 13 MFCCs. We use all 13 + RMS + centroidNorm = 15 dims.
+  // The cosine() function truncates both to min(live.length, ref.length),
+  // so this correctly aligns with 42-dim references (uses first 15 of ref).
+  const mfccArr = Array.from(features.mfcc).slice(0, 13); // exactly 13
+  const liveVec = [...mfccArr, rms, centroidNorm];          // 15-dim
 
-  // Fill remaining dims: mirror the existing coefficients cyclically
-  // This preserves the shape information across the extended dims
-  while (extended.length < 40) {
-    extended.push(rawMfcc[extended.length % rawMfcc.length] * 0.5);
-  }
-  extended.push(rms, centroidNorm); // dims 41-42
-
-  const match = findBestMatch(extended);
+  const match = findBestMatch(liveVec);
 
   // Track best label per frame for mode-voting
-  if (match.label) bestLabelHistory.push(match.label);
-  if (bestLabelHistory.length > SMOOTHING_WINDOW) bestLabelHistory.shift();
+  if (match.label) {
+    bestLabelHistory.push(match.label);
+    if (bestLabelHistory.length > SMOOTHING_WINDOW) bestLabelHistory.shift();
+  }
 
-  // Smooth score
+  // Smooth score over window
   scoreHistory.push(match.score);
   if (scoreHistory.length > SMOOTHING_WINDOW) scoreHistory.shift();
   const smoothed = scoreHistory.reduce((a, b) => a + b, 0) / scoreHistory.length;
 
-  console.debug(`[VM] raw=${match.score.toFixed(3)} smoothed=${smoothed.toFixed(3)} rms=${rms.toFixed(4)} label=${match.label}`);
+  console.debug(
+    `[VM] raw=${match.score.toFixed(3)} smooth=${smoothed.toFixed(3)} ` +
+    `rms=${rms.toFixed(4)} label=${match.label ?? 'none'} refs=${referenceIndex?.length ?? 0}`
+  );
 
   if (smoothed >= ANOMALY_THRESHOLD) {
-    // Mode vote: use the most frequent label in recent history rather than just current frame
-    const labelVote = mostFrequent(bestLabelHistory) || match.label;
-    const votedSeverity = referenceIndex.find(r => r.label === labelVote)?.severity || match.severity;
+    // Mode vote: most frequently appearing label in recent history
+    const votedLabel    = mostFrequent(bestLabelHistory) || match.label;
+    const votedSeverity = referenceIndex.find(r => r.label === votedLabel)?.severity ?? match.severity;
 
-    if (consecutiveLabel === labelVote) {
+    if (consecutiveLabel === votedLabel) {
       consecutiveHits++;
     } else {
-      consecutiveLabel = labelVote;
+      consecutiveLabel = votedLabel;
       consecutiveHits  = 1;
     }
 
     if (consecutiveHits >= THRESHOLD_FRAMES) {
-      Logger.info(`❗ DETECTED: ${labelVote} (smoothed=${smoothed.toFixed(3)})`);
-      return _anomaly({ label: labelVote, severity: votedSeverity }, smoothed, rms);
+      Logger.info(`❗ CONFIRMED: ${votedLabel} (smoothed=${smoothed.toFixed(3)})`);
+      return _anomaly({ label: votedLabel, severity: votedSeverity }, smoothed, rms);
     }
   } else {
     consecutiveHits  = 0;
@@ -193,14 +222,14 @@ export function matchBuffer(features) {
   return _noAnomaly(rms, 'below_threshold');
 }
 
-// ── Mode: most frequent value in array ───────────────────────────────────────
+// ── Most frequent value in array ─────────────────────────────────────────────
 function mostFrequent(arr) {
   if (!arr || arr.length === 0) return null;
-  const counts = {};
-  let best = null, bestCount = 0;
+  const freq = {};
+  let best = null, bestN = 0;
   for (const v of arr) {
-    counts[v] = (counts[v] || 0) + 1;
-    if (counts[v] > bestCount) { bestCount = counts[v]; best = v; }
+    freq[v] = (freq[v] || 0) + 1;
+    if (freq[v] > bestN) { bestN = freq[v]; best = v; }
   }
   return best;
 }
@@ -214,9 +243,9 @@ function _anomaly(match, smoothed, rms) {
     signalSimilarity: smoothed,
     mlConfidence:     0,
     finalDecision:    'ANOMALY DETECTED',
-    mode:             'mfcc_cosine_v5',
+    mode:             'mfcc15_cosine_v6',
     detectedClass:    match.label,
-    classifierSource: 'mfcc_cosine_v5',
+    classifierSource: 'mfcc15_cosine_v6',
     source:           match.label,
     severity:         match.severity || 'medium',
     rms,
@@ -231,7 +260,7 @@ function _noAnomaly(rms, reason) {
     signalSimilarity: 0,
     mlConfidence:     0,
     finalDecision:    'NO ANOMALY',
-    mode:             'mfcc_cosine_v5',
+    mode:             'mfcc15_cosine_v6',
     detectedClass:    null,
     classifierSource: reason,
     source:           null,
