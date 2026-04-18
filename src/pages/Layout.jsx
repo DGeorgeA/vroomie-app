@@ -1,15 +1,17 @@
 import React, { useState, useEffect, Suspense } from "react";
-import { useLocation } from "react-router-dom";
 import { useAuth } from '@/contexts/AuthContext';
 import { useUIStore } from '@/store/uiStore';
 import Sidebar from '@/components/layout/Sidebar';
 import AuthPanel from '@/components/layout/AuthPanel';
 import VroomieLogo from '@/components/ui/VroomieLogo';
+import { FeedbackModal } from '@/components/feedback/CustomerFeedback';
+import { MessageSquare } from 'lucide-react';
 
 export default function Layout({ children, currentPageName }) {
   const { user, loading } = useAuth();
   const { isSidebarCollapsed } = useUIStore();
   const [scrolled, setScrolled] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
 
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 8);
@@ -34,11 +36,7 @@ export default function Layout({ children, currentPageName }) {
           "name": "Vroomie Diagnostics",
           "applicationCategory": "UtilitiesApplication",
           "operatingSystem": "Web",
-          "offers": {
-            "@type": "Offer",
-            "price": "0",
-            "priceCurrency": "USD"
-          }
+          "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
         })}
       </script>
 
@@ -47,15 +45,28 @@ export default function Layout({ children, currentPageName }) {
 
       {/* Sidebar Backdrop Overlay */}
       {!loading && user && !isSidebarCollapsed && (
-        <div 
-          className="fixed inset-0 bg-black/60 z-40 backdrop-blur-sm transition-opacity" 
-          onClick={useUIStore.getState().toggleSidebar} 
+        <div
+          className="fixed inset-0 bg-black/60 z-40 backdrop-blur-sm transition-opacity"
+          onClick={useUIStore.getState().toggleSidebar}
         />
       )}
 
-      <div 
-        className="transition-all duration-300 min-h-screen flex flex-col w-full"
-      >
+      {/* ── Persistent Feedback Button — top-left corner ─────────────────── */}
+      {!loading && user && (
+        <button
+          id="global-feedback-btn"
+          onClick={() => setFeedbackOpen(true)}
+          title="Share feedback"
+          aria-label="Open feedback form"
+          className="fixed top-4 left-4 z-[200] flex items-center gap-2 px-3 py-2 rounded-xl bg-zinc-900/90 border border-white/10 hover:border-yellow-500/40 hover:bg-zinc-800/90 text-zinc-400 hover:text-yellow-400 transition-all duration-200 shadow-lg backdrop-blur-sm text-xs font-medium"
+          style={{ top: '70px' }}
+        >
+          <MessageSquare className="w-3.5 h-3.5 flex-shrink-0" />
+          <span className="hidden sm:inline">Feedback</span>
+        </button>
+      )}
+
+      <div className="transition-all duration-300 min-h-screen flex flex-col w-full">
         <header
           className={`sticky top-0 z-50 transition-all duration-300 ${
             scrolled ? "backdrop-blur-xl bg-black/80 border-b border-white/5 shadow-2xl" : "bg-black/30 backdrop-blur-sm"
@@ -78,8 +89,8 @@ export default function Layout({ children, currentPageName }) {
                 {currentPageName === 'PredictiveMaintenance' ? 'Dashboard' : currentPageName}
               </h1>
             </div>
-            
-            {/* Mobile Logo Fallback when sidebar is hidden */}
+
+            {/* Logo right side */}
             <div className="flex items-center gap-2">
               <VroomieLogo size="sm" />
             </div>
@@ -98,10 +109,16 @@ export default function Layout({ children, currentPageName }) {
               <VroomieLogo size="sm" />
               <span className="font-display font-bold text-zinc-400">Vroomie</span>
             </div>
-            <p>┬⌐ 2026 Vroomie AI Car Diagnostics. All rights reserved.</p>
+            <p>© 2026 Vroomie AI Car Diagnostics. All rights reserved.</p>
           </div>
         </footer>
       </div>
+
+      {/* Global Feedback Modal — rendered outside scroll container */}
+      <FeedbackModal
+        isOpen={feedbackOpen}
+        onClose={() => setFeedbackOpen(false)}
+      />
     </div>
   );
 }
