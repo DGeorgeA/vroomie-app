@@ -12,7 +12,8 @@ export default function AnalysisHistory({
   analyses = [], 
   isLoading = false,
   onSelectAnalysis,
-  onClearHistory
+  onClearHistory,
+  isDashboard = false
 }) {
   const [showDropdown, setShowDropdown] = useState(false);
 
@@ -76,52 +77,54 @@ export default function AnalysisHistory({
   return (
     <div className="space-y-6">
       {/* Workshop Executive Actions */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
-           <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center border border-blue-500/20 shadow-[0_0_15px_rgba(59,130,246,0.15)]">
-             <Activity className="w-5 h-5 text-blue-400" />
-           </div>
-           <div>
-             <h2 className="text-xl font-bold text-white tracking-tight leading-tight">Diagnostics Record</h2>
-             <p className="text-xs text-zinc-400 font-medium">Auto-syncing from hardware sensors</p>
-           </div>
-        </div>
-        
-        <div className="flex items-center gap-3">
-          <button 
-            onClick={() => onClearHistory && onClearHistory()}
-            title="Clear all records"
-            className="flex items-center justify-center w-10 h-10 rounded-lg bg-zinc-900 border border-red-900/40 text-red-500/80 hover:bg-red-950/40 hover:text-red-400 hover:border-red-500/50 transition-all"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
-        
-          <div className="relative">
+      {!isDashboard && (
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+             <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center border border-blue-500/20 shadow-[0_0_15px_rgba(59,130,246,0.15)]">
+               <Activity className="w-5 h-5 text-blue-400" />
+             </div>
+             <div>
+               <h2 className="text-xl font-bold text-white tracking-tight leading-tight">Diagnostics Record</h2>
+               <p className="text-xs text-zinc-400 font-medium">Auto-syncing from hardware sensors</p>
+             </div>
+          </div>
+          
+          <div className="flex items-center gap-3">
             <button 
-              onClick={() => setShowDropdown(!showDropdown)}
-              className="flex items-center gap-2 bg-white text-black hover:bg-zinc-200 px-5 py-2.5 rounded-lg text-sm font-bold transition-all shadow-[0_0_20px_rgba(255,255,255,0.1)] z-10"
+              onClick={() => onClearHistory && onClearHistory()}
+              title="Clear all records"
+              className="flex items-center justify-center w-10 h-10 rounded-lg bg-zinc-900 border border-red-900/40 text-red-500/80 hover:bg-red-950/40 hover:text-red-400 hover:border-red-500/50 transition-all"
             >
-              <Download className="w-4 h-4" />
-              Download Report
-              <ChevronDown className="w-3 h-3 text-zinc-600 ml-1" />
+              <Trash2 className="w-4 h-4" />
             </button>
-            
-            {showDropdown && (
-              <div className="absolute right-0 mt-2 w-56 bg-zinc-900 border border-zinc-800/80 rounded-xl shadow-2xl z-50 overflow-hidden">
-                <button onClick={triggerPDF} className="w-full text-left px-4 py-3 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-white flex items-center gap-3 transition-colors border-b border-zinc-800/50">
-                  <FileText className="w-4 h-4 text-red-400" /> Export Professional PDF
-                </button>
-                <button onClick={triggerCSV} className="w-full text-left px-4 py-3 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-white flex items-center gap-3 transition-colors">
-                  <FileSpreadsheet className="w-4 h-4 text-green-400" /> Export Raw CSV Metrics
-                </button>
-              </div>
-            )}
+          
+            <div className="relative">
+              <button 
+                onClick={() => setShowDropdown(!showDropdown)}
+                className="flex items-center gap-2 bg-white text-black hover:bg-zinc-200 px-5 py-2.5 rounded-lg text-sm font-bold transition-all shadow-[0_0_20px_rgba(255,255,255,0.1)] z-10"
+              >
+                <Download className="w-4 h-4" />
+                Download Report
+                <ChevronDown className="w-3 h-3 text-zinc-600 ml-1" />
+              </button>
+              
+              {showDropdown && (
+                <div className="absolute right-0 mt-2 w-56 bg-zinc-900 border border-zinc-800/80 rounded-xl shadow-2xl z-50 overflow-hidden">
+                  <button onClick={triggerPDF} className="w-full text-left px-4 py-3 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-white flex items-center gap-3 transition-colors border-b border-zinc-800/50">
+                    <FileText className="w-4 h-4 text-red-400" /> Export Professional PDF
+                  </button>
+                  <button onClick={triggerCSV} className="w-full text-left px-4 py-3 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-white flex items-center gap-3 transition-colors">
+                    <FileSpreadsheet className="w-4 h-4 text-green-400" /> Export Raw CSV Metrics
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Recurrences Overview */}
-      {aggregatedTrends.length > 0 && (
+      {!isDashboard && aggregatedTrends.length > 0 && (
         <div className="mb-6">
           <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Mechanical Flags Tracking</h3>
           <div className="space-y-2">

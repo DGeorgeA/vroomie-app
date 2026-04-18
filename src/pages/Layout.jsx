@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, Suspense } from "react";
+import React, { useState, useEffect, Suspense } from "react";
 import { useLocation } from "react-router-dom";
 import { useAuth } from '@/contexts/AuthContext';
 import { useUIStore } from '@/store/uiStore';
@@ -45,11 +45,16 @@ export default function Layout({ children, currentPageName }) {
       {!loading && user && <Sidebar />}
       {!loading && !user && <AuthPanel />}
 
+      {/* Sidebar Backdrop Overlay */}
+      {!loading && user && !isSidebarCollapsed && (
+        <div 
+          className="fixed inset-0 bg-black/60 z-40 backdrop-blur-sm transition-opacity" 
+          onClick={useUIStore.getState().toggleSidebar} 
+        />
+      )}
+
       <div 
-        className={`transition-all duration-300 min-h-screen flex flex-col`}
-        style={{
-          marginLeft: !loading && user ? (isSidebarCollapsed ? '5rem' : '16rem') : (!loading && !user ? '400px' : '0'),
-        }}
+        className="transition-all duration-300 min-h-screen flex flex-col w-full"
       >
         <header
           className={`sticky top-0 z-40 transition-all duration-300 ${
@@ -57,12 +62,23 @@ export default function Layout({ children, currentPageName }) {
           }`}
         >
           <div className="flex justify-between items-center h-16 px-6 lg:px-10">
-            <h1 className="text-xl font-bold tracking-tight text-white/90">
-              {currentPageName === 'PredictiveMaintenance' ? 'Dashboard' : currentPageName}
-            </h1>
+            <div className="flex items-center gap-4">
+              {/* Sidebar Toggle Button */}
+              {!loading && user && (
+                <button
+                  onClick={useUIStore.getState().toggleSidebar}
+                  className="p-2 -ml-2 rounded-lg hover:bg-white/5 text-zinc-400 hover:text-white transition-colors"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-menu"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
+                </button>
+              )}
+              <h1 className="text-xl font-bold tracking-tight text-white/90">
+                {currentPageName === 'PredictiveMaintenance' ? 'Dashboard' : currentPageName}
+              </h1>
+            </div>
             
             {/* Mobile Logo Fallback when sidebar is hidden */}
-            <div className="lg:hidden flex items-center gap-2">
+            <div className="flex items-center gap-2">
               <VroomieLogo size="sm" />
             </div>
           </div>
@@ -78,7 +94,7 @@ export default function Layout({ children, currentPageName }) {
           <div className="flex flex-col md:flex-row items-center justify-between gap-4 text-sm text-zinc-500">
             <div className="flex items-center gap-2">
               <VroomieLogo size="sm" />
-              <span className="font-bold text-zinc-400">Vroomie</span>
+              <span className="font-display font-bold text-zinc-400">Vroomie</span>
             </div>
             <p>┬⌐ 2026 Vroomie AI Car Diagnostics. All rights reserved.</p>
           </div>

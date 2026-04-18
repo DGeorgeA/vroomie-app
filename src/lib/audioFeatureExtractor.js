@@ -5,6 +5,7 @@ import { preprocessSignal, mixToMonoFromRaw, logSignalStats } from './audioPrepr
 import { generateMelSpectrogram } from './spectrogramGenerator';
 import { predictCNN, isCNNReady } from './cnnClassifier';
 import { initializeEmbeddingEngine, getAudioEmbedding, isEngineReady } from './mlEmbeddingEngine';
+import { initializeAudioDataset } from '../services/audioDatasetService';
 
 let isExtracting = false;
 let audioContext = null;
@@ -22,6 +23,7 @@ let lastEmbeddingTime = 0;
 let latestEmbedding = null;
 
 const FEATURE_SET = ['mfcc', 'rms', 'spectralCentroid', 'zcr', 'spectralFlatness', 'spectralRolloff'];
+let datasetInitialized = false;
 
 // CRITICAL: Must be power-of-2 for createScriptProcessor
 const SCRIPT_BUFFER_SIZE = 4096;
@@ -49,7 +51,13 @@ export async function startExtraction(callback) {
   onFeaturesExtractedCallback = callback;
   rollingPCMBuffer = [];
   latestEmbedding = null;
-  
+
+  // Initialize reference dataset (first time only, cached in IDB after)
+  if (!datasetInitialized) {
+    datasetInitialized = true;
+    initializeAudioDataset().catch(err => Logger.error('Dataset init failed', err));
+  }
+
   // Async background initialization of YAMNet
   initializeEmbeddingEngine().catch(err => Logger.error("Failed to load ML Embedding Engine", err));
   
@@ -167,7 +175,8 @@ export async function startExtraction(callback) {
           rawSignalFrame: processed,
           liveSpectrogram,
           liveEmbedding: latestEmbedding,
-          cnnResult: getDetectionMode() === 'ml' ? cnnResult : null
+          cnnResult: getDetectionMode() === 'ml' ? cnnResult : null,
+          sampleRate: actualSR,  // CRITICAL: needed for centroid normalization in matching engine
         });
       }
     };

@@ -71,7 +71,7 @@ export default function PredictiveMaintenance() {
           .from('analyses')
           .select('*')
           .order('created_at', { ascending: false })
-          .limit(100);
+          .limit(1);
 
         if (error) throw error;
         if (isMounted) {
@@ -136,7 +136,7 @@ export default function PredictiveMaintenance() {
         .from('analyses')
         .select('*')
         .order('created_at', { ascending: false })
-        .limit(100);
+        .limit(1);
 
       // LOG VALIDATION: print timestamps on every refetch
       console.group('[Vroomie] Timestamp Validation — Refetch');
@@ -367,65 +367,7 @@ export default function PredictiveMaintenance() {
           </GlassCard>
         </div>
 
-        {/* Status Overview Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4 mb-3 md:mb-6">
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
-            <GlassCard className="p-3 md:p-4">
-              <div className="flex items-center justify-between mb-1 md:mb-2">
-                <div className={`rounded-lg md:rounded-xl p-1.5 md:p-2 ${stats.overallHealth === 'healthy'
-                  ? 'bg-green-500/20 border border-green-500/30'
-                  : 'bg-yellow-500/20 border border-yellow-500/30'
-                  }`}>
-                  {stats.overallHealth === 'healthy' ? (
-                    <CheckCircle className="w-4 h-4 md:w-5 md:h-5 text-green-400" />
-                  ) : (
-                    <AlertTriangle className="w-4 h-4 md:w-5 md:h-5 text-yellow-400" />
-                  )}
-                </div>
-              </div>
-              <h3 className="text-base md:text-xl font-bold text-white mb-0.5 md:mb-1 capitalize">{stats.overallHealth}</h3>
-              <p className="text-gray-400 text-[10px] md:text-xs">Engine Status</p>
-            </GlassCard>
-          </motion.div>
-
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
-            <GlassCard className="p-3 md:p-4">
-              <div className="flex items-center justify-between mb-1 md:mb-2">
-                <div className="bg-yellow-500/20 border border-yellow-500/30 rounded-lg md:rounded-xl p-1.5 md:p-2">
-                  <AlertTriangle className="w-4 h-4 md:w-5 md:h-5 text-yellow-400" />
-                </div>
-              </div>
-              <h3 className="text-base md:text-xl font-bold text-white mb-0.5 md:mb-1">{stats.flagged}</h3>
-              <p className="text-gray-400 text-[10px] md:text-xs">Anomalies</p>
-            </GlassCard>
-          </motion.div>
-
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }}>
-            <GlassCard className="p-3 md:p-4">
-              <div className="flex items-center justify-between mb-1 md:mb-2">
-                <div className="bg-blue-500/20 border border-blue-500/30 rounded-lg md:rounded-xl p-1.5 md:p-2">
-                  <TrendingUp className="w-4 h-4 md:w-5 md:h-5 text-blue-400" />
-                </div>
-              </div>
-              <h3 className="text-base md:text-xl font-bold text-white mb-0.5 md:mb-1">{stats.avgConfidence.toFixed(1)}%</h3>
-              <p className="text-gray-400 text-[10px] md:text-xs">Accuracy</p>
-            </GlassCard>
-          </motion.div>
-
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }}>
-            <GlassCard className="p-3 md:p-4">
-              <div className="flex items-center justify-between mb-1 md:mb-2">
-                <div className="bg-purple-500/20 border border-purple-500/30 rounded-lg md:rounded-xl p-1.5 md:p-2">
-                  <Activity className="w-4 h-4 md:w-5 md:h-5 text-purple-400" />
-                </div>
-              </div>
-              <h3 className="text-base md:text-xl font-bold text-white mb-0.5 md:mb-1">{stats.total}</h3>
-              <p className="text-gray-400 text-[10px] md:text-xs">Analyses</p>
-            </GlassCard>
-          </motion.div>
-        </div>
-
-        {/* Analysis History */}
+        {/* Latest Analysis */}
         <div className="grid grid-cols-1 gap-3 md:gap-6">
           <motion.div
             initial={{ opacity: 0, x: 20 }}
@@ -433,16 +375,12 @@ export default function PredictiveMaintenance() {
             transition={{ delay: 0.7 }}
             className="lg:col-span-3"
           >
-            <GlassCard className="p-4 md:p-6">
-              <h2 className="text-lg md:text-xl font-bold text-white mb-4 md:mb-6">Analysis History</h2>
-
-              <AnalysisHistory
-                analyses={analyses}
-                isLoading={analysesLoading}
-                onSelectAnalysis={setSelectedAnalysis}
-                onClearHistory={handleClearHistory}
-              />
-            </GlassCard>
+            <AnalysisHistory
+              analyses={analyses}
+              isLoading={analysesLoading}
+              onSelectAnalysis={setSelectedAnalysis}
+              isDashboard={true}
+            />
           </motion.div>
         </div>
 
