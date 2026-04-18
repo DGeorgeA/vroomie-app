@@ -11,10 +11,15 @@ const SMOOTHING_WINDOW = 8;
 
 // ─── Calibrated real-world thresholds ────────────────────────────────────────
 // MFCC cosine similarity between live mic and WAV reference is inherently lower
-// than embedding-to-embedding comparison (different acoustic conditions, hardware)
-// Calibrated against known serpentine belt, bearing, and knocking test recordings.
+// than embedding-to-embedding comparison (different acoustic conditions, hardware,
+// ambient noise). Values calibrated against known belt, bearing, and knock recordings.
+//
+// ANOMALY_THRESHOLD  : minimum smoothed score to declare a confirmed anomaly
+// PROBABLE_THRESHOLD : minimum score to flag a "potential anomaly"
+// MIN_LIVE_RMS       : below this RMS level the signal is silence/music — skip matching entirely
 const ANOMALY_THRESHOLD   = 0.42; // was 0.65 — too strict for cross-condition MFCC match
 const PROBABLE_THRESHOLD  = 0.30; // was 0.55 — must catch "potential anomaly" cases
+const MIN_LIVE_RMS        = 0.005; // ~−46 dBFS — below this is silence, breath, or background music
 
 // ─── Hysteresis / stability requirements ─────────────────────────────────────
 const STABILITY_DURATION_MS = 5000; // was 8000 — faster lock-in
@@ -215,6 +220,27 @@ function computeSignalMatch(features) {
 // ═══════════════════════════════════════════════
 
 export function matchBuffer(features) {
+  // ── Live energy gate: reject silence, speech, and non-automotive signals ──
+  // If the live RMS is below MIN_LIVE_RMS the mic is capturing
+  // silence, breath, music, or background noise — no point comparing against
+  // automotive anomaly references.
+  if ((features.rms || 0) < MIN_LIVE_RMS) {
+    console.debug(`[Vroomie Detection] Energy gate: RMS=${(features.rms || 0).toFixed(5)} < ${MIN_LIVE_RMS} — skipping match (silence/noise)`);
+    return {
+      anomaly: null,
+      status: 'normal',
+      confidence: 0,
+      finalDecision: 'NO ANOMALY',
+      mode: 'hybrid_mfcc',
+      mlConfidence: 0,
+      signalSimilarity: 0,
+      detectedClass: null,
+      classifierSource: 'energy_gate',
+      source: null,
+      severity: 'low',
+    };
+  }
+
   // Layer 2: Hybrid Signal & Embedding matching
   const sigMatch = computeSignalMatch(features);
   
@@ -268,17 +294,12 @@ export function matchBuffer(features) {
   };
 
   // ── Structured diagnostic log (visible in browser DevTools > Console) ──────
-  if (sigMatch.finalScore > 0.1 || smoothed > 0.1) {
-    console.log('[Vroomie Detection]', JSON.stringify({
-      matched_pattern:   sigMatch.matchedFile,
-      similarity_score:  parseFloat(sigMatch.finalScore.toFixed(4)),
-      cosine:            parseFloat(sigMatch.cosine.toFixed(4)),
-      smoothed_score:    parseFloat(smoothed.toFixed(4)),
-      anomaly_threshold: ANOMALY_THRESHOLD,
-      probable_threshold: PROBABLE_THRESHOLD,
-      decision:          rawResult.finalDecision,
-      status:            rawResult.status,
-    }));
+  if (sigMatch.finalScore > 0.1 || smoothed > 0.1 || mlConf > 0.1) {
+    console.log(
+      `[Vroomie Detection] label: ${sigMatch.matchedFile || 'none'} | ` +
+      `signal_conf: ${smoothed.toFixed(3)} | ml_conf: ${mlConf.toFixed(3)} | ` +
+      `decision: ${rawResult.finalDecision} | rms: ${(features.rms || 0).toFixed(5)}`
+    );
   }
 
   

@@ -43,12 +43,27 @@ async function computeMFCCFromUrl(url) {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const arrayBuffer = await response.arrayBuffer();
     
-    const audioCtx = new OfflineAudioContext(1, 44100 * 5, 44100);
+    // Use 5s OfflineAudioContext at 16kHz — consistent, mono, normalized
+    const audioCtx = new OfflineAudioContext(1, 16000 * 5, 16000);
     const decoded = await audioCtx.decodeAudioData(arrayBuffer);
     
+    // Mix to mono: use channel 0 (already mono in OfflineAudioContext(1,...))
     const samples = decoded.getChannelData(0);
     const sampleRate = decoded.sampleRate;
-    return computeMFCC(samples, sampleRate);
+    
+    // ── Energy gate: reject silence or near-silence reference files ──────
+    const rms = Math.sqrt(samples.reduce((s, v) => s + v * v, 0) / samples.length);
+    if (rms < 0.0005) {
+      Logger.warn(`[Vroomie Dataset] Skipping silent/near-silent file: ${url} (RMS=${rms.toFixed(6)})`);
+      return null;
+    }
+    
+    // ── Amplitude normalize to peak = 1.0 ────────────────────────────────
+    const peak = samples.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+    const normalized = peak > 0 ? samples.map(v => v / peak) : samples;
+    
+    Logger.info(`[Vroomie Dataset] Processed: RMS=${rms.toFixed(4)} peak=${peak.toFixed(4)} SR=${sampleRate}`);
+    return computeMFCC(normalized, sampleRate);
   } catch (err) {
     Logger.warn(`MFCC decode failed for ${url}: ${err.message}`);
     return null;
@@ -159,6 +174,11 @@ export async function initializeAudioDataset() {
         });
       }
       
+      // Log loaded pattern details for DevTools validation
+      const labels = referenceIndex.map(r => r.label);
+      console.log(`[Vroomie Dataset] ✅ Loaded ${referenceIndex.length} patterns from Supabase DB:`, labels);
+      Logger.info(`Reference engine ready: ${referenceIndex.length} patterns loaded.`);
+      
       // Cache to IndexedDB
       if (db) {
         const tx = db.transaction('anomaly_references', 'readwrite');
@@ -267,6 +287,9 @@ export async function initializeAudioDataset() {
     }
     
     Logger.info(`🔍 Reference engine ready: ${referenceIndex.length} patterns from Storage.`);
+    // Final summary log for DevTools validation
+    const labels = referenceIndex.map(r => r.label);
+    console.log(`[Vroomie Dataset] ✅ Loaded ${referenceIndex.length} patterns from Storage:`, labels);
     
   } catch (err) {
     Logger.error('Storage-based initialization failed:', err);

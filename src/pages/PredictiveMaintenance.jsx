@@ -6,6 +6,7 @@ import AudioWaveform from "../components/predictive/AudioWaveform";
 import AudioRecorder from "../components/predictive/AudioRecorder";
 import AnalysisHistory from "../components/predictive/AnalysisHistory";
 import AnalysisDetails from "../components/predictive/AnalysisDetails";
+import CustomerFeedback from "../components/feedback/CustomerFeedback";
 import { toast } from 'sonner';
 import { LANGUAGES } from '@/utils/voice';
 import { supabase } from '../lib/supabase';
@@ -374,6 +375,10 @@ export default function PredictiveMaintenance() {
             </div>
           </GlassCard>
         </motion.div>
+
+        {/* ─── Customer Feedback ─────────────────────────────────────────── */}
+        <CustomerFeedback />
+
       </div>
     </div>
   );
