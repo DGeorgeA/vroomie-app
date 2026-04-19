@@ -10,6 +10,7 @@ const Trips                 = lazy(() => import(/* webpackChunkName: "trips" */ 
 const Settings              = lazy(() => import(/* webpackChunkName: "settings" */ "./Settings"));
 const AIUpdates             = lazy(() => import(/* webpackChunkName: "ai-updates" */ "./AIUpdates"));
 const ComingSoon            = lazy(() => import(/* webpackChunkName: "coming-soon" */ "./ComingSoon"));
+const ValidationBench       = lazy(() => import(/* webpackChunkName: "validation" */ "./ValidationBench"));
 
 function PageSkeleton() {
   return (
@@ -22,6 +23,11 @@ function PagesContent() {
     <Suspense fallback={<PageSkeleton />}>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/validate-audio" element={
+          <Layout currentPageName="Validate Audio">
+            <ValidationBench />
+          </Layout>
+        } />
 
         <Route path="/subscribe" element={
           <Layout currentPageName="Subscription">

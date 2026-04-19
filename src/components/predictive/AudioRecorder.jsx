@@ -52,6 +52,24 @@ export default function AudioRecorder({
       window.removeEventListener('offline', handleOffline);
     };
   }, []);
+
+  // Pre-warm microphone permission & pipeline to reduce overall latency when user clicks start
+  useEffect(() => {
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } })
+        .then(stream => {
+          // Keep permission active but stop tracks immediately
+          stream.getTracks().forEach(t => t.stop());
+        })
+        .catch(err => {
+          console.warn("Pre-warm mic check failed. Permission will be requested on first click.", err);
+        });
+    }
+    // Eagerly initialize AudioDataset to ensure it's loaded before click
+    import('../../services/audioDatasetService').then(({ initializeAudioDataset }) => {
+      initializeAudioDataset().catch(console.error);
+    });
+  }, []);
   
   const [debugStats, setDebugStats] = useState(null);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
@@ -106,7 +124,7 @@ export default function AudioRecorder({
     }
   };
 
-  const startRecording = async () => {
+  const startRecording = () => {
     try {
       // ══════════════════════════════════════════════════════════════
       // STEP 1 — INSTANT UI RESPONSE (0ms, no await, no async)
@@ -115,6 +133,9 @@ export default function AudioRecorder({
       // ══════════════════════════════════════════════════════════════
       sessionAnomaliesRef.current  = [];
       sessionConfidenceRef.current = [];
+
+      setRecordingResult(null); // SINGLE SOURCE OF TRUTH: clear previous run
+      setDetectedAnomaly(null); // SINGLE SOURCE OF TRUTH: clear previous run
 
       setIsRecording(true);    // ← triggers waveform BURST immediately
       setRecordingTime(0);
@@ -147,10 +168,38 @@ export default function AudioRecorder({
       const modeLabel = activeMode === 'ml' ? 'ML Mode' : 'Basic Mode';
       toast.success(`Recording started [${modeLabel}]`);
 
+      // Defer all heavy audio initialization to ensure UI renders instantly
+      setTimeout(() => {
+        _startExtractionAsync(activeMode).catch(error => {
+          // Revert all UI state if async setup failed
+          console.error("🚨 Error in deferred startRecording:", error);
+          setIsRecording(false);
+          if (timerRef.current) clearInterval(timerRef.current);
+          if (debugDebounceRef.current) {
+            clearTimeout(debugDebounceRef.current);
+            debugDebounceRef.current = null;
+          }
+          stopExtraction();
+
+          if (error.name === 'NotAllowedError' || error.message?.includes('Permission')) {
+            setMicPermissionDenied(true);
+            toast.error("Microphone access is required for real-time analysis.");
+          } else {
+            toast.error("Failed to start the audio engine. Ensure your device has a working microphone.");
+          }
+        });
+      }, 0);
+
+    } catch (error) {
+      console.error(error);
+      toast.error("Failed to start recording");
+    }
+  };
+
+  const _startExtractionAsync = async (activeMode) => {
       // ══════════════════════════════════════════════════════════════
       // STEP 2 — ASYNC: Initialise audio processing in background
       // UI already shows "recording". Mic permission happens here.
-      // On fast browsers / pre-granted permission, this is <50ms.
       // ══════════════════════════════════════════════════════════════
       await startExtraction((features) => {
         const workerResult = features._workerResult || {};
@@ -245,29 +294,10 @@ export default function AudioRecorder({
       };
 
       mediaRecorder.start(1000);
-
-    } catch (error) {
-      // Revert all UI state if async setup failed
-      console.error("🚨 Error in startRecording:", error);
-      setIsRecording(false);
-      if (timerRef.current) clearInterval(timerRef.current);
-      if (debugDebounceRef.current) {
-        clearTimeout(debugDebounceRef.current);
-        debugDebounceRef.current = null;
-      }
-      stopExtraction();
-
-      if (error.name === 'NotAllowedError' || error.message?.includes('Permission')) {
-        setMicPermissionDenied(true);
-        toast.error("Microphone access is required for real-time analysis.");
-      } else {
-        toast.error("Failed to start the audio engine. Ensure your device has a working microphone.");
-      }
-    }
   };
 
-  const stopRecording = useCallback(() => {
 
+  const stopRecording = useCallback(() => {
     try {
       // Clear any pending debug debounce
       if (debugDebounceRef.current) {
@@ -275,25 +305,30 @@ export default function AudioRecorder({
         debugDebounceRef.current = null;
       }
 
-      if (mediaRecorderRef.current && isRecording) {
-        if (mediaRecorderRef.current.state === "recording") {
-          mediaRecorderRef.current.stop();
-        }
+      if (isRecording) {
+        // INSTANT UI UPDATE
         setIsRecording(false);
-        stopExtraction(); // releases AudioWorklet + Worker + stream
-
+        
         if (timerRef.current) {
           clearInterval(timerRef.current);
         }
 
         clearContinuousAlert();
         toast.info("Processing audio...");
+
+        // DEFER HEAVY CLEANUP
+        setTimeout(() => {
+          if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+            mediaRecorderRef.current.stop();
+          }
+          stopExtraction(); // releases AudioWorklet + Worker + stream
+        }, 0);
       }
     } catch (error) {
       console.error("Error stopping recording:", error);
       toast.error("Failed to stop recording cleanly");
       setIsRecording(false);
-      stopExtraction();
+      setTimeout(() => stopExtraction(), 0);
     }
   }, [isRecording]);
 

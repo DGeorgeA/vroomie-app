@@ -13,11 +13,11 @@
 import { supabase } from '../lib/supabase';
 import { Logger } from '../lib/logger';
 import { openDB } from 'idb';
+import { TARGET_SR, computeCompositeEmbedding } from '../lib/audioMath_v11.js';
 
 export let referenceIndex = [];
 
 const BUCKET = 'anomaly-patterns';
-const TARGET_SR = 16000;
 const REF_DURATION = 5; // Use first 5 seconds of each reference file
 
 // ─── IndexedDB Cache ─────────────────────────────────────────────────────────
@@ -62,109 +62,8 @@ function inferMetadata(filename) {
   return { category: 'unknown_anomaly', severity: 'medium', label: `anomaly_${name}` };
 }
 
-// ─── Composite feature vector (Log-Mel(64) + MFCC(13) + RMS(1) + ZCR(1) + Centroid(1) = 80 dims) ─
-export function computeCompositeEmbedding(samples, sampleRate) {
-  const N_MFCC = 13;
-  const N_FFT = 512;
-  const HOP = 160;   // 10ms at 16kHz
-  const N_MELS = 64; // Log-Mel specified by user
-
-  const melMin = 0;
-  const melMax = 2595 * Math.log10(1 + (sampleRate / 2) / 700);
-  const melPoints = Array.from({ length: N_MELS + 2 }, (_, i) =>
-    melMin + i * (melMax - melMin) / (N_MELS + 1)
-  );
-  const hzPoints = melPoints.map(m => 700 * (10 ** (m / 2595) - 1));
-  const fftBins = hzPoints.map(h => Math.floor((N_FFT + 1) * h / sampleRate));
-
-  const numFrames = Math.max(1, Math.floor((samples.length - N_FFT) / HOP));
-  
-  const melEnergies = new Float32Array(N_MELS);
-  let totalZCR = 0;
-  let totalRMS = 0;
-  let totalCentroid = 0;
-
-  for (let frame = 0; frame < numFrames; frame++) {
-    const start = frame * HOP;
-    const spectrum = new Float32Array(N_FFT / 2 + 1);
-    let frameRMS = 0;
-    
-    // ZCR calculation
-    let zcr = 0;
-    for (let c = 1; c < N_FFT; c++) {
-      if ((samples[start + c] >= 0) !== (samples[start + c - 1] >= 0)) zcr++;
-    }
-    totalZCR += zcr / N_FFT;
-
-    for (let k = 0; k < N_FFT / 2 + 1; k++) {
-      let re = 0, im = 0;
-      for (let n = 0; n < N_FFT; n++) {
-        const s = samples[start + n] || 0;
-        frameRMS += s * s;
-        const w = 0.54 - 0.46 * Math.cos(2 * Math.PI * n / (N_FFT - 1));
-        const angle = -2 * Math.PI * k * n / N_FFT;
-        re += s * w * Math.cos(angle);
-        im += s * w * Math.sin(angle);
-      }
-      spectrum[k] = Math.sqrt(re * re + im * im);
-    }
-    
-    frameRMS = Math.sqrt(frameRMS / N_FFT);
-    totalRMS += frameRMS;
-
-    // Centroid
-    let weightedSum = 0, powerSum = 0;
-    for (let k = 0; k < spectrum.length; k++) {
-      weightedSum += k * spectrum[k];
-      powerSum += spectrum[k];
-    }
-    totalCentroid += powerSum > 0 ? (weightedSum / powerSum) / (spectrum.length) : 0;
-
-    for (let m = 0; m < N_MELS; m++) {
-      let energy = 0;
-      for (let bin = fftBins[m]; bin < fftBins[m + 2]; bin++) {
-        if (bin < spectrum.length) {
-           const frac = bin < fftBins[m + 1]
-            ? (bin - fftBins[m]) / Math.max(1, fftBins[m + 1] - fftBins[m])
-            : (fftBins[m + 2] - bin) / Math.max(1, fftBins[m + 2] - fftBins[m + 1]);
-           energy += spectrum[bin] * Math.max(0, frac);
-        }
-      }
-      melEnergies[m] += Math.log(Math.max(energy, 1e-10));
-    }
-  }
-
-  for (let m = 0; m < N_MELS; m++) melEnergies[m] /= numFrames;
-  
-  const mfcc = new Float32Array(N_MFCC);
-  for (let k = 0; k < N_MFCC; k++) {
-    let sum = 0;
-    for (let m = 0; m < N_MELS; m++) {
-      sum += melEnergies[m] * Math.cos(Math.PI * k * (m + 0.5) / N_MELS);
-    }
-    mfcc[k] = sum;
-  }
-
-  const avgRMS = totalRMS / numFrames;
-  const avgZCR = totalZCR / numFrames;
-  const avgCentroid = totalCentroid / numFrames;
-
-  // L2 Normalize individual vectors before stacking
-  const normalize = (vec) => {
-    const norm = Math.sqrt(vec.reduce((a, v) => a + v * v, 0)) || 1;
-    return Array.from(vec).map(v => v / norm);
-  };
-
-  const normMel = normalize(melEnergies);
-  const normMfcc = normalize(mfcc);
-  
-  // Create final composite 80-dim embedding (64 Mel + 13 MFCC + 3 Stats)
-  const embedding = [...normMel, ...normMfcc, avgRMS, avgZCR, avgCentroid];
-  
-  // Global L2 norm
-  const globalNorm = Math.sqrt(embedding.reduce((a, v) => a + v * v, 0)) || 1;
-  return embedding.map(v => parseFloat((v / globalNorm).toFixed(6)));
-}
+// ─── Composite feature vector — SHARED LOGIC ─────────────────────────────────
+// (Imported from ../lib/audioMath.js)
 
 // ─── Full preprocessing pipeline — MUST BE IDENTICAL TO LIVE PIPELINE ─────────
 function preprocessAudioBuffer(rawSamples, sourceSR) {
@@ -278,20 +177,47 @@ export function computeFeaturesFromAudioBuffer(audioBuffer) {
   return computeCompositeEmbedding(processed, TARGET_SR);
 }
 
+// ─── Initialization helper ──────────────────────────────────────────────────
+
 // ─── Main: Initialize reference library ──────────────────────────────────────
 export async function initializeAudioDataset() {
+  if (referenceIndex && referenceIndex.length > 0) return;
+
   referenceIndex = [];
   Logger.info('🎵 Initializing Vroomie Anomaly Reference Library...');
 
-  const db = await initDB().catch(() => null);
+  try {
+    // 1. Try engine_audio_patterns
+    const { data: patterns, error } = await supabase.from('engine_audio_patterns').select('*');
+    if (!error && patterns && patterns.length > 0) {
+      for (const ref of patterns) {
+        let vec = ref.embedding_vector || ref.features || ref.vector;
+        if (typeof vec === 'string') {
+          try { vec = JSON.parse(vec); } catch { continue; }
+        }
+        if (!Array.isArray(vec) || vec.length === 0) continue;
 
-  // ── STEP 1: Try IndexedDB Cache (fastest, offline-capable) ──────────────
-  if (db) {
-    try {
-      const cached = await db.getAll('computed_composite_refs');
-      if (cached && cached.length > 0) {
-        // High fidelity dimension check ~80 dims
-        const valid = cached.filter(c => Array.isArray(c.embedding_vector) && c.embedding_vector.length >= 75);
+        referenceIndex.push({
+          id: ref.id,
+          label: ref.label || ref.name || 'unknown_anomaly',
+          category: ref.category || 'unknown',
+          severity: ref.severity || 'medium',
+          source: 'supabase_engine_audio_patterns',
+          embedding_vector: vec, 
+        });
+      }
+      console.log(`[Vroomie Dataset] ✅ Loaded ${referenceIndex.length} anomaly patterns from engine_audio_patterns DB table.`);
+      return;
+    }
+
+    Logger.warn('⚠️ engine_audio_patterns is empty or unavailable. Falling back to identical preprocessing from storage bucket...');
+
+    // 2. Try IDB Cache
+    const db = await initDB().catch(() => null);
+    if (db) {
+      try {
+        const cached = await db.getAll('computed_composite_refs');
+        const valid = (cached || []).filter(c => Array.isArray(c.embedding_vector) && c.embedding_vector.length >= 75);
         if (valid.length > 0) {
           referenceIndex = valid.map(c => ({
             label: c.label,
@@ -301,130 +227,62 @@ export async function initializeAudioDataset() {
             source: 'idb_composite_cache',
             embedding_vector: c.embedding_vector,
           }));
-          console.log(`[Vroomie Dataset] ✅ Loaded ${referenceIndex.length} semantic references from IDB cache:`, referenceIndex.map(r => r.label));
-          Logger.info(`Reference engine ready: ${referenceIndex.length} patterns from IDB.`);
+          console.log(`[Vroomie Dataset] ✅ Loaded ${referenceIndex.length} references from IDB cache.`);
           return;
         }
-      }
-    } catch (e) {
-      Logger.warn('IDB read failed:', e.message);
+      } catch (e) { Logger.warn('IDB read failed:', e.message); }
     }
-  }
 
-  // ── STEP 2: Compute Embeddings from Storage bucket files ────────────────
-  Logger.info(`📂 Fetching audio from '${BUCKET}' bucket and computing composite embeddings...`);
-
-  try {
-    const { data: files, error: listErr } = await supabase.storage
-      .from(BUCKET)
-      .list('', { limit: 200, sortBy: { column: 'name', order: 'asc' } });
-
-    if (listErr) {
-      Logger.error('Storage list failed:', listErr.message);
-      // Fall back to Supabase anomaly_references as last resort
-      await loadFromSupabaseDB();
+    // 3. Compute Embeddings from Storage bucket using computeFeaturesFromUrl (IDENTICAL PREPROCESSING)
+    const { data: files, error: listErr } = await supabase.storage.from('anomaly-patterns').list('', { limit: 200, sortBy: { column: 'name', order: 'asc' } });
+    if (listErr || !files || files.length === 0) {
+      Logger.error('Storage list failed or empty:', listErr?.message);
       return;
     }
 
-    const audioFiles = (files || []).filter(f => f.name && /\.(wav|mp3|ogg|webm)$/i.test(f.name));
-
-    if (audioFiles.length === 0) {
-      Logger.warn('⚠️ No audio files found in anomaly-patterns bucket.');
-      await loadFromSupabaseDB();
-      return;
-    }
-
-    Logger.info(`Found ${audioFiles.length} audio files. Computing MFCC features (same pipeline as live audio)...`);
-
+    const audioFiles = files.filter(f => f.name && /\.(wav|mp3|ogg|webm)$/i.test(f.name));
     const computed = [];
 
     for (const file of audioFiles) {
-      const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(file.name);
-      const publicUrl = urlData.publicUrl;
-      const meta = inferMetadata(file.name);
+      const { data: urlData } = supabase.storage.from('anomaly-patterns').getPublicUrl(file.name);
+      
+      // Basic infer Metadata based on filename (e.g. piston_knock.wav)
+      const fileNameLower = file.name.toLowerCase();
+      let label = 'anomaly';
+      let severity = 'medium';
+      if (fileNameLower.includes('piston') || fileNameLower.includes('knock')) { label = 'Piston Knock'; severity = 'critical'; }
+      else if (fileNameLower.includes('misfire')) { label = 'Engine Misfire'; severity = 'critical'; }
+      else if (fileNameLower.includes('belt') || fileNameLower.includes('squeal')) { label = 'Belt Squeal'; severity = 'warning'; }
 
       try {
-        const features = await computeFeaturesFromUrl(publicUrl);
+        const features = await computeFeaturesFromUrl(urlData.publicUrl);
         if (!features || features.length === 0) continue;
-
         const entry = {
-          label: meta.label,
-          category: meta.category,
-          severity: meta.severity,
+          label: label,
+          category: 'engine',
+          severity: severity,
           source_file: file.name,
           source: 'storage_mfcc',
           embedding_vector: features,
         };
-
         computed.push(entry);
         referenceIndex.push(entry);
-        Logger.info(`  ✅ ${file.name} → [${meta.category}] MFCC dim=${features.length}`);
       } catch (err) {
-        Logger.warn(`  ❌ Skipping ${file.name}: ${err.message}`);
+        Logger.warn(`❌ Skipping ${file.name}: ${err.message}`);
       }
     }
 
-    if (referenceIndex.length === 0) {
-      Logger.warn('No MFCC embeddings computed. Falling back to Supabase DB.');
-      await loadFromSupabaseDB();
-      return;
-    }
-
-    // Cache to IndexedDB for future loads
-    if (db && computed.length > 0) {
+    if (referenceIndex.length > 0 && db) {
       try {
         const tx = db.transaction('computed_composite_refs', 'readwrite');
         await tx.store.clear();
         for (const entry of computed) await tx.store.put(entry);
         await tx.done;
-        Logger.info(`💾 Cached ${computed.length} composite embeddings to IDB.`);
-      } catch (e) {
-        Logger.warn('IDB write failed:', e.message);
-      }
+      } catch (e) { }
     }
 
-    console.log(`[Vroomie Dataset] ✅ Loaded ${referenceIndex.length} anomaly patterns from Storage:`, referenceIndex.map(r => r.label));
-    Logger.info(`🔍 Reference engine ready: ${referenceIndex.length} patterns loaded (Composite-consistent).`);
+    console.log(`[Vroomie Dataset] ✅ Loaded ${referenceIndex.length} patterns by computing identical features from Storage.`);
   } catch (err) {
-    Logger.error('Storage-based initialization failed:', err);
-    await loadFromSupabaseDB();
-  }
-}
-
-// ── Last resort: load Supabase DB refs (may be YAMNet vectors — flag as such) ─
-async function loadFromSupabaseDB() {
-  try {
-    const { data: dbRefs, error } = await supabase
-      .from('anomaly_references')
-      .select('id,label,category,source_file,embedding_vector');
-
-    if (error || !dbRefs || dbRefs.length === 0) {
-      Logger.error('No reference data available from any source. Matching will be disabled.');
-      return;
-    }
-
-    for (const ref of dbRefs) {
-      let vec = ref.embedding_vector;
-      if (typeof vec === 'string') {
-        try { vec = JSON.parse(vec); } catch { continue; }
-      }
-      if (!Array.isArray(vec) || vec.length === 0) continue;
-
-      // NOTE: These are YAMNet 1024-dim — only usable when live YAMNet is active
-      referenceIndex.push({
-        id: ref.id,
-        label: ref.label,
-        category: ref.category,
-        source_file: ref.source_file,
-        source: 'supabase_yamnet',
-        embedding_vector: vec,
-        isYAMNet: true,
-      });
-    }
-
-    console.log(`[Vroomie Dataset] ⚠️ Loaded ${referenceIndex.length} YAMNet refs from DB (live MFCC matching will be degraded):`, referenceIndex.map(r => r.label));
-    Logger.info(`Reference engine (YAMNet mode): ${referenceIndex.length} patterns`);
-  } catch (err) {
-    Logger.error('Supabase DB fallback also failed:', err);
+    Logger.error('Dataset initialization failed completely:', err);
   }
 }

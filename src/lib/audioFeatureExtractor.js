@@ -11,7 +11,8 @@
 
 import { getDetectionMode } from './detectionMode';
 import { Logger } from './logger';
-import { referenceIndex, initializeAudioDataset, computeCompositeEmbedding } from '../services/audioDatasetService';
+import { referenceIndex, initializeAudioDataset } from '../services/audioDatasetService';
+import { computeCompositeEmbedding } from './audioMath_v11';
 import { initializeEmbeddingEngine, getAudioEmbedding, isEngineReady } from './mlEmbeddingEngine';
 
 // ─── Module-level state ───────────────────────────────────

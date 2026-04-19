@@ -2,6 +2,7 @@ import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { useUIStore } from '@/store/uiStore';
+import { useSettingsStore } from '@/store/settingsStore';
 import VroomieLogo from '@/components/ui/VroomieLogo';
 import {
   LayoutDashboard,
@@ -12,6 +13,7 @@ import {
   CalendarCheck,
   Bookmark,
   CreditCard,
+  ShieldCheck,
 } from 'lucide-react';
 
 // ─── Active routes (fully implemented) ──────────────────────────────────────
@@ -29,9 +31,15 @@ const SOON_ITEMS = [
   { name: 'Payments',  path: '/payments', icon: CreditCard },
 ];
 
-export default function Sidebar() {
+const Sidebar = React.memo(function Sidebar() {
   const { user, isPro } = useAuth();
   const { isSidebarCollapsed, toggleSidebar } = useUIStore();
+  const showValidationMenu = useSettingsStore(state => state.showValidationMenu);
+
+  const activeLinks = [...ACTIVE_ITEMS];
+  if (showValidationMenu) {
+    activeLinks.push({ name: 'Validate Audio', path: '/validate-audio', icon: ShieldCheck });
+  }
 
   if (!user) return null;
 
@@ -40,6 +48,7 @@ export default function Sidebar() {
       className={`fixed left-0 top-0 h-screen bg-zinc-950 border-r border-white/5 transition-transform duration-300 ease-in-out z-50 flex flex-col w-64 ${
         isSidebarCollapsed ? '-translate-x-full' : 'translate-x-0'
       }`}
+      style={{ willChange: 'transform' }}
     >
       {/* Header */}
       <div className="h-16 flex justify-between items-center px-4 border-b border-white/5 flex-shrink-0">
@@ -60,7 +69,7 @@ export default function Sidebar() {
       <nav className="flex-1 py-4 px-3 flex flex-col gap-1 overflow-y-auto">
 
         {/* Active items */}
-        {ACTIVE_ITEMS.map((item) => (
+        {activeLinks.map((item) => (
           <NavLink
             key={item.path}
             to={item.path}
@@ -107,6 +116,7 @@ export default function Sidebar() {
               src={`https://api.dicebear.com/7.x/notionists/svg?seed=${user.email}`}
               alt="Avatar"
               className="w-8 h-8 rounded-full opacity-80"
+              loading="lazy"
             />
           </div>
           <div className="overflow-hidden flex-1 min-w-0">
@@ -119,4 +129,6 @@ export default function Sidebar() {
       </div>
     </aside>
   );
-}
+});
+
+export default Sidebar;

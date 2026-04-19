@@ -9,7 +9,7 @@ import { toast } from 'sonner';
 import {
   User, Bell, Volume2, Shield, CreditCard,
   Languages, Activity, LogOut, Mic, Database,
-  History, ChevronRight, CheckCircle2, Zap, Lock
+  History, ChevronRight, CheckCircle2, Zap, Lock, Wrench
 } from 'lucide-react';
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -101,6 +101,7 @@ export default function Settings() {
     detectionMode, setDetectionMode: setMode,
     saveHistory, setSaveHistory,
     dataCollectionEnabled, setDataCollection,
+    showValidationMenu, setShowValidationMenu,
     hydrate,
   } = useSettingsStore();
 
@@ -414,6 +415,28 @@ export default function Settings() {
               onChange={(v) => {
                 setDataCollection(v);
                 toast.success(v ? 'Anonymous sharing enabled' : 'Anonymous sharing disabled');
+              }}
+            />
+          }
+        />
+      </SettingsCard>
+
+      {/* ══ DEVELOPER OPTIONS ══════════════════════════════════════════════ */}
+      <SectionHeader title="Developer Options" />
+      <SettingsCard>
+        {/* Validation Menu Toggle */}
+        <SettingsRow
+          icon={Wrench}
+          iconColor="text-zinc-400"
+          title="Show Validation Bench"
+          description="Display 'Validate Audio' QA tool in the sidebar menu"
+          border={false}
+          right={
+            <Toggle
+              enabled={showValidationMenu}
+              onChange={(v) => {
+                setShowValidationMenu(v);
+                toast.success(v ? 'Validation bench enabled in menu' : 'Validation bench hidden');
               }}
             />
           }

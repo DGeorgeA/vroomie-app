@@ -26,9 +26,10 @@ let lastReportedScore = 0;
 
 // ── Public: settingsStore override ────────────────────────────────────────────
 export function applyThresholdOverride({ anomalyThreshold, rmsGate }) {
-  if (anomalyThreshold != null) ANOMALY_THRESHOLD = anomalyThreshold;
+  // STRICT OVERRIDE BLOCKED - Hard-locked at 0.80
+  // if (anomalyThreshold != null) ANOMALY_THRESHOLD = anomalyThreshold;
   if (rmsGate          != null) MIN_LIVE_RMS       = rmsGate;
-  console.log(`[VM] Thresholds updated: anomaly=${ANOMALY_THRESHOLD} rms=${MIN_LIVE_RMS}`);
+  console.log(`[VM] Thresholds updated: anomaly=${ANOMALY_THRESHOLD} (LOCKED) rms=${MIN_LIVE_RMS}`);
 }
 
 export function resetMatchState() {

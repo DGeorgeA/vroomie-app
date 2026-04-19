@@ -39,6 +39,7 @@ const DEFAULT_SETTINGS = {
   detectionMode: 'basic',     // 'basic' | 'ml'
   saveHistory: true,
   dataCollectionEnabled: true,
+  showValidationMenu: false,
 };
 
 // ─── LocalStorage helpers ──────────────────────────────────────────────────────
@@ -170,6 +171,15 @@ export const useSettingsStore = create((set, get) => ({
     const s = get();
     const next = { ...s, dataCollectionEnabled: enabled };
     set({ dataCollectionEnabled: enabled });
+    saveToStorage(next);
+    syncToSupabase(s._userId, next);
+  },
+
+  // ── Developer Options ─────────────────────────────────────────────────────
+  setShowValidationMenu(enabled) {
+    const s = get();
+    const next = { ...s, showValidationMenu: enabled };
+    set({ showValidationMenu: enabled });
     saveToStorage(next);
     syncToSupabase(s._userId, next);
   },
