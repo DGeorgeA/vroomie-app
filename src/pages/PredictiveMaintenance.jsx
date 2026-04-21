@@ -171,11 +171,21 @@ export default function PredictiveMaintenance() {
     return { total, flagged, avgConfidence, overallHealth };
   }, [analyses]);
 
+  // Called when AudioRecorder's async mic init succeeds — wire live analyser into AudioWaveform
+  const handleAnalyserReady = useCallback((ctx, analyserNode) => {
+    setAudioContext(ctx);
+    setAnalyser(analyserNode);
+    setIsRecording(true); // ensure parent state matches AudioRecorder's internal state
+  }, []);
+
   const handleRecordingComplete = () => {
+    setIsRecording(false);
+    setAnalyser(null);
+    setAudioContext(null);
     // DB write propagation delay before refetch
     setTimeout(() => refetchAnalyses(), 1500);
 
-    // ── Inactivity-based feedback popup ────────────────────────────────
+    // ── Inactivity-based feedback popup ────────────────────────────────────
     // Behavior: If user does NOTHING for 5 seconds after stopping → show popup.
     // If user interacts AT ALL during those 5 seconds → cancel popup entirely.
 
@@ -209,6 +219,7 @@ export default function PredictiveMaintenance() {
 
   // Cancel the feedback timer and listeners whenever recording restarts
   const handleRecordingStart = () => {
+    setIsRecording(true);
     if (feedbackTimerRef.current) {
       clearTimeout(feedbackTimerRef.current);
       feedbackTimerRef.current = null;
@@ -359,6 +370,7 @@ export default function PredictiveMaintenance() {
                     vehicleId={selectedVehicle?.id || 'guest-vehicle'}
                     onRecordingComplete={handleRecordingComplete}
                     onRecordingStart={handleRecordingStart}
+                    onAnalyserReady={handleAnalyserReady}
                     language={language}
                   />
                 </div>

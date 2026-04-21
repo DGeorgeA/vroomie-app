@@ -58,7 +58,7 @@ export function fftInPlace(re, im) {
   }
 }
 
-export const PIPELINE_VERSION = "11.0.TEMPORAL";
+export const PIPELINE_VERSION = "11.5.STABLE";
 
 let _cachedFB = null;
 let _cachedBW = null; // Filter bandwidths
@@ -102,7 +102,7 @@ export function getMelFilterbank(sr) {
 export function l2Norm(arr) {
   let n = 0;
   for (let i = 0; i < arr.length; i++) n += arr[i] * arr[i];
-  n = Math.sqrt(n) || 1;
+  n = Math.sqrt(n) || 1e-10;
   const out = new Float32Array(arr.length);
   for (let i = 0; i < arr.length; i++) out[i] = arr[i] / n;
   return out;
@@ -221,14 +221,10 @@ export function computeCompositeEmbedding(samples, sr) {
   raw.set(normMean, 0);
   raw.set(normSD,   N_MELS);
   raw.set(normMfcc, N_MELS * 2);
-  raw[N_MELS * 2 + N_MFCC] = spectralFlatness;
-  raw[N_MELS * 2 + N_MFCC + 1] = avgRMS * 2.0;
-  raw[N_MELS * 2 + N_MFCC + 2] = avgZCR * 2.0;
-  raw[N_MELS * 2 + N_MFCC + 3] = avgCentroid * 2.0;
+  raw[N_MELS * 2 + N_MFCC] = spectralFlatness; // [141]
+  raw[N_MELS * 2 + N_MFCC + 1] = Math.min(1.0, avgRMS * 1.5);
+  raw[N_MELS * 2 + N_MFCC + 2] = Math.min(1.0, avgZCR * 2.0);
+  raw[N_MELS * 2 + N_MFCC + 3] = Math.min(1.0, avgCentroid * 1.2);
 
-  let gn = 0;
-  for (let i = 0; i < raw.length; i++) gn += raw[i] * raw[i];
-  gn = Math.sqrt(gn) || 1;
-  
-  return Array.from(raw).map(v => v / gn);
+  return l2Norm(raw);
 }

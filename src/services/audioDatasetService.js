@@ -13,7 +13,7 @@
 import { supabase } from '../lib/supabase';
 import { Logger } from '../lib/logger';
 import { openDB } from 'idb';
-import { TARGET_SR, computeCompositeEmbedding } from '../lib/audioMath_v11.js';
+import { TARGET_SR, computeCompositeEmbedding, PIPELINE_VERSION } from '../lib/audioMath_v11.js';
 
 export let referenceIndex = [];
 
@@ -184,7 +184,7 @@ export async function initializeAudioDataset() {
   if (referenceIndex && referenceIndex.length > 0) return;
 
   referenceIndex = [];
-  Logger.info('🎵 Initializing Vroomie Anomaly Reference Library...');
+  Logger.info(`🎵 Initializing Vroomie Anomaly Reference Library [${PIPELINE_VERSION}]...`);
 
   try {
     // 1. Try engine_audio_patterns
@@ -217,7 +217,8 @@ export async function initializeAudioDataset() {
     if (db) {
       try {
         const cached = await db.getAll('computed_composite_refs');
-        const valid = (cached || []).filter(c => Array.isArray(c.embedding_vector) && c.embedding_vector.length >= 75);
+        // V11.5 HARDENING: Require 145-dim vectors (min 140)
+        const valid = (cached || []).filter(c => Array.isArray(c.embedding_vector) && c.embedding_vector.length >= 140);
         if (valid.length > 0) {
           referenceIndex = valid.map(c => ({
             label: c.label,

@@ -16,10 +16,10 @@ import { referenceIndex } from '../services/audioDatasetService';
 import { Logger } from './logger';
 
 // ── Strict Production Thresholds ──────────────────────────────────────────────
-let ANOMALY_THRESHOLD = 0.80;  // STRICT: Temporal 80-dim matches must be >= 0.80
+let ANOMALY_THRESHOLD = 0.82;  // STRICT: v11.5 matches must be >= 0.82
 let MIN_LIVE_RMS      = 0.005; // Quick ignore for dead silence
 
-const FAST_REJECT_COSINE  = 0.50; // We can confidently reject < 0.50 on 80-dim vectors
+const FAST_REJECT_COSINE  = 0.40; // Reduced tolerance due to high-dimensional space
 
 // ── Runtime state ─────────────────────────────────────────────────────────────
 let lastReportedScore = 0;
@@ -39,9 +39,9 @@ export function resetMatchState() {
 
 // ── Cosine similarity ─────────────────────────────────────────────────────────
 function cosine(a, b) {
-  const len = Math.min(a.length, b.length);
+  if (a.length !== b.length) return 0;
   let dot = 0, nA = 0, nB = 0;
-  for (let i = 0; i < len; i++) {
+  for (let i = 0; i < a.length; i++) {
     dot += a[i] * b[i];
     nA  += a[i] * a[i];
     nB  += b[i] * b[i];
@@ -61,7 +61,7 @@ function findBestMatch(live) {
 
   for (const ref of referenceIndex) {
     const refVec = ref.embedding_vector;
-    if (!Array.isArray(refVec) || refVec.length < 50) continue; // Expecting ~80 dims
+    if (!Array.isArray(refVec) || refVec.length < 140) continue; // Expecting ~145 dims (v11.3)
     
     const rawCos = cosine(live, refVec);
     if (rawCos < FAST_REJECT_COSINE) continue;
@@ -131,10 +131,9 @@ export function matchBuffer(features) {
     Logger.debug(`[VM] Temporal Match: raw=${match.score.toFixed(3)} label=${match.label ?? 'none'}`);
   }
 
-  // STRICT RULE: If < 0.80, ALWAYS return No anomalies found
+  // STRICT RULE: If < 0.82 (v11.5), ALWAYS return No anomalies found
   if (match.score >= ANOMALY_THRESHOLD && match.label) {
     lastReportedScore = match.score;
-    // We do not need consecutive frames anymore because the temporal window IS the sequence.
     Logger.info(`❗ TEMPORAL MATCH CONFIRMED: ${match.label} (score=${match.score.toFixed(3)})`);
     return _anomaly({ label: match.label, severity: match.severity }, match.score, rms);
   }
@@ -168,7 +167,7 @@ function _noAnomaly(rms, reason) {
     signalSimilarity: 0,
     mlConfidence:     0,
     finalDecision:    'NO ANOMALY',
-    mode:             'temporal_embed_v7',
+    mode:             'temporal_embed_v11_5',
     detectedClass:    null,
     classifierSource: reason,
     source:           null,

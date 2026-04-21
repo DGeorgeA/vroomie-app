@@ -17,11 +17,14 @@ import { useSettingsStore } from "@/store/settingsStore";
 export default function AudioRecorder({
   onRecordingComplete,
   onRecordingStart,
+  onAnalyserReady,
   vehicleId,
   isAnalyzing = false,
   language = 'en-US'
 }) {
   const [isRecording, setIsRecording] = useState(false);
+  // Ref mirrors isRecording so callbacks (timers, async) never capture stale state
+  const isRecordingRef = useRef(false);
   const [audioContext, setAudioContext] = useState(null);
   const [analyser, setAnalyser] = useState(null);
   const [recordingTime, setRecordingTime] = useState(0);
@@ -125,6 +128,8 @@ export default function AudioRecorder({
   };
 
   const startRecording = () => {
+    // MANDATORY debug log — confirms button is wired and responding instantly
+    console.log("[Vroomie] Start Recording triggered");
     try {
       // ══════════════════════════════════════════════════════════════
       // STEP 1 — INSTANT UI RESPONSE (0ms, no await, no async)
@@ -134,10 +139,8 @@ export default function AudioRecorder({
       sessionAnomaliesRef.current  = [];
       sessionConfidenceRef.current = [];
 
-      setRecordingResult(null); // SINGLE SOURCE OF TRUTH: clear previous run
-      setDetectedAnomaly(null); // SINGLE SOURCE OF TRUTH: clear previous run
-
-      setIsRecording(true);    // ← triggers waveform BURST immediately
+      isRecordingRef.current = true;   // ← update ref FIRST (used by async callbacks)
+      setIsRecording(true);            // ← triggers waveform BURST immediately
       setRecordingTime(0);
       setRemainingTime(120);
 
@@ -153,14 +156,16 @@ export default function AudioRecorder({
             toast.info("Sufficient data collected.", {
               description: "You can stop now, or keep running for a deep scan.",
               duration: 5000,
-              action: { label: "Stop", onClick: () => stopRecording() }
+              // Use ref-based stop to avoid stale closure
+              action: { label: "Stop", onClick: () => { if (isRecordingRef.current) stopRecording(); } }
             });
           }
           return newTime;
         });
         setRemainingTime((prev) => {
           const next = prev - 1;
-          if (next <= 0) { stopRecording(); return 0; }
+          // Use isRecordingRef — never captures stale state in closure
+          if (next <= 0 && isRecordingRef.current) { stopRecording(); return 0; }
           return next;
         });
       }, 1000);
@@ -173,6 +178,7 @@ export default function AudioRecorder({
         _startExtractionAsync(activeMode).catch(error => {
           // Revert all UI state if async setup failed
           console.error("🚨 Error in deferred startRecording:", error);
+          isRecordingRef.current = false;
           setIsRecording(false);
           if (timerRef.current) clearInterval(timerRef.current);
           if (debugDebounceRef.current) {
@@ -191,7 +197,8 @@ export default function AudioRecorder({
       }, 0);
 
     } catch (error) {
-      console.error(error);
+      console.error("[Vroomie] startRecording error:", error);
+      isRecordingRef.current = false;
       toast.error("Failed to start recording");
     }
   };
@@ -270,6 +277,8 @@ export default function AudioRecorder({
       waveformSource.connect(waveformAnalyser);
       setAudioContext(audioCtx);
       setAnalyser(waveformAnalyser); // ← waveform switches from simulated → live data here
+      // Propagate live analyser + audio context to parent (AudioWaveform in PredictiveMaintenance)
+      if (onAnalyserReady) onAnalyserReady(audioCtx, waveformAnalyser);
 
       // MediaRecorder for audio blob upload
       const mediaRecorder = new MediaRecorder(stream);
@@ -305,8 +314,10 @@ export default function AudioRecorder({
         debugDebounceRef.current = null;
       }
 
-      if (isRecording) {
+      // Use ref — never stale when called from timer callbacks or async contexts
+      if (isRecordingRef.current) {
         // INSTANT UI UPDATE
+        isRecordingRef.current = false;
         setIsRecording(false);
         
         if (timerRef.current) {
@@ -327,10 +338,11 @@ export default function AudioRecorder({
     } catch (error) {
       console.error("Error stopping recording:", error);
       toast.error("Failed to stop recording cleanly");
+      isRecordingRef.current = false;
       setIsRecording(false);
       setTimeout(() => stopExtraction(), 0);
     }
-  }, [isRecording]);
+  }, []); // no deps — reads from isRecordingRef instead of stale isRecording
 
   const handleAudioUpload = async (blob) => {
     try {
@@ -540,7 +552,11 @@ export default function AudioRecorder({
                <Mic className="w-8 h-8 text-red-400/80 mb-1" />
                <h3 className="text-white/90 font-semibold text-sm">Microphone Required</h3>
                <p className="text-zinc-400 text-xs text-balance">Vroomie needs mic access to perform acoustic AI diagnostics.</p>
-               <button onClick={() => window.location.reload()} className="mt-3 px-6 py-2.5 bg-white text-black text-xs font-bold rounded-full hover:bg-zinc-200 transition-colors shadow-xl">
+               <button
+                 onClick={() => window.location.reload()}
+                 style={{ touchAction: 'manipulation', minHeight: '44px' }}
+                 className="mt-3 px-6 py-2.5 bg-white text-black text-xs font-bold rounded-full hover:bg-zinc-200 transition-colors shadow-xl"
+               >
                  Reload App
                </button>
             </div>
@@ -551,6 +567,9 @@ export default function AudioRecorder({
               icon={Mic}
               onClick={startRecording}
               disabled={isAnalyzing}
+              // touch-action: manipulation prevents 300ms mobile tap delay
+              style={{ touchAction: 'manipulation', minHeight: '44px' }}
+              id="btn-start-recording"
             >
               Start Recording
             </GlassButton>
@@ -560,6 +579,8 @@ export default function AudioRecorder({
               size="lg"
               icon={Square}
               onClick={stopRecording}
+              style={{ touchAction: 'manipulation', minHeight: '44px' }}
+              id="btn-stop-recording"
             >
               Stop
             </GlassButton>

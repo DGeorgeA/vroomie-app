@@ -21,12 +21,17 @@ import {
   HOP, 
   N_MELS, 
   N_MFCC, 
-  computeCompositeEmbedding 
+  computeCompositeEmbedding
 } from '../lib/audioMath_v11.js';
 
 let referenceIndex = [];
-let ANOMALY_THRESHOLD = 0.80;
+let ANOMALY_THRESHOLD = 0.82; // Calibrated for v11.5 L2-Normalized space
 let MIN_LIVE_RMS      = 0.005;
+
+// ─── Persistence State ────────────────────────────────────
+let anomalyCounter = 0;
+let lastAnomalyLabel = null;
+const PERSISTENCE_REQUIRED = 2; // Must match for 2 frames (~1.0s) to alert
 
 // ─── Message Handler ──────────────────────────────────────
 self.onmessage = function (ev) {
@@ -69,7 +74,7 @@ function handleProcess({ buffer, sampleRate }) {
       return;
     }
 
-    // 6. Compute 80-dim embedding (SHARED LOGIC)
+    // 6. Compute 145-dim embedding
     const embedding = computeCompositeEmbedding(normalized, TARGET_SR);
 
     if (!embedding) {
@@ -77,11 +82,36 @@ function handleProcess({ buffer, sampleRate }) {
       return;
     }
 
+    // ─── 5/5 QUALITY: ADAPTIVE NOISE GATE (SF REJECTION) ───
+    // Index 141 is Spectral Flatness. If > 0.32, it's uncorrelated noise.
+    const sf = embedding[141];
+    if (sf > 0.32) {
+       anomalyCounter = 0;
+       self.postMessage({ 
+         type: 'result', 
+         payload: { status: 'normal', confidence: 0.001, anomaly: 'Noise Filtered', rms } 
+       });
+       return;
+    }
+
     // 7. Match against reference index
     const matchResult = findBestMatch(embedding);
 
-    // 8. Build result
+    // ─── 5/5 QUALITY: TEMPORAL PERSISTENCE (HYSTERESIS) ───
     if (matchResult.score >= ANOMALY_THRESHOLD && matchResult.label) {
+      if (matchResult.label === lastAnomalyLabel) {
+        anomalyCounter++;
+      } else {
+        anomalyCounter = 1;
+        lastAnomalyLabel = matchResult.label;
+      }
+    } else {
+      anomalyCounter = 0;
+      lastAnomalyLabel = null;
+    }
+
+    // 8. Build result - Only alert if persistence met
+    if (anomalyCounter >= PERSISTENCE_REQUIRED) {
       self.postMessage({
         type: 'result',
         payload: {
@@ -179,14 +209,9 @@ function computeRMS(signal) {
 
 // ─── Cosine Similarity + Matching ────────────────────────
 function cosine(a, b) {
-  if (a.length !== b.length) {
-    // If dimensions do not match, the vectors represent fundamentally different features
-    console.warn(`[Vroomie] Dimension mismatch! Live vector: ${a.length}-dim vs DB vector: ${b.length}-dim.`);
-    return 0;
-  }
-  const len = a.length;
+  if (a.length !== b.length) return 0;
   let dot = 0, nA = 0, nB = 0;
-  for (let i = 0; i < len; i++) {
+  for (let i = 0; i < a.length; i++) {
     dot += a[i] * b[i];
     nA  += a[i] * a[i];
     nB  += b[i] * b[i];

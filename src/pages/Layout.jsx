@@ -97,7 +97,7 @@ export default function Layout({ children, currentPageName }) {
           </div>
         </header>
 
-        <main className="flex-1 p-6 lg:p-10 relative">
+        <main className="flex-1 p-4 md:p-6 lg:p-10 relative overflow-x-hidden">
           <Suspense fallback={<div className="animate-pulse bg-white/5 rounded-xl h-64 w-full" />}>
             {children}
           </Suspense>
