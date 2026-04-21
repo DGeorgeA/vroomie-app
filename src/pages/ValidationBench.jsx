@@ -167,31 +167,46 @@ export default function ValidationBench() {
   return (
     <div className="w-full text-white font-sans overflow-x-hidden">
       <div className="max-w-5xl mx-auto px-4 md:px-6 lg:px-0">
-        <header className="mb-8 md:mb-12 border-b border-white/5 pb-6 md:pb-8 flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4">
-          <div>
-            <div className="flex flex-wrap items-center gap-3 mb-2">
-              <ShieldCheck className="text-cyan-400 w-6 h-6 md:w-8 md:h-8 flex-shrink-0" />
-              <h1 className="text-2xl md:text-4xl font-bold tracking-tight">Audio Pipeline Validation</h1>
-              <span className="px-3 py-1 bg-cyan-400/10 border border-cyan-400/20 text-cyan-400 text-[10px] rounded-full font-mono">
+        <header className="mb-10 md:mb-16 border-b border-white/5 pb-10 flex flex-col items-center text-center gap-8">
+          <div className="flex flex-col items-center max-w-3xl">
+            <div className="flex items-center justify-center gap-4 mb-4">
+              <div className="p-3 bg-cyan-400/10 rounded-2xl border border-cyan-400/20">
+                <ShieldCheck className="text-cyan-400 w-8 h-8 md:w-10 md:h-10" />
+              </div>
+              <h1 className="text-3xl md:text-5xl font-black tracking-tight bg-gradient-to-b from-white to-zinc-400 bg-clip-text text-transparent">
+                Audio Pipeline Validation
+              </h1>
+            </div>
+            
+            <div className="flex items-center justify-center gap-2 mb-6">
+              <span className="px-3 py-1 bg-cyan-400/10 border border-cyan-400/20 text-cyan-400 text-[10px] rounded-full font-mono uppercase tracking-widest">
                 v{PIPELINE_VERSION}
               </span>
+              <span className="px-3 py-1 bg-white/5 border border-white/10 text-zinc-500 text-[10px] rounded-full font-mono uppercase tracking-widest">
+                Stable Build
+              </span>
             </div>
-            <p className="text-zinc-400 text-sm md:text-base">Verifying 145-dim Composite Embedding Accuracy &amp; Z-Score Normalized Match Rate.</p>
+
+            <p className="text-zinc-400 text-sm md:text-lg leading-relaxed">
+              Verifying 145-dim Composite Embedding Accuracy &amp; Z-Score Normalized Match Rate via high-fidelity temporal modeling.
+            </p>
           </div>
           
-          <button 
-            onClick={runValidation}
-            disabled={status === 'testing'}
-            style={{ touchAction: 'manipulation', minHeight: '44px' }}
-            className={`w-full sm:w-auto px-6 md:px-8 py-3 rounded-full font-bold flex items-center justify-center gap-2 transition-all ${
-              status === 'testing' 
-                ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed' 
-                : 'bg-white text-black hover:bg-cyan-400 hover:scale-105 shadow-[0_0_20px_rgba(255,255,255,0.1)]'
-            }`}
-          >
-            {status === 'testing' ? <RefreshCw className="animate-spin w-5 h-5" /> : <Play className="w-5 h-5 fill-current" />}
-            {status === 'testing' ? 'Running Suite...' : 'Run Validation Suite'}
-          </button>
+          <div className="w-full flex justify-center">
+            <button 
+              onClick={runValidation}
+              disabled={status === 'testing'}
+              style={{ touchAction: 'manipulation', minHeight: '52px' }}
+              className={`w-full max-w-xs md:max-w-md px-10 py-4 rounded-full font-black text-sm md:text-base flex items-center justify-center gap-3 transition-all duration-300 transform active:scale-95 ${
+                status === 'testing' 
+                  ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed opacity-50' 
+                  : 'bg-white text-black hover:bg-cyan-400 hover:shadow-[0_0_40px_rgba(34,211,238,0.4)] shadow-[0_10px_30px_rgba(0,0,0,0.5)]'
+              }`}
+            >
+              {status === 'testing' ? <RefreshCw className="animate-spin w-5 h-5 md:w-6 md:h-6" /> : <Play className="w-5 h-5 md:w-6 md:h-6 fill-current" />}
+              {status === 'testing' ? 'SYSTEM TESTING...' : 'RUN VALIDATION SUITE'}
+            </button>
+          </div>
         </header>
 
         {status === 'testing' && (
