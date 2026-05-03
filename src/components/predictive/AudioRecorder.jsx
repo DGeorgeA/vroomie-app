@@ -5,7 +5,7 @@ import GlassButton from "../ui/GlassButton";
 import { toast } from "sonner";
 import { startExtraction, stopExtraction, getActiveMediaStream, getActiveAudioContext } from "@/lib/audioFeatureExtractor";
 import { buildReadableLabel, resetMatchState } from "@/lib/audioMatchingEngine";
-import { clearContinuousAlert, speakText } from "@/lib/voiceFeedback";
+import { clearContinuousAlert, speakScanResult } from "@/lib/voiceFeedback";
 import { Logger } from "@/lib/logger";
 import { getDetectionMode, setDetectionMode } from "@/lib/detectionMode";
 import { useAuth } from "@/contexts/AuthContext";
@@ -435,13 +435,7 @@ export default function AudioRecorder({
 
       // ── Step 4: Post-recording voice summary (ONLY place TTS fires) ────────
       if (isVoiceAlertsEnabled) {
-        if (realAnomalies.length > 0) {
-          // Deduplicated list of clean names
-          const names = [...new Set(realAnomalies.map(a => a.type))].join(', ');
-          speakText(`Scan complete. Issue detected: ${names}. Please visit a workshop and share your Vroomie report.`);
-        } else {
-          speakText('Scan complete. No anomalies found.');
-        }
+        speakScanResult(realAnomalies, language);
       }
 
     } catch (error) {

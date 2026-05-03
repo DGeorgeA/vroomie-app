@@ -61,7 +61,7 @@ function findBestMatch(live) {
 
   for (const ref of referenceIndex) {
     const refVec = ref.embedding_vector;
-    if (!Array.isArray(refVec) || refVec.length < 140) continue; // Expecting ~145 dims (v11.3)
+    if (!Array.isArray(refVec) || refVec.length < 50) continue; // accept any reasonable embedding
     
     const rawCos = cosine(live, refVec);
     if (rawCos < FAST_REJECT_COSINE) continue;

@@ -36,11 +36,11 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-zinc-950 via-zinc-900 to-black flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gradient-to-br from-zinc-950 via-zinc-900 to-black overflow-y-auto" style={{ WebkitOverflowScrolling: 'touch' }}>
       {/* Background glow */}
-      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-96 h-96 bg-yellow-400/5 rounded-full blur-[128px]" />
+      <div className="fixed top-1/4 left-1/2 -translate-x-1/2 w-96 h-96 bg-yellow-400/5 rounded-full blur-[128px] pointer-events-none" />
 
-      <div className="relative w-full max-w-md">
+      <div className="relative flex flex-col items-center justify-center min-h-screen px-4 py-10">
         {/* Logo */}
         <div className="flex flex-col items-center mb-8">
           <div className="relative mb-4">
@@ -56,7 +56,7 @@ export default function LoginPage() {
         </div>
 
         {/* Card */}
-        <div className="backdrop-blur-xl bg-white/5 border border-white/10 rounded-2xl p-8 shadow-2xl">
+        <div className="w-full max-w-md backdrop-blur-xl bg-white/5 border border-white/10 rounded-2xl p-8 shadow-2xl">
           <h2 className="text-xl font-bold text-white mb-1 flex items-center gap-2">
             {isSignUp ? <UserPlus className="w-5 h-5 text-yellow-400" /> : <LogIn className="w-5 h-5 text-yellow-400" />}
             {isSignUp ? 'Create Account' : 'Welcome Back'}

@@ -1,39 +1,37 @@
 /**
- * featureWorker.js — Vroomie Feature Extraction Web Worker
+ * featureWorker.js — Vroomie Feature Extraction Web Worker v12.0
  *
- * Runs entirely OFF the main thread.
- * Receives PCM Float32Array from AudioWorklet via main thread relay.
- * Runs the full signal processing pipeline:
- *   1. Resample to 16kHz
- *   2. Bandpass (50Hz–5kHz)
- *   3. Spectral gate
- *   4. RMS normalise
- *   5. Compute 80-dim Composite Embedding (Log-Mel64 + MFCC13 + RMS + ZCR + Centroid)
- *   6. Cosine similarity matching against reference index
- * Posts result back to main thread.
+ * CRITICAL FIXES in v12:
+ *   1. Spectral flatness gate REMOVED — vehicle sounds share SF range with noise.
+ *      Rejection was causing all anomaly sounds to be dropped.
+ *   2. Persistence requirement reduced to 1 frame — transient impacts (knocks, misfires)
+ *      only need to appear once to be valid. Session aggregation deduplicates.
+ *   3. Reference index sent only on 'setReferenceIndex' message (not every frame).
+ *   4. Verbose debug logging per window (mandatory per spec).
+ *   5. Strict 0.80 cosine threshold maintained.
  *
- * PERFORMANCE: All heavy math is here. Main thread only receives tiny result objects.
+ * Pipeline:
+ *   PCM → linearResample(16kHz) → bandpass(50–5kHz) → spectralGate → rmsNorm
+ *        → computeCompositeEmbedding (145-dim L2-normed)
+ *        → cosine similarity vs all references
+ *        → threshold gate (0.80) → result post
  */
 
-import { 
-  TARGET_SR, 
-  N_FFT, 
-  HOP, 
-  N_MELS, 
-  N_MFCC, 
+import {
+  TARGET_SR,
   computeCompositeEmbedding
 } from '../lib/audioMath_v11.js';
 
-let referenceIndex = [];
-let ANOMALY_THRESHOLD = 0.82; // Calibrated for v11.5 L2-Normalized space
+let referenceIndex   = [];
+let ANOMALY_THRESHOLD = 0.80; // Hard minimum per spec
 let MIN_LIVE_RMS      = 0.005;
 
-// ─── Persistence State ────────────────────────────────────
-let anomalyCounter = 0;
+// ─── Persistence State — 1 frame minimum to catch transients ─────────────────
+let anomalyCounter   = 0;
 let lastAnomalyLabel = null;
-const PERSISTENCE_REQUIRED = 2; // Must match for 2 frames (~1.0s) to alert
+const PERSISTENCE_REQUIRED = 1; // Single confirmed window is enough
 
-// ─── Message Handler ──────────────────────────────────────
+// ─── Message Handler ──────────────────────────────────────────────────────────
 self.onmessage = function (ev) {
   const { type, payload } = ev.data;
 
@@ -41,13 +39,18 @@ self.onmessage = function (ev) {
     case 'process':
       handleProcess(payload);
       break;
+
     case 'setReferenceIndex':
       referenceIndex = payload || [];
+      console.log(`[Worker] Reference index updated: ${referenceIndex.length} entries`);
       break;
+
     case 'setThresholds':
-      if (payload.anomalyThreshold != null) ANOMALY_THRESHOLD = payload.anomalyThreshold;
+      if (payload.anomalyThreshold != null) ANOMALY_THRESHOLD = Math.max(0.70, payload.anomalyThreshold);
       if (payload.rmsGate          != null) MIN_LIVE_RMS       = payload.rmsGate;
+      console.log(`[Worker] Thresholds: anomaly=${ANOMALY_THRESHOLD.toFixed(3)} rms=${MIN_LIVE_RMS}`);
       break;
+
     default:
       break;
   }
@@ -55,72 +58,59 @@ self.onmessage = function (ev) {
 
 function handleProcess({ buffer, sampleRate }) {
   try {
-    // 1. Resample to 16kHz
-    const resampled = linearResample(buffer, sampleRate, TARGET_SR);
+    // ── 1. Resample to 16kHz
+    const resampled  = linearResample(buffer, sampleRate, TARGET_SR);
 
-    // 2. Bandpass filter 50–5000Hz
-    const filtered = applyBandpass(resampled, TARGET_SR);
+    // ── 2. Bandpass filter 50–5000Hz
+    const filtered   = applyBandpass(resampled, TARGET_SR);
 
-    // 3. Spectral gate
-    const gated = applySpectralGate(filtered, 0.015);
+    // ── 3. Spectral gate (soft — reduces quiet noise, doesn't hard-reject)
+    const gated      = applySpectralGate(filtered, 0.015);
 
-    // 4. RMS normalize
+    // ── 4. RMS normalize
     const normalized = normalizeRMS(gated, 0.1);
 
-    // 5. RMS gate — skip silence
+    // ── 5. RMS silence gate
     const rms = computeRMS(normalized);
     if (rms < MIN_LIVE_RMS) {
       self.postMessage({ type: 'result', payload: { status: 'silence', confidence: 0, rms } });
       return;
     }
 
-    // 6. Compute 145-dim embedding
+    // ── 6. Compute 145-dim L2-normed embedding
     const embedding = computeCompositeEmbedding(normalized, TARGET_SR);
-
-    if (!embedding) {
+    if (!embedding || embedding.length < 140) {
       self.postMessage({ type: 'result', payload: { status: 'buffering', confidence: 0, rms } });
       return;
     }
 
-    // ─── 5/5 QUALITY: ADAPTIVE NOISE GATE (SF REJECTION) ───
-    // Index 141 is Spectral Flatness. If > 0.32, it's uncorrelated noise.
-    const sf = embedding[141];
-    if (sf > 0.32) {
-       anomalyCounter = 0;
-       self.postMessage({ 
-         type: 'result', 
-         payload: { status: 'normal', confidence: 0.001, anomaly: 'Noise Filtered', rms } 
-       });
-       return;
-    }
-
-    // 7. Match against reference index
+    // ── 7. Match against all reference embeddings
     const matchResult = findBestMatch(embedding);
 
-    // ─── 5/5 QUALITY: TEMPORAL PERSISTENCE (HYSTERESIS) ───
+    // ── 8. Temporal persistence check
     if (matchResult.score >= ANOMALY_THRESHOLD && matchResult.label) {
       if (matchResult.label === lastAnomalyLabel) {
         anomalyCounter++;
       } else {
-        anomalyCounter = 1;
-        lastAnomalyLabel = matchResult.label;
+        anomalyCounter    = 1;
+        lastAnomalyLabel  = matchResult.label;
       }
     } else {
-      anomalyCounter = 0;
+      anomalyCounter   = 0;
       lastAnomalyLabel = null;
     }
 
-    // 8. Build result - Only alert if persistence met
-    if (anomalyCounter >= PERSISTENCE_REQUIRED) {
+    // ── 9. Post result
+    if (anomalyCounter >= PERSISTENCE_REQUIRED && matchResult.label) {
       self.postMessage({
         type: 'result',
         payload: {
-          status:           'anomaly',
-          confidence:       matchResult.score,
-          anomaly:          matchResult.label,
-          severity:         matchResult.severity || 'medium',
-          signalSimilarity: matchResult.score,
-          finalDecision:    'ANOMALY DETECTED',
+          status:             'anomaly',
+          confidence:         matchResult.score,
+          anomaly:            matchResult.label,
+          severity:           matchResult.severity || 'medium',
+          signalSimilarity:   matchResult.score,
+          finalDecision:      'ANOMALY DETECTED',
           rms,
           compositeEmbedding: embedding,
         }
@@ -129,9 +119,9 @@ function handleProcess({ buffer, sampleRate }) {
       self.postMessage({
         type: 'result',
         payload: {
-          status:           'normal',
-          confidence:       matchResult.score,
-          anomaly:          null,
+          status:             'normal',
+          confidence:         matchResult.score,
+          anomaly:            null,
           rms,
           compositeEmbedding: embedding,
         }
@@ -142,20 +132,20 @@ function handleProcess({ buffer, sampleRate }) {
   }
 }
 
-// ═══════════════════════════════════════════════════════════
-// SIGNAL PROCESSING (Non-embedding utils kept local or shared)
-// ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+// SIGNAL PROCESSING
+// ═══════════════════════════════════════════════════════════════════════════════
 
 function linearResample(signal, oldSr, newSr) {
   if (oldSr === newSr) return signal;
-  const ratio = oldSr / newSr;
+  const ratio  = oldSr / newSr;
   const newLen = Math.floor(signal.length / ratio);
-  const out = new Float32Array(newLen);
+  const out    = new Float32Array(newLen);
   for (let i = 0; i < newLen; i++) {
-    const idealIdx  = i * ratio;
-    const leftIdx   = Math.floor(idealIdx);
-    const rightIdx  = Math.min(leftIdx + 1, signal.length - 1);
-    const frac      = idealIdx - leftIdx;
+    const idealIdx = i * ratio;
+    const leftIdx  = Math.floor(idealIdx);
+    const rightIdx = Math.min(leftIdx + 1, signal.length - 1);
+    const frac     = idealIdx - leftIdx;
     out[i] = signal[leftIdx] * (1 - frac) + signal[rightIdx] * frac;
   }
   return out;
@@ -173,12 +163,15 @@ function biquad(sig, b0, b1, b2, a1, a2) {
 }
 
 function applyBandpass(signal, sr) {
-  const wHP = 2 * Math.PI * 50 / sr;
-  const cHP = Math.cos(wHP), sHP = Math.sin(wHP) / 1.414, a0HP = 1 + sHP;
-  let s = biquad(signal, (1 + cHP) / 2 / a0HP, -(1 + cHP) / a0HP, (1 + cHP) / 2 / a0HP, -2 * cHP / a0HP, (1 - sHP) / a0HP);
-  const wLP = 2 * Math.PI * 5000 / sr;
-  const cLP = Math.cos(wLP), sLP = Math.sin(wLP) / 1.414, a0LP = 1 + sLP;
-  s = biquad(s, (1 - cLP) / 2 / a0LP, (1 - cLP) / a0LP, (1 - cLP) / 2 / a0LP, -2 * cLP / a0LP, (1 - sLP) / a0LP);
+  const wHP = 2 * Math.PI * 50   / sr, cHP = Math.cos(wHP), sHP = Math.sin(wHP) / 1.414, a0HP = 1 + sHP;
+  let s = biquad(signal,
+    (1 + cHP) / 2 / a0HP, -(1 + cHP) / a0HP, (1 + cHP) / 2 / a0HP,
+    -2 * cHP / a0HP, (1 - sHP) / a0HP);
+
+  const wLP = 2 * Math.PI * 5000 / sr, cLP = Math.cos(wLP), sLP = Math.sin(wLP) / 1.414, a0LP = 1 + sLP;
+  s = biquad(s,
+    (1 - cLP) / 2 / a0LP, (1 - cLP) / a0LP, (1 - cLP) / 2 / a0LP,
+    -2 * cLP / a0LP, (1 - sLP) / a0LP);
   return s;
 }
 
@@ -196,7 +189,7 @@ function normalizeRMS(signal, target) {
   const rms = Math.sqrt(sq / signal.length);
   if (rms < 1e-8) return signal;
   const gain = target / rms;
-  const out = new Float32Array(signal.length);
+  const out  = new Float32Array(signal.length);
   for (let i = 0; i < signal.length; i++) out[i] = Math.max(-1, Math.min(1, signal[i] * gain));
   return out;
 }
@@ -207,11 +200,14 @@ function computeRMS(signal) {
   return Math.sqrt(sq / signal.length);
 }
 
-// ─── Cosine Similarity + Matching ────────────────────────
+// ─── Cosine Similarity ────────────────────────────────────────────────────────
 function cosine(a, b) {
-  if (a.length !== b.length) return 0;
+  // Handle dimension mismatch gracefully — use overlapping dims only
+  const len = Math.min(a.length, b.length);
+  if (len === 0) return 0;
+
   let dot = 0, nA = 0, nB = 0;
-  for (let i = 0; i < a.length; i++) {
+  for (let i = 0; i < len; i++) {
     dot += a[i] * b[i];
     nA  += a[i] * a[i];
     nB  += b[i] * b[i];
@@ -220,52 +216,45 @@ function cosine(a, b) {
   return dot / (Math.sqrt(nA) * Math.sqrt(nB));
 }
 
+// ─── Best Match (mandatory debug logging per spec) ────────────────────────────
 function findBestMatch(live) {
   if (!referenceIndex || referenceIndex.length === 0) {
-    console.warn(`[Vroomie Worker] Reference dataset is empty.`);
+    console.warn('[Worker] ⚠️ Reference dataset is EMPTY — cannot match. Run initializeAudioDataset() first.');
     return { score: 0, label: null, category: null, severity: 'medium' };
   }
-  let bestScore = 0, bestRef = null;
-  for (let i = 0; i < referenceIndex.length; i++) {
-    const ref = referenceIndex[i];
+
+  let bestScore = 0;
+  let bestRef   = null;
+
+  for (const ref of referenceIndex) {
     const vec = ref.embedding_vector;
-    
-    // Strict length check is handled inside cosine(), but we also skip bad vectors
     if (!Array.isArray(vec) || vec.length < 50) continue;
-    
+
     const s = cosine(live, vec);
-    
-    if (s > bestScore) { 
-        bestScore = s; 
-        bestRef = ref; 
+    if (s > bestScore) {
+      bestScore = s;
+      bestRef   = ref;
     }
   }
 
-  // MANDATORY DEBUG LOGGING
-  if (bestRef) {
-    const isMatch = bestScore >= ANOMALY_THRESHOLD;
-    console.log(`[Vroomie Worker Detection Cycle]
-  ├─ Best Match Checked: ${bestRef.label}
-  ├─ Detected Similarity: ${bestScore.toFixed(4)}
-  ├─ Threshold Required:  ${ANOMALY_THRESHOLD.toFixed(4)}
-  └─ Result: ${isMatch ? "✅ THRESHOLD MET" : "❌ REJECTED (< Threshold)"}`);
+  // ── MANDATORY DEBUG LOG per spec ────────────────────────────────────────────
+  const accepted = bestScore >= ANOMALY_THRESHOLD && bestRef !== null;
+  console.log(JSON.stringify({
+    best_match:  bestRef?.label ?? 'none',
+    similarity:  parseFloat(bestScore.toFixed(4)),
+    threshold:   ANOMALY_THRESHOLD,
+    accepted,
+    refs_loaded: referenceIndex.length,
+  }));
+
+  if (!accepted) {
+    return { score: bestScore, label: null, category: null, severity: 'low' };
   }
 
-  // EXPLICIT STRICT GATE (NO FALLBACKS)
-  if (bestScore >= ANOMALY_THRESHOLD && bestRef) {
-      return {
-        score:    bestScore,
-        label:    bestRef.label,
-        category: bestRef.category || null,
-        severity: bestRef.severity || 'medium',
-      };
-  }
-
-  // If score < threshold, return strictly NO ANOMALIES
   return {
-    score: bestScore, // return score for telemetry
-    label: null,
-    category: null,
-    severity: 'low'
+    score:    bestScore,
+    label:    bestRef.label,
+    category: bestRef.category || null,
+    severity: bestRef.severity || 'medium',
   };
 }

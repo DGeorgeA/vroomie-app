@@ -40,6 +40,9 @@ export function registerCNNClassifier()  { /* CNN handled in worker */ }
 
 // ─── Dataset initialisation (called once by App.jsx startup) ─────────────────
 
+// Track whether we've already pushed refs to the worker this session
+let refsSentToWorker = false;
+
 export async function startExtraction(callback) {
   if (isExtracting) {
     Logger.warn('Extraction already running.');
@@ -48,13 +51,15 @@ export async function startExtraction(callback) {
 
   isExtracting       = true;
   onFeaturesCallback = callback;
+  refsSentToWorker   = false;
 
-  // Kick off dataset + YAMNet loading in background (if not done)
-  if (!datasetInitialized) {
+  // Ensure dataset is loaded BEFORE mic opens (critical for matching)
+  if (!datasetInitialized || referenceIndex.length === 0) {
     datasetInitialized = true;
-    initializeAudioDataset().catch(err => Logger.error('Dataset init failed', err));
+    Logger.info('[Extractor] Awaiting dataset initialization...');
+    await initializeAudioDataset().catch(err => Logger.error('Dataset init failed', err));
   }
-  initializeEmbeddingEngine().catch(err => Logger.error('YAMNet init failed', err));
+  Logger.info(`[Extractor] Dataset ready: ${referenceIndex.length} reference patterns loaded`);
 
   Logger.info('🎤 [START] Requesting microphone...');
 
@@ -83,10 +88,16 @@ export async function startExtraction(callback) {
     // Set thresholds in worker
     featureWorker.postMessage({ type: 'setThresholds', payload: { anomalyThreshold: 0.80, rmsGate: 0.005 } });
 
-    // Pass reference index to worker immediately if already loaded
-    if (referenceIndex && referenceIndex.length > 0) {
-      featureWorker.postMessage({ type: 'setReferenceIndex', payload: referenceIndex });
-    }
+    // Send reference index ONCE (not per frame — expensive serialization)
+    const sendRefsToWorker = () => {
+      if (refsSentToWorker) return;
+      if (referenceIndex && referenceIndex.length > 0) {
+        featureWorker.postMessage({ type: 'setReferenceIndex', payload: referenceIndex });
+        refsSentToWorker = true;
+        Logger.info(`[Extractor] Sent ${referenceIndex.length} reference embeddings to worker`);
+      }
+    };
+    sendRefsToWorker();
 
     // Handle results coming BACK from worker (tiny objects, fast)
     featureWorker.onmessage = (ev) => {
@@ -95,12 +106,11 @@ export async function startExtraction(callback) {
         // Translate worker result to the format AudioRecorder.jsx expects
         onFeaturesCallback({
           compositeEmbedding: payload.compositeEmbedding || null,
-          rawSignalFrame:     null, // not needed on main thread
+          rawSignalFrame:     null,
           liveSpectrogram:    null,
           liveEmbedding:      null,
           cnnResult:          null,
           sampleRate:         sr,
-          // Pass through matching result fields directly
           _workerResult:      payload,
           rms:                payload.rms || 0,
           spectralCentroid:   0,
@@ -124,18 +134,15 @@ export async function startExtraction(callback) {
         workletNode = new AudioWorkletNode(audioContext, 'vroomie-processor', {
           processorOptions: { sampleRate: sr },
           numberOfInputs:  1,
-          numberOfOutputs: 0, // no audio output needed
+          numberOfOutputs: 0,
         });
 
-        // Relay PCM from AudioWorklet thread → Web Worker (zero-copy)
+        // Relay PCM from AudioWorklet thread → Web Worker (zero-copy, NO ref index per frame)
         workletNode.port.onmessage = (ev) => {
           if (!isExtracting || !featureWorker) return;
+          // Send refs if they just loaded (lazy, once only)
+          sendRefsToWorker();
           const { buffer, sampleRate } = ev.data;
-          // Pass reference index on every batch in case it loaded after start
-          if (referenceIndex && referenceIndex.length > 0) {
-            featureWorker.postMessage({ type: 'setReferenceIndex', payload: referenceIndex });
-          }
-          // Transfer buffer ownership to worker — zero allocation
           featureWorker.postMessage(
             { type: 'process', payload: { buffer, sampleRate } },
             [buffer.buffer]
@@ -203,9 +210,9 @@ function useScriptProcessorFallback(sr) {
         snapshot[i] = ring[(start + i) % windowSamples];
       }
 
-      if (referenceIndex && referenceIndex.length > 0) {
-        featureWorker.postMessage({ type: 'setReferenceIndex', payload: referenceIndex });
-      }
+      // Send refs once lazily (reuse closure from parent scope)
+      if (typeof sendRefsToWorker === 'function') sendRefsToWorker();
+
       featureWorker.postMessage(
         { type: 'process', payload: { buffer: snapshot, sampleRate: sr } },
         [snapshot.buffer]

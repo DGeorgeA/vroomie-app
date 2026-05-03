@@ -2,26 +2,35 @@ import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { TARGET_SR, computeCompositeEmbedding, PIPELINE_VERSION } from '../lib/audioMath_v11';
 import { Logger } from '../lib/logger';
-import { referenceIndex, initializeAudioDataset } from '../services/audioDatasetService';
+import { referenceIndex, initializeAudioDataset, refreshAudioDataset } from '../services/audioDatasetService';
 import { motion, AnimatePresence } from 'framer-motion';
-import { CheckCircle2, XCircle, Play, RefreshCw, BarChart2, ShieldCheck, Bug } from 'lucide-react';
+import { CheckCircle2, XCircle, Play, RefreshCw, BarChart2, ShieldCheck, Bug, Database } from 'lucide-react';
 
 export default function ValidationBench() {
   const [results, setResults] = useState([]);
   const [status, setStatus] = useState('idle'); // 'idle' | 'loading' | 'testing' | 'done'
   const [progress, setProgress] = useState(0);
+  const [refCount, setRefCount] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
   const audioCtxRef = useRef(null);
 
-  // Initialize AudioDataset on mount + CACHE BUST
+  // Initialize dataset on mount (does NOT nuke IDB — uses cache)
   useEffect(() => {
-    const bustCacheAndInit = async () => {
-      console.log("CACHE_BUST: Deleting vroomie-db...");
-      await indexedDB.deleteDatabase('vroomie-db');
-      await initializeAudioDataset();
-      Logger.info("Ref library initialized for bench (FRESH V11).");
-    };
-    bustCacheAndInit();
+    initializeAudioDataset().then(() => {
+      setRefCount(referenceIndex.length);
+      Logger.info(`[ValidationBench] Ref library ready: ${referenceIndex.length} refs`);
+    });
   }, []);
+
+  const handleRefreshRefs = async () => {
+    setRefreshing(true);
+    try {
+      await refreshAudioDataset();
+      setRefCount(referenceIndex.length);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const runValidation = async () => {
     if (status === 'testing' || status === 'loading') return;
@@ -59,50 +68,31 @@ export default function ValidationBench() {
             buffer = decoded.getChannelData(0);
           }
 
-          // Process through the UNIFIED PIPELINE (v11.5)
+          // Process through the UNIFIED PIPELINE
           const liveEmbedding = computeCompositeEmbedding(buffer, TARGET_SR);
-          
-          console.log(`[VERIFY] ${name} | Size: ${liveEmbedding.length} | SF[141]: ${liveEmbedding[141]}`);
-          
+
+          console.log(`[VERIFY] ${name} | Dims: ${liveEmbedding.length}`);
+
           // Match against Reference Index
           let bestMatch = { score: 0, label: 'none' };
           for (const ref of referenceIndex) {
-            // v11.5 uses standard L2-Normalized Cosine Similarity
             const score = cosineSimilarity(liveEmbedding, ref.embedding_vector);
             if (score > bestMatch.score) {
               bestMatch = { score, label: ref.label };
             }
           }
 
-          // Extract Spectral Flatness from index 141 (v11.0 stack)
-          const spectralFlatness = liveEmbedding[141] || 0;
-          
-          let finalScore = bestMatch.score;
-          // Temporal Hardening: Penalty is even more decisive now.
-          if (spectralFlatness > 0.32) {
-            // Signal is too flat/noisy
-            finalScore *= 0.001; 
-          } else if (spectralFlatness > 0.22) {
-            finalScore *= Math.pow(1.0 - spectralFlatness, 2);
-          }
-
-          const threshold = 0.82; 
+          const threshold = 0.80; // Hard production threshold per spec
+          const finalScore = bestMatch.score;
           const detected = finalScore >= threshold;
-          
-          // Ultra-robust matching: detect if ANY word from the filename (e.g. 'knock') is in the label
-          const filename = name.toLowerCase().replace('.wav', '');
-          const labelMatch = filename.includes(bestMatch.label.toLowerCase()) || 
-                             bestMatch.label.toLowerCase().includes(filename.split('_')[0]);
-          
-          const passed = expectedType === 'anomaly' 
-            ? (detected && (labelMatch || finalScore > 0.90)) // Trust high similarity
-            : finalScore < 0.82;
+
+          const passed = expectedType === 'anomaly'
+            ? detected
+            : finalScore < threshold;
 
           return {
             name,
             score: finalScore,
-            originalScore: bestMatch.score,
-            flatness: spectralFlatness,
             match: bestMatch.label,
             expected: expectedType,
             detected: detected ? 'ANOMALY' : 'NORMAL',
@@ -192,12 +182,12 @@ export default function ValidationBench() {
             </p>
           </div>
           
-          <div className="w-full flex justify-center">
+          <div className="flex flex-wrap items-center justify-center gap-3">
             <button 
               onClick={runValidation}
               disabled={status === 'testing'}
               style={{ touchAction: 'manipulation', minHeight: '52px' }}
-              className={`w-full max-w-xs md:max-w-md px-10 py-4 rounded-full font-black text-sm md:text-base flex items-center justify-center gap-3 transition-all duration-300 transform active:scale-95 ${
+              className={`px-10 py-4 rounded-full font-black text-sm md:text-base flex items-center justify-center gap-3 transition-all duration-300 transform active:scale-95 ${
                 status === 'testing' 
                   ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed opacity-50' 
                   : 'bg-white text-black hover:bg-cyan-400 hover:shadow-[0_0_40px_rgba(34,211,238,0.4)] shadow-[0_10px_30px_rgba(0,0,0,0.5)]'
@@ -205,6 +195,15 @@ export default function ValidationBench() {
             >
               {status === 'testing' ? <RefreshCw className="animate-spin w-5 h-5 md:w-6 md:h-6" /> : <Play className="w-5 h-5 md:w-6 md:h-6 fill-current" />}
               {status === 'testing' ? 'SYSTEM TESTING...' : 'RUN VALIDATION SUITE'}
+            </button>
+            <button
+              onClick={handleRefreshRefs}
+              disabled={refreshing}
+              style={{ touchAction: 'manipulation', minHeight: '52px' }}
+              className="px-6 py-4 rounded-full font-bold text-sm flex items-center gap-2 bg-zinc-800 text-cyan-400 border border-cyan-400/20 hover:bg-zinc-700 transition-all active:scale-95 disabled:opacity-50"
+            >
+              {refreshing ? <RefreshCw className="animate-spin w-4 h-4" /> : <Database className="w-4 h-4" />}
+              {refreshing ? 'Refreshing...' : `Refs: ${refCount}`}
             </button>
           </div>
         </header>
