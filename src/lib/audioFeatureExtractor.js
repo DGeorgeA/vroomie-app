@@ -85,8 +85,8 @@ export async function startExtraction(callback) {
       { type: 'module' }
     );
 
-    // Set thresholds in worker
-    featureWorker.postMessage({ type: 'setThresholds', payload: { anomalyThreshold: 0.80, rmsGate: 0.005 } });
+    // Set thresholds in worker (dual-gate: absolute + margin)
+    featureWorker.postMessage({ type: 'setThresholds', payload: { absThreshold: 0.72, margin: 0.04, rmsGate: 0.005 } });
 
     // Send reference index ONCE (not per frame — expensive serialization)
     const sendRefsToWorker = () => {

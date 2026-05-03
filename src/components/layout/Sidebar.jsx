@@ -1,9 +1,11 @@
 import React from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { useUIStore } from '@/store/uiStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import VroomieLogo from '@/components/ui/VroomieLogo';
+import { signOut } from '@/services/authService';
+import { toast } from 'sonner';
 import {
   LayoutDashboard,
   Sparkles,
@@ -14,14 +16,16 @@ import {
   Bookmark,
   CreditCard,
   ShieldCheck,
+  FlaskConical,
+  LogOut,
 } from 'lucide-react';
 
 // ─── Active routes (fully implemented) ──────────────────────────────────────
 const ACTIVE_ITEMS = [
-  { name: 'Dashboard',        path: '/',           icon: LayoutDashboard },
-  { name: 'Latest AI Updates',path: '/ai-updates', icon: Sparkles },
-  { name: 'My Trips',         path: '/trips',      icon: Map },
-  { name: 'Settings',         path: '/settings',   icon: Settings },
+  { name: 'Dashboard',         path: '/',           icon: LayoutDashboard },
+  { name: 'Latest AI Updates', path: '/ai-updates', icon: Sparkles },
+  { name: 'My Trips',          path: '/trips',      icon: Map },
+  { name: 'Settings',          path: '/settings',   icon: Settings },
 ];
 
 // ─── Coming Soon items ────────────────────────────────────────────────────────
@@ -35,11 +39,26 @@ const Sidebar = React.memo(function Sidebar() {
   const { user, isPro } = useAuth();
   const { isSidebarCollapsed, toggleSidebar } = useUIStore();
   const showValidationMenu = useSettingsStore(state => state.showValidationMenu);
+  const navigate = useNavigate();
 
   const activeLinks = [...ACTIVE_ITEMS];
   if (showValidationMenu) {
     activeLinks.push({ name: 'Validate Audio', path: '/validate-audio', icon: ShieldCheck });
+    activeLinks.push({ name: 'Test Detection', path: '/test-detection', icon: FlaskConical });
   }
+
+  const handleLogout = async () => {
+    try {
+      toggleSidebar();
+      await signOut();
+      // Clear any local caches that shouldn't persist across sessions
+      try { localStorage.removeItem('vroomie_settings_v1'); } catch { /* ignore */ }
+      toast.success('Signed out successfully.');
+      navigate('/login');
+    } catch (err) {
+      toast.error('Sign-out failed. Please try again.');
+    }
+  };
 
   if (!user) return null;
 
@@ -108,9 +127,9 @@ const Sidebar = React.memo(function Sidebar() {
         ))}
       </nav>
 
-      {/* User Footer */}
+      {/* User Footer with Logout */}
       <div className="p-4 border-t border-white/5 flex-shrink-0">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 mb-3">
           <div className="w-9 h-9 rounded-full bg-zinc-900 border border-white/10 flex items-center justify-center flex-shrink-0 overflow-hidden">
             <img
               src={`https://api.dicebear.com/7.x/notionists/svg?seed=${user.email}`}
@@ -126,6 +145,17 @@ const Sidebar = React.memo(function Sidebar() {
             </span>
           </div>
         </div>
+
+        {/* Logout Button */}
+        <button
+          onClick={handleLogout}
+          id="sidebar-logout-btn"
+          className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-500/10 border border-transparent hover:border-red-500/20 transition-all duration-200 text-sm font-medium"
+          style={{ touchAction: 'manipulation' }}
+        >
+          <LogOut className="w-4 h-4 flex-shrink-0" />
+          <span>Sign Out</span>
+        </button>
       </div>
     </aside>
   );
