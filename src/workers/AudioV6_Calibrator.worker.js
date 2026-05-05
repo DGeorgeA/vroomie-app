@@ -1,11 +1,21 @@
 /**
- * AudioV6_Calibrator.worker.js — Precision Mechanical Gating Engine v8
+ * AudioV6_Calibrator.worker.js — Precision Mechanical Gating Engine v9
  *
- * audio_v8_multiclass = true:
- *   Adds Multi-Dimensional Orthogonality Matrix to prevent greedy water_pump collapse:
- *   1. Spectral Centroid Pitch Gate   — if centroid > 1500Hz, veto water_pump match
- *   2. Crest Factor Impact Gate       — if crest factor > 6, veto water_pump match
- *   3. Duration Gate (MotorStarter)   — if session < 2s AND high transient, prefer motor_starter
+ * audio_v9_orthogonal_matrix = true:
+ *   Resolves bifurcated collapse: bearing deafness (false negatives) +
+ *   water_pump sinkhole (false positives for Starter/Piston/PowerSteering).
+ *
+ *   ROOT CAUSE FIX A — Bearing Deafness:
+ *     Spectral Subtraction (SS_ALPHA=1.5) was zeroing the 4-8kHz bearing
+ *     harmonics before kurtosis was computed. v9 computes kurtosis on the
+ *     RAW (pre-subtraction) power spectrum and adds a direct bearing boost
+ *     path that bypasses cosine-centred scoring.
+ *
+ *   ROOT CAUSE FIX B — WP Sinkhole:
+ *     MotorStarter and Piston have low SESSION-AVERAGE centroids because
+ *     silence/low-freq frames drag the mean below 1500Hz, bypassing v8 gate.
+ *     v9 adds per-class hard gates: LF kurtosis (piston), session duration
+ *     (starter), and mid-band energy ratio (power steering).
  */
 
 const TARGET_SR     = 44100;
@@ -57,14 +67,19 @@ let allSessionSamples = [];
 let frameVecs = [];
 let frameKurtoses = [];
 let frameFlatnesses = [];
-let frameHFCentroids  = [];  // 4kHz-10kHz centroid per frame (for clipping detection)
-let frameHFFlatnesses = [];  // 4kHz-10kHz flatness per frame
-let frameFullCentroids = []; // 0-12kHz weighted centroid per frame (Hz) for pitch gate
+let frameHFCentroids  = [];
+let frameHFFlatnesses = [];
+let frameFullCentroids = [];
 let clippedFrameCount = 0;
-let sessionPeakSample = 0;   // Track absolute peak for crest factor
-let sessionRmsSq = 0;        // Track running sum-of-squares for RMS (crest factor)
-let sessionSampleCount = 0;  // Count samples for RMS
+let sessionPeakSample = 0;
+let sessionRmsSq = 0;
+let sessionSampleCount = 0;
 let lfEnvelopes = [];
+// v9 — new orthogonal features
+let frameRawHFKurt = [];    // kurtosis on RAW (pre-subtraction) 4-8kHz power per frame
+let frameLFKurt    = [];    // kurtosis on 100-500Hz band (piston impulsive knock)
+let frameMidEnergy = [];    // total energy 500Hz-3kHz (power steering whine band)
+let sessionStartTime = 0;   // wall-clock ms when first 'process' arrives
 
 let noiseBuf = new Float32Array(0);
 let noiseReady = false;
@@ -86,6 +101,7 @@ self.onmessage = function (ev) {
 
 function handleProcess({ buffer, sampleRate }) {
   try {
+    if (sessionStartTime === 0) sessionStartTime = Date.now();
     const pcm = sampleRate === TARGET_SR ? buffer : linearResample(buffer, sampleRate, TARGET_SR);
     const normalized = peakNormalize(pcm);
 
@@ -158,25 +174,28 @@ function processFrame(frame) {
   const windowed = applyHanning(frame, FRAME_SAMPLES);
   const { re, im } = computeFFT(windowed, FFT_SIZE);
 
+  // Build RAW power spectrum (before subtraction) for v9 bearing detection
+  const rawPowerFull = new Float32Array(FFT_SIZE / 2);
+  for (let i = 0; i < FFT_SIZE / 2; i++) {
+    const rawMag = Math.sqrt(re[i]*re[i] + im[i]*im[i]);
+    rawPowerFull[i] = rawMag * rawMag;
+  }
+
   const power  = new Float32Array(FFT_SIZE / 2);
   const logMag = new Float32Array(FFT_SIZE / 2);
-  let lfEnergy = 0; // Low frequency energy for AM envelope
+  let lfEnergy = 0;
+  let midEnergy = 0;
 
   for (let i = 0; i < FFT_SIZE / 2; i++) {
     const rawMag = Math.sqrt(re[i]*re[i] + im[i]*im[i]);
-    const rawPow = rawMag * rawMag;
+    const rawPow = rawPowerFull[i];
     const noisePow = noiseMagProfile[i] * noiseMagProfile[i];
-    
-    // Spectral Subtraction
     const cleanPow = Math.max(rawPow - SS_ALPHA * noisePow, SS_BETA * rawPow);
     const cleanMag = Math.sqrt(cleanPow);
-
-    power[i] = cleanPow;
+    power[i]  = cleanPow;
     logMag[i] = Math.log10(Math.max(Number.EPSILON, cleanMag));
-
-    if (i >= BIN_100HZ && i <= BIN_500HZ) {
-      lfEnergy += cleanPow;
-    }
+    if (i >= BIN_100HZ && i <= BIN_500HZ) lfEnergy  += cleanPow;
+    if (i >= BIN_500HZ && i <= BIN_3KHZ)  midEnergy += cleanPow;
   }
 
   // Track crest factor components (peak sample vs RMS)
@@ -190,11 +209,10 @@ function processFrame(frame) {
   if (maxSample > 0.98) {
     clippedFrameCount++;
     frameVecs.push(Array.from(logMag.slice(BIN_4KHZ, BIN_12KHZ)));
-    frameKurtoses.push(3.0);
-    frameFlatnesses.push(0.5);
-    frameHFCentroids.push(-1);
-    frameHFFlatnesses.push(1.0);
+    frameKurtoses.push(3.0); frameFlatnesses.push(0.5);
+    frameHFCentroids.push(-1); frameHFFlatnesses.push(1.0);
     frameFullCentroids.push(-1);
+    frameRawHFKurt.push(3.0); frameLFKurt.push(3.0); frameMidEnergy.push(0);
     lfEnvelopes.push(0);
     return;
   }
@@ -209,6 +227,10 @@ function processFrame(frame) {
   frameHFCentroids.push(computeSpectralCentroid(power, BIN_4KHZ, BIN_10KHZ));
   frameHFFlatnesses.push(computeSpectralFlatness(power, BIN_4KHZ, BIN_10KHZ));
   frameFullCentroids.push(centroidHz);
+  // v9 — raw features (not affected by spectral subtraction)
+  frameRawHFKurt.push(computeSpectralKurtosis(rawPowerFull, BIN_4KHZ, BIN_8KHZ));
+  frameLFKurt.push(computeSpectralKurtosis(rawPowerFull, BIN_100HZ, BIN_500HZ));
+  frameMidEnergy.push(midEnergy);
   lfEnvelopes.push(Math.sqrt(lfEnergy));
 }
 
@@ -222,7 +244,6 @@ function handleStop() {
 
     if (frameVecs.length === 0) { emitNormal(0); resetSession(); return; }
 
-    // Average only non-clipped frames for the CSD vector
     const vecLen = frameVecs[0].length;
     const avgVec = new Array(vecLen).fill(0);
     let validFrameCount = 0;
@@ -234,79 +255,130 @@ function handleStop() {
     if (validFrameCount === 0) { emitNormal(0); resetSession(); return; }
     for (let i = 0; i < vecLen; i++) avgVec[i] /= validFrameCount;
 
-    const validKurt = frameKurtoses.filter((_, i) => frameHFCentroids[i] !== -1);
-    const validFlat = frameFlatnesses.filter((_, i) => frameHFCentroids[i] !== -1);
-    const avgKurtosis   = validKurt.reduce((a, b) => a + b, 0) / Math.max(1, validKurt.length);
-    const avgFlatness   = validFlat.reduce((a, b) => a + b, 0) / Math.max(1, validFlat.length);
+    // --- Standard session features ---
+    const valid = (arr) => arr.filter((_, i) => frameHFCentroids[i] !== -1);
+    const mean  = (arr) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+
+    const avgKurtosis    = mean(valid(frameKurtoses));
+    const avgFlatness    = mean(valid(frameFlatnesses));
     const transientScore = computeTransientScore(allSessionSamples);
-    const amDepth       = computeAMDepth(lfEnvelopes);
+    const amDepth        = computeAMDepth(lfEnvelopes);
 
-    console.log(`[V6] frames=${validFrameCount}/${frameVecs.length} Kurt=${avgKurtosis.toFixed(2)} Flat=${avgFlatness.toFixed(3)} Trans=${transientScore.toFixed(3)} Thresh=${clampedThreshold.toFixed(3)}`);
+    // --- v9 Orthogonal features ---
+    const validCentroids  = frameFullCentroids.filter(c => c >= 0);
+    const avgFullCentroid = mean(validCentroids);
 
-    // ── v8: Compute session-level orthogonality features ─────────────────────
-    // Spectral Centroid (pitch): energy-weighted mean frequency of the session
-    const validCentroids = frameFullCentroids.filter(c => c >= 0);
-    const avgFullCentroid = validCentroids.length > 0
-      ? validCentroids.reduce((a, b) => a + b, 0) / validCentroids.length
-      : 0;
-
-    // Crest Factor: peak / RMS — high values = impulsive (knock, tap), low = continuous grind
-    const sessionRms = sessionSampleCount > 0 ? Math.sqrt(sessionRmsSq / sessionSampleCount) : 0.001;
+    const sessionRms         = sessionSampleCount > 0 ? Math.sqrt(sessionRmsSq / sessionSampleCount) : 0.001;
     const sessionCrestFactor = sessionRms > 0.001 ? sessionPeakSample / sessionRms : 0;
+    const sessionDurationSec = sessionStartTime > 0 ? (Date.now() - sessionStartTime) / 1000 : 999;
 
-    console.log(`[V8] Centroid=${avgFullCentroid.toFixed(0)}Hz CrestFactor=${sessionCrestFactor.toFixed(2)} AmDepth=${amDepth.toFixed(3)}`);
+    // RAW HF kurtosis: computed BEFORE spectral subtraction — bearing harmonics survive SS
+    const validRawHF = valid(frameRawHFKurt);
+    const avgRawHFKurt = mean(validRawHF);
 
-    // ── Single-pass composite matching with v8 orthogonality matrix ───────────
+    // LF kurtosis: high values indicate impulsive knocking (piston slap) in 100-500Hz band
+    const avgLFKurt  = mean(valid(frameLFKurt));
+
+    // Mid-band energy ratio: dominant 500Hz-3kHz energy = power steering whine signature
+    const totalMidE  = frameMidEnergy.reduce((a, b) => a + b, 0);
+    const totalLFE   = lfEnvelopes.reduce((a, b) => a + b * b, 0); // sum of squared LF envelopes
+    const midToLFRatio = totalLFE > 0 ? totalMidE / (totalLFE + 1e-9) : 0;
+
+    console.log(`[V9] frames=${validFrameCount} RawHFKurt=${avgRawHFKurt.toFixed(1)} LFKurt=${avgLFKurt.toFixed(1)} Centroid=${avgFullCentroid.toFixed(0)}Hz Crest=${sessionCrestFactor.toFixed(1)} Dur=${sessionDurationSec.toFixed(1)}s MidRatio=${midToLFRatio.toFixed(2)}`);
+
+    // --- v9 BEARING BOOST: bypass SS-suppressed cosine path for alternator/bearing ---
+    // A real bearing fault has high RAW HF kurtosis (>8) sustained across frames.
+    // This signal is destroyed by SS_ALPHA subtraction in the cosine vector but
+    // survives in the raw power. We inject a direct bearing score here.
+    let bearingBoostCandidate = null;
+    let bearingBoostScore = 0;
+    if (avgRawHFKurt > 8.0 && validFrameCount >= 4) {
+      const bearingRefs = referenceIndex.filter(r =>
+        r.fault_type === 'alternator_bearing_fault' ||
+        (r.label && (r.label.includes('bearing') || r.label.includes('alternator')))
+      );
+      for (const ref of bearingRefs) {
+        if (!Array.isArray(ref.cosine_vec) || ref.cosine_vec.length !== vecLen) continue;
+        const cosSim = cosineSimilarity(avgVec, ref.cosine_vec);
+        // Bearing boost score: raw kurtosis drives 60%, cosine 40%
+        // Normalize kurtosis: target is ~15 (strong bearing), cap at 30
+        const kurtNorm = Math.min(1.0, (avgRawHFKurt - 8.0) / 22.0);
+        const bScore = 0.40 * cosSim + 0.60 * kurtNorm;
+        if (bScore > bearingBoostScore) { bearingBoostScore = bScore; bearingBoostCandidate = ref; }
+      }
+      console.log(`[V9] Bearing boost: rawHFKurt=${avgRawHFKurt.toFixed(1)} score=${bearingBoostScore.toFixed(3)} ref=${bearingBoostCandidate?.label}`);
+    }
+
+    // --- Single-pass composite matching with v9 per-class gates ---
     let bestScore = 0, bestRaw = 0, bestMatch = null;
 
     for (const ref of referenceIndex) {
       if (!Array.isArray(ref.cosine_vec) || ref.cosine_vec.length !== vecLen) continue;
 
       const W = FAULT_WEIGHTS[ref.fault_type] || FAULT_WEIGHTS['default'];
-      const cosSim  = cosineSimilarity(avgVec, ref.cosine_vec);
-      const refKurt = ref.kurtosis_score ?? 3.0;
-      const kurtSim = 1 / (1 + Math.abs(avgKurtosis - refKurt) / (Math.max(refKurt, avgKurtosis, 1e-6)));
-      const refFlat = ref.flatness_score ?? 0.5;
-      const flatSim = Math.max(0, 1 - Math.abs(avgFlatness - refFlat));
+      const cosSim   = cosineSimilarity(avgVec, ref.cosine_vec);
+      const refKurt  = ref.kurtosis_score ?? 3.0;
+      const kurtSim  = 1 / (1 + Math.abs(avgKurtosis - refKurt) / (Math.max(refKurt, avgKurtosis, 1e-6)));
+      const refFlat  = ref.flatness_score ?? 0.5;
+      const flatSim  = Math.max(0, 1 - Math.abs(avgFlatness - refFlat));
       const refTrans = ref.transient_score ?? 0.0;
       const transSim = 1 / (1 + Math.abs(transientScore - refTrans) / (Math.max(refTrans, transientScore, 0.1) + 1e-6));
 
       let composite = W.cosine * cosSim + W.kurtosis * kurtSim + W.flatness * flatSim + W.transient * transSim;
 
-      // ── v8 WATER PUMP ORTHOGONALITY MATRIX ──────────────────────────────────
-      // Water pump failure is: low-frequency (<1kHz), continuous grind, low crest factor.
-      // RockerArm/Valve = high centroid (>2kHz), high crest → veto
-      // Piston = high crest factor (impact knock) → veto
-      // PowerSteering = mid-high centroid (>1.5kHz) → veto
-      // MotorStarter = very short duration + high transient → veto
-      if (ref.fault_type === 'water_pump' || (ref.label && ref.label.includes('water_pump'))) {
+      // ── v9 WATER PUMP ORTHOGONALITY MATRIX ──────────────────────────────────
+      const isWP = ref.fault_type === 'water_pump' || (ref.label && ref.label.includes('water_pump'));
+      if (isWP) {
         let wpPenalty = 1.0;
 
-        // GATE 1 — Pitch Gate: centroid > 1500Hz means high-frequency source (NOT water pump)
+        // GATE 1 — Pitch: centroid > 1500Hz (PowerSteering, RockerArm)
         if (avgFullCentroid > WP_CENTROID_MAX_HZ && avgFullCentroid > 0) {
-          wpPenalty *= 0.05; // Veto: Rocker arm, power steering, high-freq whine
-          console.log(`[V8] WP VETO centroid=${avgFullCentroid.toFixed(0)}Hz > ${WP_CENTROID_MAX_HZ}Hz`);
+          wpPenalty *= 0.04;
+          console.log(`[V9] WP VETO pitch centroid=${avgFullCentroid.toFixed(0)}Hz`);
         }
 
-        // GATE 2 — Crest Factor Impact Gate: sharp impacts = NOT a water pump grind
+        // GATE 2 — Crest > 6: impulsive knock (Piston)
         if (sessionCrestFactor > WP_CREST_MAX) {
-          wpPenalty *= 0.05; // Veto: Piston slap, valve tap
-          console.log(`[V8] WP VETO crest=${sessionCrestFactor.toFixed(2)} > ${WP_CREST_MAX}`);
+          wpPenalty *= 0.04;
+          console.log(`[V9] WP VETO crest=${sessionCrestFactor.toFixed(1)}`);
         }
 
-        // GATE 3 — AM Depth: water pump needs rotational wobble
-        if (amDepth < 0.12) {
-          wpPenalty *= 0.35; // Penalize: no modulation = not a rotating fault
+        // GATE 3 — LF Kurtosis > 7: piston slap produces impulsive LF bursts
+        if (avgLFKurt > 7.0) {
+          wpPenalty *= 0.10;
+          console.log(`[V9] WP VETO lfKurt=${avgLFKurt.toFixed(1)} (piston slap)`);
         }
+
+        // GATE 4 — Short session + high transient = MotorStarter
+        if (sessionDurationSec < 3.0 && transientScore > 0.4) {
+          wpPenalty *= 0.04;
+          console.log(`[V9] WP VETO starter dur=${sessionDurationSec.toFixed(1)}s trans=${transientScore.toFixed(2)}`);
+        }
+
+        // GATE 5 — Dominant mid-band energy = PowerSteering whine
+        if (midToLFRatio > 3.0) {
+          wpPenalty *= 0.10;
+          console.log(`[V9] WP VETO midRatio=${midToLFRatio.toFixed(1)} (power steering)`);
+        }
+
+        // GATE 6 — AM Depth: water pump needs rotational wobble
+        if (amDepth < 0.12) wpPenalty *= 0.35;
 
         composite *= wpPenalty;
       }
-      // ─────────────────────────────────────────────────────────────────────────
 
       if (composite > bestScore) { bestScore = composite; bestRaw = cosSim; bestMatch = ref; }
     }
 
-    console.log(`[V8] Best: "${bestMatch?.label}" score=${bestScore.toFixed(3)} cosine=${bestRaw.toFixed(3)} centroid=${avgFullCentroid.toFixed(0)}Hz crest=${sessionCrestFactor.toFixed(2)} threshold=${clampedThreshold.toFixed(3)}`);
+    // Apply bearing boost if it outscores normal composite path
+    if (bearingBoostScore > bestScore && bearingBoostCandidate) {
+      bestScore = bearingBoostScore;
+      bestRaw   = cosineSimilarity(avgVec, bearingBoostCandidate.cosine_vec);
+      bestMatch = bearingBoostCandidate;
+      console.log(`[V9] Bearing boost WINS: ${bestMatch.label} score=${bestScore.toFixed(3)}`);
+    }
+
+    console.log(`[V9] Final: "${bestMatch?.label}" score=${bestScore.toFixed(3)} threshold=${clampedThreshold.toFixed(3)}`);
 
     if (bestScore >= clampedThreshold && bestMatch) {
       self.postMessage({
@@ -316,7 +388,7 @@ function handleStop() {
           confidence: Math.min(1.0, bestScore),
           severity: bestMatch.severity || 'high',
           rms: Math.max(MIN_NOISE_FLOOR, noiseRms),
-          spectralMeta: { kurtosis: avgKurtosis, flatness: avgFlatness, transient: transientScore, amDepth, centroid: avgFullCentroid, crestFactor: sessionCrestFactor, cosine: bestRaw, threshold: clampedThreshold, frames: validFrameCount }
+          spectralMeta: { kurtosis: avgKurtosis, rawHFKurt: avgRawHFKurt, lfKurt: avgLFKurt, flatness: avgFlatness, transient: transientScore, amDepth, centroid: avgFullCentroid, crestFactor: sessionCrestFactor, midRatio: midToLFRatio, duration: sessionDurationSec, cosine: bestRaw, threshold: clampedThreshold, frames: validFrameCount }
         }
       });
     } else {
@@ -324,12 +396,13 @@ function handleStop() {
     }
 
   } catch (err) {
-    console.error('[V6 Worker] handleStop error:', err);
+    console.error('[V9 Worker] handleStop error:', err);
     emitNormal(0);
   } finally {
     resetSession();
   }
 }
+
 
 function emitNormal(confidence) {
   self.postMessage({ type: 'result', payload: { status: 'normal', anomaly: null, confidence, rms: Math.max(MIN_NOISE_FLOOR, noiseRms) } });
@@ -338,23 +411,20 @@ function emitNormal(confidence) {
 function resetSession() {
   sessionRing = new Float32Array(0);
   allSessionSamples = [];
-  frameVecs = [];
-  frameKurtoses = [];
-  frameFlatnesses = [];
-  frameHFCentroids  = [];
-  frameHFFlatnesses = [];
-  frameFullCentroids = [];
-  clippedFrameCount  = 0;
-  sessionPeakSample  = 0;
-  sessionRmsSq       = 0;
-  sessionSampleCount = 0;
+  frameVecs = []; frameKurtoses = []; frameFlatnesses = [];
+  frameHFCentroids = []; frameHFFlatnesses = []; frameFullCentroids = [];
+  clippedFrameCount = 0;
+  sessionPeakSample = 0; sessionRmsSq = 0; sessionSampleCount = 0;
   lfEnvelopes = [];
+  frameRawHFKurt = []; frameLFKurt = []; frameMidEnergy = [];
+  sessionStartTime = 0;
   noiseBuf = new Float32Array(0);
   noiseReady = false;
   noiseMagProfile = new Float32Array(FFT_SIZE / 2);
   noiseRms = 0;
   clampedThreshold = 0.65;
 }
+
 
 
 function calculateClampedThreshold(rms) {
