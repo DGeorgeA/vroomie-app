@@ -244,15 +244,41 @@ export function stopExtraction() {
     scriptProcessor = null;
   }
 
-  // Terminate worker
+  // ─── FIX: Capture callback BEFORE nulling it ──────────────────────────────
+  // The v5 worker only emits a result on 'stop' — never per frame.
+  // The previous code nulled onFeaturesCallback immediately, so the worker's
+  // final detection result was always silently dropped.
+  // Solution: rewire onmessage on the retiring worker to deliver the final
+  // result via the captured callback, then terminate the worker.
   if (featureWorker) {
-    featureWorker.postMessage({ type: 'stop' });
     const workerToTerminate = featureWorker;
-    setTimeout(() => {
-      workerToTerminate.terminate();
-    }, 500);
+    const finalCallback     = onFeaturesCallback; // capture before null
+
+    workerToTerminate.onmessage = (ev) => {
+      const { type, payload } = ev.data;
+      if (type === 'result' && finalCallback) {
+        finalCallback({
+          compositeEmbedding: null,
+          rawSignalFrame:     null,
+          liveSpectrogram:    null,
+          liveEmbedding:      null,
+          cnnResult:          null,
+          sampleRate:         0,
+          _workerResult:      payload,
+          rms:                payload.rms || 0,
+          spectralCentroid:   0,
+        });
+      }
+      try { workerToTerminate.terminate(); } catch (_) {}
+    };
+
+    featureWorker.postMessage({ type: 'stop' });
     featureWorker = null;
+
+    // Safety terminate in case worker never responds
+    setTimeout(() => { try { workerToTerminate.terminate(); } catch (_) {} }, 1500);
   }
+  // ─────────────────────────────────────────────────────────────────────────
 
   if (analyserNode) {
     analyserNode.disconnect();

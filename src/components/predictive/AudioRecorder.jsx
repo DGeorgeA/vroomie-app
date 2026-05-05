@@ -292,6 +292,11 @@ export default function AudioRecorder({
       mediaRecorder.onstop = async () => {
         try {
           const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+          // Wait for the v5 worker's final 'stop' result to arrive and populate
+          // sessionAnomaliesRef before reading it in handleAudioUpload.
+          // The worker processes synchronously on 'stop' but the postMessage
+          // reply is async — 1200ms covers even slow devices.
+          await new Promise(resolve => setTimeout(resolve, 1200));
           await handleAudioUpload(blob);
           if (streamRef.current) {
             streamRef.current.getTracks().forEach(t => t.stop());
