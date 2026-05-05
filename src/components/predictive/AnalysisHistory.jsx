@@ -224,8 +224,8 @@ export default function AnalysisHistory({
                            *  Each entry reads from its OWN `analysis` object — no shared state.
                            * ─────────────────────────────────────────────────────── */}
                           {(() => {
-                            // Each row provides its own timestamp — never shared across entries
-                            const ts = analysis.created_at || analysis.processed_at || analysis.created_date;
+                            // strictly use created_at from Supabase as source of truth
+                            const ts = analysis.created_at;
                             if (!ts) return 'Unknown Date';
                             try {
                               const parsed = new Date(ts);

@@ -11,7 +11,7 @@
 
 import { getDetectionMode } from './detectionMode';
 import { Logger } from './logger';
-import { referenceIndex, initializeAudioDataset } from '../services/audioDatasetService';
+import { referenceIndex, initializeAudioDataset, audio_matching_final_v5_hardened } from '../services/audioDatasetService';
 import { computeCompositeEmbedding } from './audioMath_v11';
 import { initializeEmbeddingEngine, getAudioEmbedding, isEngineReady } from './mlEmbeddingEngine';
 
@@ -80,10 +80,11 @@ export async function startExtraction(callback) {
     mediaStreamSource.connect(analyserNode);
 
     // Spawn the Web Worker (module worker for ESM support)
-    featureWorker = new Worker(
-      new URL('../workers/featureWorker.js', import.meta.url),
-      { type: 'module' }
-    );
+    const workerUrl = audio_matching_final_v5_hardened
+      ? new URL('../workers/AudioV5_SuperProcessor.worker.js', import.meta.url)
+      : new URL('../workers/featureWorker.js', import.meta.url);
+
+    featureWorker = new Worker(workerUrl, { type: 'module' });
 
     // Set thresholds in worker (dual-gate: absolute + margin)
     featureWorker.postMessage({ type: 'setThresholds', payload: { absThreshold: 0.72, margin: 0.04, rmsGate: 0.005 } });
@@ -245,7 +246,11 @@ export function stopExtraction() {
 
   // Terminate worker
   if (featureWorker) {
-    featureWorker.terminate();
+    featureWorker.postMessage({ type: 'stop' });
+    const workerToTerminate = featureWorker;
+    setTimeout(() => {
+      workerToTerminate.terminate();
+    }, 500);
     featureWorker = null;
   }
 
