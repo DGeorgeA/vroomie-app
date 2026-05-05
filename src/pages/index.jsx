@@ -1,4 +1,4 @@
-import React, { Suspense, lazy } from "react";
+import React, { Suspense, lazy, Component } from "react";
 import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
 import Layout from "./Layout.jsx";
 import LoginPage from "./LoginPage.jsx";
@@ -19,10 +19,35 @@ function PageSkeleton() {
   );
 }
 
+class ChunkErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true };
+  }
+  componentDidCatch(error) {
+    // If it's a dynamic import failure (chunk deleted after deployment)
+    if (error?.message?.includes("Failed to fetch dynamically imported module") || 
+        error?.message?.includes("Importing a module script failed")) {
+      console.warn("Chunk load error detected. Reloading page to fetch new bundles...");
+      window.location.reload();
+    }
+  }
+  render() {
+    if (this.state.hasError) {
+      return <PageSkeleton />; // Show skeleton while reloading
+    }
+    return this.props.children;
+  }
+}
+
 function PagesContent() {
   return (
-    <Suspense fallback={<PageSkeleton />}>
-      <Routes>
+    <ChunkErrorBoundary>
+      <Suspense fallback={<PageSkeleton />}>
+        <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/validate-audio" element={
           <Layout currentPageName="Validate Audio">
@@ -99,8 +124,9 @@ function PagesContent() {
             <PredictiveMaintenance />
           </Layout>
         } />
-      </Routes>
-    </Suspense>
+        </Routes>
+      </Suspense>
+    </ChunkErrorBoundary>
   );
 }
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
-import { TARGET_SR, computeCompositeEmbedding, PIPELINE_VERSION } from '../lib/audioMath_v11';
+import { TARGET_SR, PIPELINE_VERSION } from '../lib/audioMath_v11';
 import { Logger } from '../lib/logger';
 import { referenceIndex, initializeAudioDataset, refreshAudioDataset } from '../services/audioDatasetService';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -68,36 +68,52 @@ export default function ValidationBench() {
             buffer = decoded.getChannelData(0);
           }
 
-          // Process through the UNIFIED PIPELINE
-          const liveEmbedding = computeCompositeEmbedding(buffer, TARGET_SR);
+          // 1. Instantiate the real-time Worker
+          const worker = new Worker(new URL('../workers/AudioV6_Calibrator.worker.js', import.meta.url), { type: 'module' });
+          worker.postMessage({ type: 'setReferenceIndex', payload: referenceIndex });
 
-          console.log(`[VERIFY] ${name} | Dims: ${liveEmbedding.length}`);
-
-          // Match against Reference Index
-          let bestMatch = { score: 0, label: 'none' };
-          for (const ref of referenceIndex) {
-            const score = cosineSimilarity(liveEmbedding, ref.embedding_vector);
-            if (score > bestMatch.score) {
-              bestMatch = { score, label: ref.label };
+          // 2. Chunk audio and stream to worker (simulating AudioWorklet)
+          const CHUNK_SIZE = 4096;
+          for (let i = 0; i < buffer.length; i += CHUNK_SIZE) {
+            const chunk = buffer.subarray(i, i + CHUNK_SIZE);
+            if (chunk.length === CHUNK_SIZE) {
+              // Create a copy to prevent transfer detach issues in loop
+              const chunkCopy = new Float32Array(chunk);
+              worker.postMessage({ type: 'process', payload: { buffer: chunkCopy, sampleRate: TARGET_SR } });
             }
           }
 
-          const threshold = 0.80; // Hard production threshold per spec
-          const finalScore = bestMatch.score;
-          const detected = finalScore >= threshold;
+          // 3. Await worker analysis
+          return new Promise((resolve) => {
+            worker.onmessage = (e) => {
+              const { type, payload } = e.data;
+              if (type === 'result') {
+                worker.terminate();
+                const detected = payload.status === 'anomaly';
+                const finalScore = payload.confidence || 0;
+                const matchLabel = payload.anomaly || 'none';
+                const threshold = payload.spectralMeta?.threshold || 0.65;
+                
+                const passed = expectedType === 'anomaly' ? detected : !detected;
 
-          const passed = expectedType === 'anomaly'
-            ? detected
-            : finalScore < threshold;
+                resolve({
+                  name,
+                  score: finalScore,
+                  match: matchLabel,
+                  expected: expectedType,
+                  detected: detected ? 'ANOMALY' : 'NORMAL',
+                  passed: !!passed,
+                });
+              }
+            };
 
-          return {
-            name,
-            score: finalScore,
-            match: bestMatch.label,
-            expected: expectedType,
-            detected: detected ? 'ANOMALY' : 'NORMAL',
-            passed: !!passed,
-          };
+            worker.onerror = (err) => {
+              worker.terminate();
+              resolve({ name, error: err.message, passed: false });
+            };
+
+            worker.postMessage({ type: 'stop' });
+          });
         } catch (err) {
           return { name, error: err.message, passed: false };
         }
@@ -142,15 +158,6 @@ export default function ValidationBench() {
     }
   };
 
-  const cosineSimilarity = (a, b) => {
-    let dot = 0, ma = 0, mb = 0;
-    for (let i = 0; i < a.length; i++) {
-      dot += a[i] * b[i];
-      ma += a[i] * a[i];
-      mb += b[i] * b[i];
-    }
-    return dot / (Math.sqrt(ma) * Math.sqrt(mb)) || 0;
-  };
 
   const allPassed = results.length > 0 && results.every(r => r.passed);
 
