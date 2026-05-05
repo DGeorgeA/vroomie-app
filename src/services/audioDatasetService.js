@@ -25,9 +25,10 @@ import { Logger } from '../lib/logger';
 
 export let referenceIndex = [];
 
-// Feature flag for v4 and v5 spectral pipeline
+// Feature flags
 export const audio_matching_v4_final = true;
 export const audio_matching_final_v5_hardened = true;
+export const audio_matching_mechanical_v2 = true;  // Active pipeline
 
 export async function initializeAudioDataset(forceRefresh = false) {
   if (!forceRefresh && referenceIndex && referenceIndex.length > 0) {
@@ -82,10 +83,10 @@ export async function initializeAudioDataset(forceRefresh = false) {
             if (Array.isArray(pattern.cosine_vec) && pattern.cosine_vec.length > 0) {
               entry.cosine_vec = pattern.cosine_vec;
             }
-            // v3 compat: also store mfcc_vector if present
-            if (Array.isArray(pattern.mfcc_vector) && pattern.mfcc_vector.length === 13) {
-              entry.mfcc_vector = pattern.mfcc_vector;
-            }
+            // v2 mechanical features
+            if (typeof pattern.kurtosis_score  === 'number') entry.kurtosis_score  = pattern.kurtosis_score;
+            if (typeof pattern.flatness_score   === 'number') entry.flatness_score   = pattern.flatness_score;
+            if (typeof pattern.transient_score  === 'number') entry.transient_score  = pattern.transient_score;
 
             // Only load entries usable by at least one pipeline version
             if (entry.cosine_vec || entry.mfcc_vector) {

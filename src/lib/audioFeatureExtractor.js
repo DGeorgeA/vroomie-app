@@ -11,7 +11,7 @@
 
 import { getDetectionMode } from './detectionMode';
 import { Logger } from './logger';
-import { referenceIndex, initializeAudioDataset, audio_matching_final_v5_hardened } from '../services/audioDatasetService';
+import { referenceIndex, initializeAudioDataset, audio_matching_mechanical_v2 } from '../services/audioDatasetService';
 import { computeCompositeEmbedding } from './audioMath_v11';
 import { initializeEmbeddingEngine, getAudioEmbedding, isEngineReady } from './mlEmbeddingEngine';
 
@@ -79,10 +79,10 @@ export async function startExtraction(callback) {
     analyserNode.fftSize = 1024; // smaller than before (was 2048)
     mediaStreamSource.connect(analyserNode);
 
-    // Spawn the Web Worker (module worker for ESM support)
-    const workerUrl = audio_matching_final_v5_hardened
-      ? new URL('../workers/AudioV5_SuperProcessor.worker.js', import.meta.url)
-      : new URL('../workers/featureWorker.js', import.meta.url);
+    // Spawn the Web Worker — mechanical v2 takes priority
+    const workerUrl = audio_matching_mechanical_v2
+      ? new URL('../workers/MechanicalAudioProcessor.worker.js', import.meta.url)
+      : new URL('../workers/AudioV5_SuperProcessor.worker.js', import.meta.url);
 
     featureWorker = new Worker(workerUrl, { type: 'module' });
 
