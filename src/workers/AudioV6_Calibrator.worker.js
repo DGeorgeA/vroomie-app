@@ -40,6 +40,12 @@ const WP_CREST_MAX       = 6.0;  // Water pump crest factor MUST be below 6 (no 
 const BEARING_KURTOSIS_OVERRIDE = 15;   // Kurtosis > 15 in 4kHz-10kHz = bearing fault
 const INTAKE_FLATNESS_OVERRIDE  = 0.65; // Flatness > 0.65 in 8kHz-12kHz = intake leak
 
+// v10 — energy_ratio gate: HF classifiers (bearing/intake) can ONLY fire when
+// high-frequency energy (4kHz-12kHz) makes up >= 35% of total signal energy.
+// Below this ratio the sound is LF-dominant (piston, water pump) and HF
+// kurtosis/flatness measurements are meaningless noise harmonics, not fault signals.
+const HF_ENERGY_RATIO_MIN = 0.35;  // audio_v10_energy_ratio = true
+
 const SS_ALPHA = 1.5;
 const SS_BETA  = 0.01;
 const MIN_NOISE_FLOOR = 0.01; // Clamped noise floor
@@ -80,6 +86,9 @@ let frameRawHFKurt = [];    // kurtosis on RAW (pre-subtraction) 4-8kHz power pe
 let frameLFKurt    = [];    // kurtosis on 100-500Hz band (piston impulsive knock)
 let frameMidEnergy = [];    // total energy 500Hz-3kHz (power steering whine band)
 let sessionStartTime = 0;   // wall-clock ms when first 'process' arrives
+// v10 — energy ratio gate arrays
+let frameHFEnergy    = [];  // sum of clean power in 4kHz-12kHz band per frame
+let frameTotalEnergy = [];  // sum of clean power across full band per frame
 
 let noiseBuf = new Float32Array(0);
 let noiseReady = false;
@@ -185,17 +194,20 @@ function processFrame(frame) {
   const logMag = new Float32Array(FFT_SIZE / 2);
   let lfEnergy = 0;
   let midEnergy = 0;
+  let hfEnergy = 0;    // v10: 4kHz-12kHz clean power
+  let totalEnergy = 0; // v10: full-band clean power
 
   for (let i = 0; i < FFT_SIZE / 2; i++) {
-    const rawMag = Math.sqrt(re[i]*re[i] + im[i]*im[i]);
     const rawPow = rawPowerFull[i];
     const noisePow = noiseMagProfile[i] * noiseMagProfile[i];
     const cleanPow = Math.max(rawPow - SS_ALPHA * noisePow, SS_BETA * rawPow);
     const cleanMag = Math.sqrt(cleanPow);
     power[i]  = cleanPow;
     logMag[i] = Math.log10(Math.max(Number.EPSILON, cleanMag));
+    totalEnergy += cleanPow;
     if (i >= BIN_100HZ && i <= BIN_500HZ) lfEnergy  += cleanPow;
     if (i >= BIN_500HZ && i <= BIN_3KHZ)  midEnergy += cleanPow;
+    if (i >= BIN_4KHZ  && i <= BIN_12KHZ) hfEnergy  += cleanPow;
   }
 
   // Track crest factor components (peak sample vs RMS)
@@ -213,6 +225,7 @@ function processFrame(frame) {
     frameHFCentroids.push(-1); frameHFFlatnesses.push(1.0);
     frameFullCentroids.push(-1);
     frameRawHFKurt.push(3.0); frameLFKurt.push(3.0); frameMidEnergy.push(0);
+    frameHFEnergy.push(0); frameTotalEnergy.push(1); // ratio = 0 for clipped frames
     lfEnvelopes.push(0);
     return;
   }
@@ -227,10 +240,13 @@ function processFrame(frame) {
   frameHFCentroids.push(computeSpectralCentroid(power, BIN_4KHZ, BIN_10KHZ));
   frameHFFlatnesses.push(computeSpectralFlatness(power, BIN_4KHZ, BIN_10KHZ));
   frameFullCentroids.push(centroidHz);
-  // v9 — raw features (not affected by spectral subtraction)
+  // v9 — raw features
   frameRawHFKurt.push(computeSpectralKurtosis(rawPowerFull, BIN_4KHZ, BIN_8KHZ));
   frameLFKurt.push(computeSpectralKurtosis(rawPowerFull, BIN_100HZ, BIN_500HZ));
   frameMidEnergy.push(midEnergy);
+  // v10 — energy ratio gate
+  frameHFEnergy.push(hfEnergy);
+  frameTotalEnergy.push(totalEnergy);
   lfEnvelopes.push(Math.sqrt(lfEnergy));
 }
 
@@ -281,18 +297,25 @@ function handleStop() {
 
     // Mid-band energy ratio: dominant 500Hz-3kHz energy = power steering whine signature
     const totalMidE  = frameMidEnergy.reduce((a, b) => a + b, 0);
-    const totalLFE   = lfEnvelopes.reduce((a, b) => a + b * b, 0); // sum of squared LF envelopes
+    const totalLFE   = lfEnvelopes.reduce((a, b) => a + b * b, 0);
     const midToLFRatio = totalLFE > 0 ? totalMidE / (totalLFE + 1e-9) : 0;
 
-    console.log(`[V9] frames=${validFrameCount} RawHFKurt=${avgRawHFKurt.toFixed(1)} LFKurt=${avgLFKurt.toFixed(1)} Centroid=${avgFullCentroid.toFixed(0)}Hz Crest=${sessionCrestFactor.toFixed(1)} Dur=${sessionDurationSec.toFixed(1)}s MidRatio=${midToLFRatio.toFixed(2)}`);
+    // v10 — HF Energy Ratio gate (audio_v10_energy_ratio = true)
+    // Sum total and HF clean energy across all valid frames.
+    // If hfRatio < HF_ENERGY_RATIO_MIN (0.35), the session is LF-dominant:
+    // any kurtosis/flatness spike in 4-12kHz is a harmonic artefact of a
+    // low-frequency mechanical fault, NOT a bearing or intake leak signature.
+    const sumHF    = frameHFEnergy.reduce((a, b) => a + b, 0);
+    const sumTotal = frameTotalEnergy.reduce((a, b) => a + b, 0);
+    const hfRatio  = sumTotal > 0 ? sumHF / sumTotal : 0;
+    const isHFDominant = hfRatio >= HF_ENERGY_RATIO_MIN;
 
-    // --- v9 BEARING BOOST: bypass SS-suppressed cosine path for alternator/bearing ---
-    // A real bearing fault has high RAW HF kurtosis (>8) sustained across frames.
-    // This signal is destroyed by SS_ALPHA subtraction in the cosine vector but
-    // survives in the raw power. We inject a direct bearing score here.
+    console.log(`[V9] frames=${validFrameCount} RawHFKurt=${avgRawHFKurt.toFixed(1)} LFKurt=${avgLFKurt.toFixed(1)} Centroid=${avgFullCentroid.toFixed(0)}Hz Crest=${sessionCrestFactor.toFixed(1)} Dur=${sessionDurationSec.toFixed(1)}s MidRatio=${midToLFRatio.toFixed(2)} HFRatio=${hfRatio.toFixed(3)} isHFDominant=${isHFDominant}`);
+
+    // v9 BEARING BOOST — guard also with HF dominance check (v10)
     let bearingBoostCandidate = null;
     let bearingBoostScore = 0;
-    if (avgRawHFKurt > 8.0 && validFrameCount >= 4) {
+    if (avgRawHFKurt > 8.0 && validFrameCount >= 4 && isHFDominant) {
       const bearingRefs = referenceIndex.filter(r =>
         r.fault_type === 'alternator_bearing_fault' ||
         (r.label && (r.label.includes('bearing') || r.label.includes('alternator')))
@@ -300,13 +323,13 @@ function handleStop() {
       for (const ref of bearingRefs) {
         if (!Array.isArray(ref.cosine_vec) || ref.cosine_vec.length !== vecLen) continue;
         const cosSim = cosineSimilarity(avgVec, ref.cosine_vec);
-        // Bearing boost score: raw kurtosis drives 60%, cosine 40%
-        // Normalize kurtosis: target is ~15 (strong bearing), cap at 30
         const kurtNorm = Math.min(1.0, (avgRawHFKurt - 8.0) / 22.0);
         const bScore = 0.40 * cosSim + 0.60 * kurtNorm;
         if (bScore > bearingBoostScore) { bearingBoostScore = bScore; bearingBoostCandidate = ref; }
       }
-      console.log(`[V9] Bearing boost: rawHFKurt=${avgRawHFKurt.toFixed(1)} score=${bearingBoostScore.toFixed(3)} ref=${bearingBoostCandidate?.label}`);
+      console.log(`[V9] Bearing boost: rawHFKurt=${avgRawHFKurt.toFixed(1)} hfRatio=${hfRatio.toFixed(3)} score=${bearingBoostScore.toFixed(3)} ref=${bearingBoostCandidate?.label}`);
+    } else if (avgRawHFKurt > 8.0 && !isHFDominant) {
+      console.log(`[V10] Bearing boost BLOCKED: hfRatio=${hfRatio.toFixed(3)} < ${HF_ENERGY_RATIO_MIN} (LF-dominant, HF kurtosis is artefact)`);
     }
 
     // --- Single-pass composite matching with v9 per-class gates ---
@@ -326,7 +349,22 @@ function handleStop() {
 
       let composite = W.cosine * cosSim + W.kurtosis * kurtSim + W.flatness * flatSim + W.transient * transSim;
 
-      // ── v9 WATER PUMP ORTHOGONALITY MATRIX ──────────────────────────────────
+      // ── v10 HF ENERGY RATIO GATE ─────────────────────────────────────────────
+      // If HF energy is NOT dominant (<35% of total), hard-veto HF classifiers.
+      // A piston knock at 200Hz generates kurtosis harmonics at 4-8kHz but
+      // hfRatio stays ~0.10-0.15 — below the 0.35 threshold.
+      // A real bearing whine at 5kHz pushes hfRatio to 0.45-0.70.
+      const isAltBearing = ref.fault_type === 'alternator_bearing_fault' ||
+        (ref.label && (ref.label.includes('bearing') || ref.label.includes('alternator')));
+      const isIntakeLeak = ref.fault_type === 'intake_leak' ||
+        (ref.label && ref.label.includes('intake_leak'));
+
+      if ((isAltBearing || isIntakeLeak) && !isHFDominant) {
+        composite *= 0.04; // Hard veto: LF-dominant signal cannot be a HF fault
+        console.log(`[V10] HF VETO ${ref.label}: hfRatio=${hfRatio.toFixed(3)} < ${HF_ENERGY_RATIO_MIN}`);
+      }
+      // ─────────────────────────────────────────────────────────────────────────
+
       const isWP = ref.fault_type === 'water_pump' || (ref.label && ref.label.includes('water_pump'));
       if (isWP) {
         let wpPenalty = 1.0;
@@ -388,7 +426,7 @@ function handleStop() {
           confidence: Math.min(1.0, bestScore),
           severity: bestMatch.severity || 'high',
           rms: Math.max(MIN_NOISE_FLOOR, noiseRms),
-          spectralMeta: { kurtosis: avgKurtosis, rawHFKurt: avgRawHFKurt, lfKurt: avgLFKurt, flatness: avgFlatness, transient: transientScore, amDepth, centroid: avgFullCentroid, crestFactor: sessionCrestFactor, midRatio: midToLFRatio, duration: sessionDurationSec, cosine: bestRaw, threshold: clampedThreshold, frames: validFrameCount }
+          spectralMeta: { kurtosis: avgKurtosis, rawHFKurt: avgRawHFKurt, lfKurt: avgLFKurt, flatness: avgFlatness, transient: transientScore, amDepth, centroid: avgFullCentroid, crestFactor: sessionCrestFactor, midRatio: midToLFRatio, hfRatio, duration: sessionDurationSec, cosine: bestRaw, threshold: clampedThreshold, frames: validFrameCount }
         }
       });
     } else {
@@ -417,6 +455,7 @@ function resetSession() {
   sessionPeakSample = 0; sessionRmsSq = 0; sessionSampleCount = 0;
   lfEnvelopes = [];
   frameRawHFKurt = []; frameLFKurt = []; frameMidEnergy = [];
+  frameHFEnergy = []; frameTotalEnergy = [];
   sessionStartTime = 0;
   noiseBuf = new Float32Array(0);
   noiseReady = false;

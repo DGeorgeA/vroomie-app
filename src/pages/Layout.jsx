@@ -56,29 +56,29 @@ export default function Layout({ children, currentPageName }) {
             scrolled ? "backdrop-blur-xl bg-black/80 border-b border-white/5 shadow-2xl" : "bg-black/30 backdrop-blur-sm"
           }`}
         >
-          <div className="flex justify-between items-center h-16 px-6 lg:px-10">
-            <div className="flex items-center gap-4">
-              {/* Sidebar Toggle Button */}
-              {!loading && user && (
-                <button
-                  onClick={useUIStore.getState().toggleSidebar}
-                  aria-label="Open navigation menu"
-                  className="p-2 -ml-2 rounded-lg hover:bg-white/10 text-white transition-colors"
-                  style={{ color: '#ffffff', zIndex: 100 }}
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
-                </button>
-              )}
-              <h1 className="text-xl font-bold tracking-tight text-white/90">
-                {currentPageName === 'PredictiveMaintenance' ? 'Dashboard' : currentPageName}
-              </h1>
-            </div>
-
-            {/* Logo right side */}
-            <div className="flex items-center gap-2">
+        <div className="flex justify-between items-center h-16 px-4 md:px-6 lg:px-10 w-full" style={{ minWidth: 0 }}>
+            {/* ── Hamburger toggle — flex-shrink:0 so it NEVER gets pushed off-screen ── */}
+            {!loading && user && (
+              <button
+                onClick={useUIStore.getState().toggleSidebar}
+                aria-label="Open navigation menu"
+                id="mobile-menu-trigger"
+                className="p-2 -ml-2 rounded-lg hover:bg-white/10 text-white transition-colors"
+                style={{ flexShrink: 0, zIndex: 100 }}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
+              </button>
+            )}
+            {/* ── Page title — min-w-0 + truncate prevents overflow ejecting siblings ── */}
+            <h1 className="text-lg md:text-xl font-bold tracking-tight text-white/90 flex-1 min-w-0 truncate px-3">
+              {currentPageName === 'PredictiveMaintenance' ? 'Dashboard' : currentPageName}
+            </h1>
+            {/* ── Logo — flex-shrink:0 so it always stays visible ── */}
+            <div className="flex items-center gap-2" style={{ flexShrink: 0 }}>
               <VroomieLogo size="sm" />
             </div>
           </div>
+
         </header>
 
         <main className="flex-1 p-4 md:p-6 lg:p-10 relative overflow-x-hidden">
