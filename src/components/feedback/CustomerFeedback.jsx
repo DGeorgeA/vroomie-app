@@ -107,7 +107,7 @@ export function FeedbackModal({ isOpen, onClose }) {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 16, scale: 0.97 }}
             transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
-            className="fixed top-4 left-[72px] z-[1000] w-[min(320px,90vw)] max-h-[90vh] overflow-y-auto"
+            className="fixed bottom-20 right-4 z-[1000] w-[min(320px,90vw)] max-h-[90vh] overflow-y-auto sm:bottom-auto sm:top-1/2 sm:right-auto sm:left-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2"
           >
             <div className="relative bg-zinc-950 border border-white/10 rounded-2xl shadow-2xl shadow-black/60 overflow-hidden">
               {/* Glow accents */}

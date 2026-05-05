@@ -51,7 +51,7 @@ export default function Layout({ children, currentPageName }) {
         />
       )}
 
-      {/* ── Persistent Feedback Button — top-left corner ─────────────────── */}
+      {/* ── Persistent Feedback Button — bottom-right, clear of all nav ───── */}
       {!loading && user && (
         <button
           id="global-feedback-btn"
@@ -59,7 +59,7 @@ export default function Layout({ children, currentPageName }) {
           title="Share feedback"
           aria-label="Open feedback form"
           className="fixed z-[200] flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-900/80 border border-white/10 hover:border-yellow-400/50 hover:bg-zinc-800/90 text-zinc-500 hover:text-yellow-400 transition-all duration-200 shadow-md backdrop-blur-sm text-[11px] font-medium"
-          style={{ top: '72px', left: '16px' }}
+          style={{ bottom: '24px', right: '16px' }}
         >
           <MessageSquare className="w-3 h-3 flex-shrink-0" />
           <span>Feedback</span>

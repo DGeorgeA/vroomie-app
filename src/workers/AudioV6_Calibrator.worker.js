@@ -21,7 +21,12 @@ const BIN_500HZ = Math.round(500   * FFT_SIZE / TARGET_SR);
 const BIN_3KHZ  = Math.round(3000  * FFT_SIZE / TARGET_SR);
 const BIN_4KHZ  = Math.round(4000  * FFT_SIZE / TARGET_SR);
 const BIN_8KHZ  = Math.round(8000  * FFT_SIZE / TARGET_SR);
+const BIN_10KHZ = Math.round(10000 * FFT_SIZE / TARGET_SR); // Bearing peak band upper bound
 const BIN_12KHZ = Math.round(12000 * FFT_SIZE / TARGET_SR);
+
+// Sub-band override thresholds — these BYPASS the normal noise gate
+const BEARING_KURTOSIS_OVERRIDE = 15;   // Kurtosis > 15 in 4kHz-10kHz = bearing fault
+const INTAKE_FLATNESS_OVERRIDE  = 0.65; // Flatness > 0.65 in 8kHz-12kHz = intake leak
 
 const SS_ALPHA = 1.5;
 const SS_BETA  = 0.01;
@@ -166,7 +171,9 @@ function processFrame(frame) {
   }
 
   frameVecs.push(Array.from(logMag.slice(BIN_4KHZ, BIN_12KHZ)));
-  frameKurtoses.push(computeSpectralKurtosis(power, BIN_3KHZ, BIN_8KHZ));
+  // Bearing kurtosis: 4kHz-10kHz band (NOT 3kHz-8kHz — avoids bleed from ICE harmonics)
+  frameKurtoses.push(computeSpectralKurtosis(power, BIN_4KHZ, BIN_10KHZ));
+  // Flatness: 8kHz-12kHz band (broadband hiss / air leak signature)
   frameFlatnesses.push(computeSpectralFlatness(power, BIN_8KHZ, BIN_12KHZ));
   lfEnvelopes.push(Math.sqrt(lfEnergy)); // Envelope amplitude
 }
@@ -198,7 +205,61 @@ function handleStop() {
     // Feature C: Transient Score
     const transientScore = computeTransientScore(allSessionSamples);
 
-    console.log(`[V6 Worker] AM_Depth=${amDepth.toFixed(3)} | HNR=${hnr.toFixed(3)} | Kurt=${avgKurtosis.toFixed(2)}`);
+    console.log(`[V6 Worker] AM_Depth=${amDepth.toFixed(3)} | HNR=${hnr.toFixed(3)} | Kurt=${avgKurtosis.toFixed(2)} | Flat=${avgFlatness.toFixed(3)}`);
+
+    // ─── HARD BYPASS: Sub-band overrides skip the normal threshold gate ───────
+    // These fire when a specific physical signature is unambiguous,
+    // regardless of cosine score or ambient noise.
+
+    // BEARING OVERRIDE: Kurtosis > 15 in 4kHz-10kHz = impulsive periodic whine.
+    // Peak-hold logic: even one very high-kurtosis frame is a strong signal.
+    const peakKurtosis = frameKurtoses.length > 0 ? Math.max(...frameKurtoses) : 0;
+    if (peakKurtosis > BEARING_KURTOSIS_OVERRIDE) {
+      const bearingRef = referenceIndex.find(r =>
+        r.fault_type === 'alternator_bearing_fault' ||
+        (r.label && r.label.toLowerCase().includes('bearing'))
+      );
+      if (bearingRef) {
+        console.log(`[V6 Worker] BEARING OVERRIDE triggered. PeakKurt=${peakKurtosis.toFixed(1)}`);
+        self.postMessage({
+          type: 'result',
+          payload: {
+            status: 'anomaly', anomaly: bearingRef.label,
+            confidence: Math.min(1.0, 0.70 + Math.min(0.25, (peakKurtosis - BEARING_KURTOSIS_OVERRIDE) / 100)),
+            severity: bearingRef.severity || 'critical',
+            rms: Math.max(MIN_NOISE_FLOOR, noiseRms),
+            spectralMeta: { kurtosis: avgKurtosis, peakKurtosis, flatness: avgFlatness, override: 'bearing_kurtosis' }
+          }
+        });
+        resetSession();
+        return;
+      }
+    }
+
+    // INTAKE LEAK OVERRIDE: Flatness > 0.65 in 8kHz-12kHz = broadband hiss.
+    if (avgFlatness > INTAKE_FLATNESS_OVERRIDE) {
+      const leakRef = referenceIndex.find(r =>
+        r.fault_type === 'intake_leak' ||
+        (r.label && r.label.toLowerCase().includes('intake'))
+      );
+      if (leakRef) {
+        console.log(`[V6 Worker] INTAKE LEAK OVERRIDE triggered. Flatness=${avgFlatness.toFixed(3)}`);
+        self.postMessage({
+          type: 'result',
+          payload: {
+            status: 'anomaly', anomaly: leakRef.label,
+            confidence: Math.min(1.0, 0.65 + Math.min(0.30, (avgFlatness - INTAKE_FLATNESS_OVERRIDE) * 2)),
+            severity: leakRef.severity || 'low',
+            rms: Math.max(MIN_NOISE_FLOOR, noiseRms),
+            spectralMeta: { kurtosis: avgKurtosis, flatness: avgFlatness, override: 'intake_flatness' }
+          }
+        });
+        resetSession();
+        return;
+      }
+    }
+    // ──────────────────────────────────────────────────────────────────────────
+
 
     let bestScore = 0;
     let bestRaw = 0;
