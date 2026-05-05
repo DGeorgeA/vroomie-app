@@ -28,7 +28,8 @@ export let referenceIndex = [];
 // Feature flags
 export const audio_matching_v4_final = true;
 export const audio_matching_final_v5_hardened = true;
-export const audio_matching_mechanical_v2 = true;  // Active pipeline
+export const audio_matching_mechanical_v2 = true;
+export const audio_v6_calibration = true;  // Active pipeline
 
 export async function initializeAudioDataset(forceRefresh = false) {
   if (!forceRefresh && referenceIndex && referenceIndex.length > 0) {
