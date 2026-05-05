@@ -5,7 +5,6 @@ import Sidebar from '@/components/layout/Sidebar';
 import AuthPanel from '@/components/layout/AuthPanel';
 import VroomieLogo from '@/components/ui/VroomieLogo';
 import { FeedbackModal } from '@/components/feedback/CustomerFeedback';
-import { MessageSquare } from 'lucide-react';
 
 export default function Layout({ children, currentPageName }) {
   const { user, loading } = useAuth();
@@ -40,7 +39,7 @@ export default function Layout({ children, currentPageName }) {
         })}
       </script>
 
-      {!loading && user && <Sidebar />}
+      {!loading && user && <Sidebar onFeedbackOpen={() => setFeedbackOpen(true)} />}
       {!loading && !user && <AuthPanel />}
 
       {/* Sidebar Backdrop Overlay */}
@@ -49,21 +48,6 @@ export default function Layout({ children, currentPageName }) {
           className="fixed inset-0 bg-black/60 z-40 backdrop-blur-sm transition-opacity"
           onClick={useUIStore.getState().toggleSidebar}
         />
-      )}
-
-      {/* ── Persistent Feedback Button — bottom-right, clear of all nav ───── */}
-      {!loading && user && (
-        <button
-          id="global-feedback-btn"
-          onClick={() => setFeedbackOpen(true)}
-          title="Share feedback"
-          aria-label="Open feedback form"
-          className="fixed z-[200] flex items-center gap-1.5 px-3 py-2 rounded-xl bg-zinc-900/90 border border-white/10 hover:border-yellow-400/50 hover:bg-zinc-800 text-zinc-400 hover:text-yellow-400 transition-all duration-200 shadow-2xl backdrop-blur-md text-[12px] font-bold"
-          style={{ bottom: '80px', right: '16px' }}
-        >
-          <MessageSquare className="w-3 h-3 flex-shrink-0" />
-          <span>Feedback</span>
-        </button>
       )}
 
       <div className="transition-all duration-300 min-h-screen flex flex-col w-full">

@@ -55,7 +55,10 @@ let allSessionSamples = [];
 let frameVecs = [];
 let frameKurtoses = [];
 let frameFlatnesses = [];
-let lfEnvelopes = []; // Low-frequency (100-500Hz) energies for AM Depth
+let frameHFCentroids  = [];  // spectral centroid in 4kHz-10kHz per frame
+let frameHFFlatnesses = [];  // flatness in 4kHz-10kHz per frame (separate from 8-12kHz)
+let clippedFrameCount = 0;   // frames where max sample > 0.98 (clipping/bump)
+let lfEnvelopes = [];
 
 let noiseBuf = new Float32Array(0);
 let noiseReady = false;
@@ -170,12 +173,30 @@ function processFrame(frame) {
     }
   }
 
+  // Clipping detection: mic bumps and hard transients push samples to 0dBFS
+  const maxSample = frame.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+  if (maxSample > 0.98) {
+    clippedFrameCount++;
+    // Still push placeholders so array lengths stay in sync
+    frameVecs.push(Array.from(logMag.slice(BIN_4KHZ, BIN_12KHZ)));
+    frameKurtoses.push(3.0);      // Gaussian default = not a fault
+    frameFlatnesses.push(0.5);
+    frameHFCentroids.push(-1);    // -1 = invalid (clipped)
+    frameHFFlatnesses.push(1.0);  // High flatness = noise, blocks bearing override
+    lfEnvelopes.push(0);
+    return;
+  }
+
   frameVecs.push(Array.from(logMag.slice(BIN_4KHZ, BIN_12KHZ)));
-  // Bearing kurtosis: 4kHz-10kHz band (NOT 3kHz-8kHz — avoids bleed from ICE harmonics)
+  // Bearing kurtosis: 4kHz-10kHz band
   frameKurtoses.push(computeSpectralKurtosis(power, BIN_4KHZ, BIN_10KHZ));
-  // Flatness: 8kHz-12kHz band (broadband hiss / air leak signature)
+  // Flatness: 8kHz-12kHz band (broadband hiss / air leak)
   frameFlatnesses.push(computeSpectralFlatness(power, BIN_8KHZ, BIN_12KHZ));
-  lfEnvelopes.push(Math.sqrt(lfEnergy)); // Envelope amplitude
+  // HF centroid in 4kHz-10kHz (for tonal stability check)
+  frameHFCentroids.push(computeSpectralCentroid(power, BIN_4KHZ, BIN_10KHZ));
+  // HF flatness in 4kHz-10kHz (must be LOW for a real tonal bearing whine)
+  frameHFFlatnesses.push(computeSpectralFlatness(power, BIN_4KHZ, BIN_10KHZ));
+  lfEnvelopes.push(Math.sqrt(lfEnergy));
 }
 
 function handleStop() {
@@ -211,16 +232,31 @@ function handleStop() {
     // These fire when a specific physical signature is unambiguous,
     // regardless of cosine score or ambient noise.
 
-    // BEARING OVERRIDE: Kurtosis > 15 in 4kHz-10kHz = impulsive periodic whine.
-    // Peak-hold logic: even one very high-kurtosis frame is a strong signal.
+    // BEARING OVERRIDE: Requires ALL THREE conditions to prevent false positives:
+    // 1. PeakKurtosis > threshold (high impulsiveness in 4kHz-10kHz)
+    // 2. avgHFFlatness < 0.50 (it's a TONAL whine, not broadband wind/noise)
+    // 3. verifyTonalStability() passes (centroid stable >370ms = NOT a mic bump)
     const peakKurtosis = frameKurtoses.length > 0 ? Math.max(...frameKurtoses) : 0;
-    if (peakKurtosis > BEARING_KURTOSIS_OVERRIDE) {
+    const avgHFFlatness = frameHFFlatnesses.length > 0
+      ? frameHFFlatnesses.filter(v => v >= 0).reduce((a, b) => a + b, 0) / Math.max(1, frameHFFlatnesses.filter(v => v >= 0).length)
+      : 1.0;
+    const clippingRatio = clippedFrameCount / Math.max(1, frameVecs.length);
+    const tonallyStable = verifyTonalStability(frameHFCentroids);
+
+    console.log(`[V6] Bearing check: PeakKurt=${peakKurtosis.toFixed(1)} HFFlatness=${avgHFFlatness.toFixed(3)} Stable=${tonallyStable} ClipRatio=${clippingRatio.toFixed(2)}`);
+
+    if (
+      peakKurtosis > BEARING_KURTOSIS_OVERRIDE &&
+      avgHFFlatness < 0.50 &&           // must be TONAL (low flatness), not noise
+      tonallyStable &&                   // centroid must be stable for ≥370ms
+      clippingRatio < 0.25               // <25% clipped frames (not a mic bump)
+    ) {
       const bearingRef = referenceIndex.find(r =>
         r.fault_type === 'alternator_bearing_fault' ||
         (r.label && r.label.toLowerCase().includes('bearing'))
       );
       if (bearingRef) {
-        console.log(`[V6 Worker] BEARING OVERRIDE triggered. PeakKurt=${peakKurtosis.toFixed(1)}`);
+        console.log(`[V6 Worker] BEARING OVERRIDE triggered. PeakKurt=${peakKurtosis.toFixed(1)} HFFlat=${avgHFFlatness.toFixed(3)}`);
         self.postMessage({
           type: 'result',
           payload: {
@@ -228,7 +264,7 @@ function handleStop() {
             confidence: Math.min(1.0, 0.70 + Math.min(0.25, (peakKurtosis - BEARING_KURTOSIS_OVERRIDE) / 100)),
             severity: bearingRef.severity || 'critical',
             rms: Math.max(MIN_NOISE_FLOOR, noiseRms),
-            spectralMeta: { kurtosis: avgKurtosis, peakKurtosis, flatness: avgFlatness, override: 'bearing_kurtosis' }
+            spectralMeta: { kurtosis: avgKurtosis, peakKurtosis, hfFlatness: avgHFFlatness, tonallyStable, override: 'bearing_kurtosis' }
           }
         });
         resetSession();
@@ -372,6 +408,9 @@ function resetSession() {
   frameVecs = [];
   frameKurtoses = [];
   frameFlatnesses = [];
+  frameHFCentroids  = [];
+  frameHFFlatnesses = [];
+  clippedFrameCount = 0;
   lfEnvelopes = [];
   noiseBuf = new Float32Array(0);
   noiseReady = false;
@@ -387,7 +426,52 @@ function calculateClampedThreshold(rms) {
   return 0.65 + t * (0.70 - 0.65);
 }
 
+/**
+ * verifyTonalStability — blocks mic bumps, wind, digital clipping from bearing override.
+ *
+ * WHY IT WORKS (math proof):
+ *  - Mic bump: 1 frame of high kurtosis, centroid undefined/random → fails minFrames check
+ *  - Wind: multiple frames but centroid jumps randomly → high std dev → fails stdDev check
+ *  - True bearing: sustained whine at fixed frequency (e.g., 5.2kHz) → stable centroid
+ *
+ * @param {number[]} centroids - Per-frame spectral centroid in Hz (-1 = clipped, skip)
+ * @returns {boolean} true = tonally stable (real bearing), false = reject
+ */
+function verifyTonalStability(centroids) {
+  // Minimum 8 valid frames ≈ 370ms at 46.4ms/frame to confirm sustained tone
+  const MIN_FRAMES     = 8;
+  // Max centroid std deviation in Hz — a bearing whine at 5kHz stays within ±300Hz
+  const MAX_STDDEV_HZ  = 300;
+  // Convert bin index to Hz: centroid_hz = centroid_bin * SR / FFT_SIZE
+  const BIN_TO_HZ = TARGET_SR / FFT_SIZE;
+
+  const valid = centroids.filter(c => c >= 0); // exclude clipped frames (-1)
+  if (valid.length < MIN_FRAMES) return false;
+
+  const mean = valid.reduce((a, b) => a + b, 0) / valid.length;
+  const meanHz = mean * BIN_TO_HZ;
+  const variance = valid.reduce((s, c) => s + (c * BIN_TO_HZ - meanHz) ** 2, 0) / valid.length;
+  const stdDev = Math.sqrt(variance);
+
+  return stdDev < MAX_STDDEV_HZ;
+}
+
+/**
+ * Spectral centroid of power spectrum within [binStart, binEnd].
+ * Returns the energy-weighted mean bin index.
+ */
+function computeSpectralCentroid(power, binStart, binEnd) {
+  let weightedSum = 0, totalPower = 0;
+  for (let i = binStart; i < binEnd; i++) {
+    const p = Math.max(0, power[i]);
+    weightedSum += i * p;
+    totalPower  += p;
+  }
+  return totalPower > 0 ? weightedSum / totalPower : (binStart + binEnd) / 2;
+}
+
 // --- AM Depth (Modulation Index) ---
+
 function computeAMDepth(envelope) {
   if (envelope.length < 4) return 0;
   

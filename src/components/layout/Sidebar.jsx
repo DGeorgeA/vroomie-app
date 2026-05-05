@@ -18,6 +18,7 @@ import {
   ShieldCheck,
   FlaskConical,
   LogOut,
+  MessageSquare,
 } from 'lucide-react';
 
 // ─── Active routes (fully implemented) ──────────────────────────────────────
@@ -35,7 +36,7 @@ const SOON_ITEMS = [
   { name: 'Payments',  path: '/payments', icon: CreditCard },
 ];
 
-const Sidebar = React.memo(function Sidebar() {
+const Sidebar = React.memo(function Sidebar({ onFeedbackOpen }) {
   const { user, isPro } = useAuth();
   const { isSidebarCollapsed, toggleSidebar } = useUIStore();
   const showValidationMenu = useSettingsStore(state => state.showValidationMenu);
@@ -83,6 +84,21 @@ const Sidebar = React.memo(function Sidebar() {
           <ChevronLeft className="w-5 h-5" />
         </button>
       </div>
+
+      {/* Feedback CTA — between logo and nav, inside document flow */}
+      {onFeedbackOpen && (
+        <div className="px-3 pt-1 pb-2 flex-shrink-0">
+          <button
+            id="sidebar-feedback-btn"
+            onClick={() => { onFeedbackOpen(); toggleSidebar(); }}
+            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg border border-yellow-500/20 bg-yellow-500/5 text-yellow-400/80 hover:bg-yellow-500/10 hover:text-yellow-400 hover:border-yellow-500/40 transition-all duration-200 text-xs font-semibold"
+            style={{ touchAction: 'manipulation' }}
+          >
+            <MessageSquare className="w-3.5 h-3.5 flex-shrink-0" />
+            <span>Give Feedback</span>
+          </button>
+        </div>
+      )}
 
       {/* Navigation */}
       <nav className="flex-1 py-4 px-3 flex flex-col gap-1 overflow-y-auto">
