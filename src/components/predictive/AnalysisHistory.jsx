@@ -295,21 +295,11 @@ export default function AnalysisHistory({
                             </span>
                           </div>
                           
-                          <div className="mt-2 space-y-1">
                             <p className="text-xs text-gray-300">
                               <span className="font-semibold text-gray-400">Suggested Fix:</span> {diagnosticMeta.fix}
                             </p>
-                            <div className="flex items-center gap-3 pt-1">
-                               <p className="text-xs text-green-400 font-mono bg-green-500/10 px-2 py-0.5 rounded border border-green-500/20">
-                                 Est: ${diagnosticMeta.usd} USD
-                               </p>
-                               <p className="text-xs text-blue-400 font-mono bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">
-                                 Γé╣{diagnosticMeta.inr.toLocaleString()} INR
-                               </p>
-                            </div>
                           </div>
-                          
-                        </div>
+
                       );
                     })}
                     {anomalies.length > 2 && (

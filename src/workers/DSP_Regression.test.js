@@ -10,7 +10,7 @@ const path = require('path');
 
 // ─── 1. MOCK WORKER ENVIRONMENT ───────────────────────────────────────────────
 // We evaluate the worker code in this context to test its pure math logic.
-const workerScript = fs.readFileSync(path.join(__dirname, 'AudioV5_SuperProcessor.worker.js'), 'utf8');
+const workerScript = fs.readFileSync(path.join(__dirname, 'AudioV6_Calibrator.worker.js'), 'utf8');
 
 const selfMock = {
   postMessage: jest.fn(),
@@ -22,13 +22,13 @@ const workerEnv = new Function('self', `
   ${workerScript}
   return {
     onmessage: self.onmessage,
-    calculateDynamicThreshold,
+    calculateClampedThreshold,
     computeFFT,
-    applyHanning,
-    computePAPR,
+    computeSpectralKurtosis,
     computeSpectralFlatness
   };
 `);
+
 
 const workerFunctions = workerEnv(selfMock);
 
@@ -136,15 +136,16 @@ describe('Vroomie DSP Hardened Algorithm (v5)', () => {
   });
 
   test('Adaptive Noise Floor Tracking (Math Integrity)', () => {
-    // Test that quiet room yields 0.82 and loud yields 0.90
-    const quietProfile = new Float32Array(2048).fill(0.005);
-    const quietThresh = workerFunctions.calculateDynamicThreshold(quietProfile);
-    expect(quietThresh).toBeCloseTo(0.82);
+    // Test that quiet room yields 0.50 and loud yields 0.58 in V6
+    const quietProfileRms = 0.005;
+    const quietThresh = workerFunctions.calculateClampedThreshold(quietProfileRms);
+    expect(quietThresh).toBeCloseTo(0.50);
 
-    const loudProfile = new Float32Array(2048).fill(0.15);
-    const loudThresh = workerFunctions.calculateDynamicThreshold(loudProfile);
-    expect(loudThresh).toBeCloseTo(0.90);
+    const loudProfileRms = 0.15;
+    const loudThresh = workerFunctions.calculateClampedThreshold(loudProfileRms);
+    expect(loudThresh).toBeCloseTo(0.58);
   });
+
 
   test('Test 1 (The Whine): 5kHz Sine + Amplitude Spikes + -10dB White Noise', () => {
     // 3 seconds of audio
@@ -169,9 +170,10 @@ describe('Vroomie DSP Hardened Algorithm (v5)', () => {
     expect(callArg.type).toBe('result');
     expect(callArg.payload.status).toBe('anomaly');
     expect(callArg.payload.anomaly).toBe('alternator_bearing_fault_critical');
-    // Ensure threshold > 0.82
-    expect(callArg.payload.confidence).toBeGreaterThan(0.82);
+    // Ensure threshold > 0.50
+    expect(callArg.payload.confidence).toBeGreaterThan(0.50);
   });
+
 
   test('Test 2 (The Hiss): 8kHz-12kHz Broadband + -5dB Pink Noise', () => {
     const length = TARGET_SR * 3;

@@ -1,67 +1,44 @@
 /**
  * Immutable mapping of known mechanical acoustic signatures to their real-world 
- * workshop diagnostics, including verified USD/INR pricing and mechanical repair specs.
+ * workshop diagnostics. Financial data (USD/INR) has been purged to eliminate liability.
  */
 export const diagnosticDictionary = {
   "Engine Knocking": {
-    fix: "Check fuel quality / execute full internal piston inspection",
-    usd: 300,
-    inr: 25000,
+    fix: "Check fuel quality / execute full internal piston inspection"
   },
   "Alternator Bearing Fault": {
-    fix: "Replace entire alternator bearing unit",
-    usd: 150,
-    inr: 12000,
+    fix: "Replace entire alternator bearing unit"
   },
   "Timing Chain Rattle": {
-    fix: "Replace timing chain and tensioner guides",
-    usd: 500,
-    inr: 40000,
+    fix: "Replace timing chain and tensioner guides"
   },
   "Misfire": {
-    fix: "Check spark plugs / ignition coils and replace as necessary",
-    usd: 100,
-    inr: 8000,
+    fix: "Check spark plugs / ignition coils and replace as necessary"
   },
   "Water Pump Failure": {
-    fix: "Replace water pump and flush coolant subsystem",
-    usd: 250,
-    inr: 20000,
+    fix: "Replace water pump and flush coolant subsystem"
   },
   "Intake Leak": {
-    fix: "Smoke test intake manifold and replace vacuum seals",
-    usd: 120,
-    inr: 10000,
+    fix: "Smoke test intake manifold and replace vacuum seals"
   },
   "Pulley Misalignment": {
-    fix: "Re-align serpentine belt pulleys and replace idler bearings",
-    usd: 90,
-    inr: 7500,
+    fix: "Re-align serpentine belt pulleys and replace idler bearings"
   },
   "Exhaust Resonance": {
-    fix: "Inspect exhaust mounts and patch muffler leaks",
-    usd: 80,
-    inr: 6500,
+    fix: "Inspect exhaust mounts and patch muffler leaks"
   },
   "Bearing Fault": {
-    fix: "Replace affected bearing assembly — alternator, idler, or tensioner",
-    usd: 180,
-    inr: 15000,
+    fix: "Replace affected bearing assembly ΓÇö alternator, idler, or tensioner"
   },
   "Belt Issue": {
-    fix: "Inspect and replace serpentine belt; check tensioner and idler pulleys",
-    usd: 100,
-    inr: 8000,
+    fix: "Inspect and replace serpentine belt; check tensioner and idler pulleys"
   }
 };
 
 /**
  * Retrieves the diagnostic intelligence parameters.
- * If the exact acoustic label isn't meticulously catalogued, it falls back gracefully
- * to general engine diagnostics to prevent crashing the report system.
  */
 export function getDiagnosticMetadata(anomalyName) {
-  // Normalize string for safety looking up the dict
   const normalized = Object.keys(diagnosticDictionary).find(
     k => k.toLowerCase() === anomalyName?.toLowerCase()
   );
@@ -70,10 +47,7 @@ export function getDiagnosticMetadata(anomalyName) {
     return diagnosticDictionary[normalized];
   }
   
-  // Generic Fallback
   return {
-    fix: "General inspection of associated engine block / electronic subsystems",
-    usd: 200, // Estimate
-    inr: 16500
+    fix: "General inspection of associated engine block / electronic subsystems"
   };
 }
