@@ -1,10 +1,11 @@
 import React from "react";
 import { motion } from "framer-motion";
-import { X, AlertTriangle, CheckCircle, TrendingUp, Activity } from "lucide-react";
+import { X, AlertTriangle, CheckCircle, TrendingUp, Activity, Info, Wrench } from "lucide-react";
 import GlassCard from "../ui/GlassCard";
 import GlassButton from "../ui/GlassButton";
 import AudioWaveform from "./AudioWaveform";
 import { format } from "date-fns";
+import { getFaultNarrative } from "@/lib/audioMatchingEngine";
 
 export default function AnalysisDetails({ analysis, onClose }) {
   if (!analysis) return null;
@@ -154,7 +155,9 @@ export default function AnalysisDetails({ analysis, onClose }) {
                 Detected Anomalies ({analysis.anomalies_detected.length})
               </h3>
               <div className="space-y-3">
-                {analysis.anomalies_detected.map((anomaly, index) => (
+                {analysis.anomalies_detected.map((anomaly, index) => {
+                  const narrative = getFaultNarrative(anomaly.type);
+                  return (
                   <GlassCard key={index} className="p-4">
                     <div className="flex items-start justify-between mb-3">
                       <div className="flex-1">
@@ -170,10 +173,32 @@ export default function AnalysisDetails({ analysis, onClose }) {
                             {anomaly.severity?.toUpperCase()}
                           </span>
                         </div>
-                        <p className="text-sm text-gray-400 mb-2">
+                        <p className="text-sm text-gray-400 mb-3">
                           {anomaly.description}
                         </p>
-                        <div className="flex gap-4 text-xs text-gray-500">
+
+                        {/* ── Nature of Issue ─────────────────────────────── */}
+                        {narrative && (
+                          <div className="space-y-2 mt-3">
+                            <div className="rounded-lg bg-orange-500/5 border border-orange-500/20 p-3">
+                              <div className="flex items-center gap-1.5 mb-1">
+                                <Info className="w-3.5 h-3.5 text-orange-400 flex-shrink-0" />
+                                <span className="text-xs font-semibold text-orange-400 uppercase tracking-wide">Nature of Issue</span>
+                              </div>
+                              <p className="text-xs text-gray-300 leading-relaxed">{narrative.nature}</p>
+                            </div>
+                            <div className="rounded-lg bg-emerald-500/5 border border-emerald-500/20 p-3">
+                              <div className="flex items-center gap-1.5 mb-1">
+                                <Wrench className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+                                <span className="text-xs font-semibold text-emerald-400 uppercase tracking-wide">Suggested Fix</span>
+                              </div>
+                              <p className="text-xs text-gray-300 leading-relaxed">{narrative.fix}</p>
+                            </div>
+                          </div>
+                        )}
+                        {/* ─────────────────────────────────────────────────── */}
+
+                        <div className="flex gap-4 text-xs text-gray-500 mt-3">
                           {anomaly.timestamp && (
                             <span>Time: {anomaly.timestamp.toFixed(1)}s</span>
                           )}
@@ -184,7 +209,8 @@ export default function AnalysisDetails({ analysis, onClose }) {
                       </div>
                     </div>
                   </GlassCard>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}

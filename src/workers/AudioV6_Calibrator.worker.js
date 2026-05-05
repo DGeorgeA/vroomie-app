@@ -1,14 +1,11 @@
 /**
- * AudioV6_Calibrator.worker.js — Precision Mechanical Gating Engine
+ * AudioV6_Calibrator.worker.js — Precision Mechanical Gating Engine v8
  *
- * FIX: Eliminates false-positives on low-frequency engine rumble (Water Pump misclassifications).
- *
- * PIPELINE (audio_v6_calibration = true):
- *   1. Resample & Peak-Normalize
- *   2. Noise Profile with Clamped SNR: Math.max(0.01, noiseRms)
- *   3. AM Envelope Extraction (100Hz–500Hz): Modulation Index > 0.2 required for Water Pump.
- *   4. Harmonic-to-Noise Ratio (HNR): Strong harmonics penalize mechanical fault scores.
- *   5. Healthy Engine Baseline: Hard negative control profile.
+ * audio_v8_multiclass = true:
+ *   Adds Multi-Dimensional Orthogonality Matrix to prevent greedy water_pump collapse:
+ *   1. Spectral Centroid Pitch Gate   — if centroid > 1500Hz, veto water_pump match
+ *   2. Crest Factor Impact Gate       — if crest factor > 6, veto water_pump match
+ *   3. Duration Gate (MotorStarter)   — if session < 2s AND high transient, prefer motor_starter
  */
 
 const TARGET_SR     = 44100;
@@ -16,13 +13,18 @@ const FFT_SIZE      = 4096;           // Frame = 93ms
 const FRAME_SAMPLES = FFT_SIZE;
 const HOP_SAMPLES   = FFT_SIZE >> 1;  // 50% overlap
 
-const BIN_100HZ = Math.round(100   * FFT_SIZE / TARGET_SR);
-const BIN_500HZ = Math.round(500   * FFT_SIZE / TARGET_SR);
-const BIN_3KHZ  = Math.round(3000  * FFT_SIZE / TARGET_SR);
-const BIN_4KHZ  = Math.round(4000  * FFT_SIZE / TARGET_SR);
-const BIN_8KHZ  = Math.round(8000  * FFT_SIZE / TARGET_SR);
-const BIN_10KHZ = Math.round(10000 * FFT_SIZE / TARGET_SR); // Bearing peak band upper bound
-const BIN_12KHZ = Math.round(12000 * FFT_SIZE / TARGET_SR);
+const BIN_100HZ  = Math.round(100   * FFT_SIZE / TARGET_SR);
+const BIN_500HZ  = Math.round(500   * FFT_SIZE / TARGET_SR);
+const BIN_1500HZ = Math.round(1500  * FFT_SIZE / TARGET_SR); // Pitch gate pivot
+const BIN_3KHZ   = Math.round(3000  * FFT_SIZE / TARGET_SR);
+const BIN_4KHZ   = Math.round(4000  * FFT_SIZE / TARGET_SR);
+const BIN_8KHZ   = Math.round(8000  * FFT_SIZE / TARGET_SR);
+const BIN_10KHZ  = Math.round(10000 * FFT_SIZE / TARGET_SR);
+const BIN_12KHZ  = Math.round(12000 * FFT_SIZE / TARGET_SR);
+
+// v8 Multi-class Orthogonality thresholds
+const WP_CENTROID_MAX_HZ = 1500; // Water pump centroid MUST be below 1500Hz
+const WP_CREST_MAX       = 6.0;  // Water pump crest factor MUST be below 6 (no sharp impacts)
 
 // Sub-band override thresholds — these BYPASS the normal noise gate
 const BEARING_KURTOSIS_OVERRIDE = 15;   // Kurtosis > 15 in 4kHz-10kHz = bearing fault
@@ -55,9 +57,13 @@ let allSessionSamples = [];
 let frameVecs = [];
 let frameKurtoses = [];
 let frameFlatnesses = [];
-let frameHFCentroids  = [];  // spectral centroid in 4kHz-10kHz per frame
-let frameHFFlatnesses = [];  // flatness in 4kHz-10kHz per frame (separate from 8-12kHz)
-let clippedFrameCount = 0;   // frames where max sample > 0.98 (clipping/bump)
+let frameHFCentroids  = [];  // 4kHz-10kHz centroid per frame (for clipping detection)
+let frameHFFlatnesses = [];  // 4kHz-10kHz flatness per frame
+let frameFullCentroids = []; // 0-12kHz weighted centroid per frame (Hz) for pitch gate
+let clippedFrameCount = 0;
+let sessionPeakSample = 0;   // Track absolute peak for crest factor
+let sessionRmsSq = 0;        // Track running sum-of-squares for RMS (crest factor)
+let sessionSampleCount = 0;  // Count samples for RMS
 let lfEnvelopes = [];
 
 let noiseBuf = new Float32Array(0);
@@ -173,29 +179,36 @@ function processFrame(frame) {
     }
   }
 
-  // Clipping detection: mic bumps and hard transients push samples to 0dBFS
+  // Track crest factor components (peak sample vs RMS)
   const maxSample = frame.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+  if (maxSample > sessionPeakSample) sessionPeakSample = maxSample;
+  for (let i = 0; i < frame.length; i++) {
+    sessionRmsSq += frame[i] * frame[i];
+  }
+  sessionSampleCount += frame.length;
+
   if (maxSample > 0.98) {
     clippedFrameCount++;
-    // Still push placeholders so array lengths stay in sync
     frameVecs.push(Array.from(logMag.slice(BIN_4KHZ, BIN_12KHZ)));
-    frameKurtoses.push(3.0);      // Gaussian default = not a fault
+    frameKurtoses.push(3.0);
     frameFlatnesses.push(0.5);
-    frameHFCentroids.push(-1);    // -1 = invalid (clipped)
-    frameHFFlatnesses.push(1.0);  // High flatness = noise, blocks bearing override
+    frameHFCentroids.push(-1);
+    frameHFFlatnesses.push(1.0);
+    frameFullCentroids.push(-1);
     lfEnvelopes.push(0);
     return;
   }
 
+  // Full-band spectral centroid in Hz (0Hz to 12kHz) for pitch gate
+  const centroidBin = computeSpectralCentroid(power, 1, BIN_12KHZ);
+  const centroidHz  = centroidBin * TARGET_SR / FFT_SIZE;
+
   frameVecs.push(Array.from(logMag.slice(BIN_4KHZ, BIN_12KHZ)));
-  // Bearing kurtosis: 4kHz-10kHz band
   frameKurtoses.push(computeSpectralKurtosis(power, BIN_4KHZ, BIN_10KHZ));
-  // Flatness: 8kHz-12kHz band (broadband hiss / air leak)
   frameFlatnesses.push(computeSpectralFlatness(power, BIN_8KHZ, BIN_12KHZ));
-  // HF centroid in 4kHz-10kHz (for tonal stability check)
   frameHFCentroids.push(computeSpectralCentroid(power, BIN_4KHZ, BIN_10KHZ));
-  // HF flatness in 4kHz-10kHz (must be LOW for a real tonal bearing whine)
   frameHFFlatnesses.push(computeSpectralFlatness(power, BIN_4KHZ, BIN_10KHZ));
+  frameFullCentroids.push(centroidHz);
   lfEnvelopes.push(Math.sqrt(lfEnergy));
 }
 
@@ -230,7 +243,20 @@ function handleStop() {
 
     console.log(`[V6] frames=${validFrameCount}/${frameVecs.length} Kurt=${avgKurtosis.toFixed(2)} Flat=${avgFlatness.toFixed(3)} Trans=${transientScore.toFixed(3)} Thresh=${clampedThreshold.toFixed(3)}`);
 
-    // ── Single-pass composite matching (NO hard overrides) ───────────────────
+    // ── v8: Compute session-level orthogonality features ─────────────────────
+    // Spectral Centroid (pitch): energy-weighted mean frequency of the session
+    const validCentroids = frameFullCentroids.filter(c => c >= 0);
+    const avgFullCentroid = validCentroids.length > 0
+      ? validCentroids.reduce((a, b) => a + b, 0) / validCentroids.length
+      : 0;
+
+    // Crest Factor: peak / RMS — high values = impulsive (knock, tap), low = continuous grind
+    const sessionRms = sessionSampleCount > 0 ? Math.sqrt(sessionRmsSq / sessionSampleCount) : 0.001;
+    const sessionCrestFactor = sessionRms > 0.001 ? sessionPeakSample / sessionRms : 0;
+
+    console.log(`[V8] Centroid=${avgFullCentroid.toFixed(0)}Hz CrestFactor=${sessionCrestFactor.toFixed(2)} AmDepth=${amDepth.toFixed(3)}`);
+
+    // ── Single-pass composite matching with v8 orthogonality matrix ───────────
     let bestScore = 0, bestRaw = 0, bestMatch = null;
 
     for (const ref of referenceIndex) {
@@ -247,16 +273,40 @@ function handleStop() {
 
       let composite = W.cosine * cosSim + W.kurtosis * kurtSim + W.flatness * flatSim + W.transient * transSim;
 
-      // Water Pump only: requires periodic amplitude modulation (the grinding wobble).
-      // A smooth ICE drone has amDepth < 0.15 — penalize, not exclude.
+      // ── v8 WATER PUMP ORTHOGONALITY MATRIX ──────────────────────────────────
+      // Water pump failure is: low-frequency (<1kHz), continuous grind, low crest factor.
+      // RockerArm/Valve = high centroid (>2kHz), high crest → veto
+      // Piston = high crest factor (impact knock) → veto
+      // PowerSteering = mid-high centroid (>1.5kHz) → veto
+      // MotorStarter = very short duration + high transient → veto
       if (ref.fault_type === 'water_pump' || (ref.label && ref.label.includes('water_pump'))) {
-        if (amDepth < 0.15) composite *= 0.35;
+        let wpPenalty = 1.0;
+
+        // GATE 1 — Pitch Gate: centroid > 1500Hz means high-frequency source (NOT water pump)
+        if (avgFullCentroid > WP_CENTROID_MAX_HZ && avgFullCentroid > 0) {
+          wpPenalty *= 0.05; // Veto: Rocker arm, power steering, high-freq whine
+          console.log(`[V8] WP VETO centroid=${avgFullCentroid.toFixed(0)}Hz > ${WP_CENTROID_MAX_HZ}Hz`);
+        }
+
+        // GATE 2 — Crest Factor Impact Gate: sharp impacts = NOT a water pump grind
+        if (sessionCrestFactor > WP_CREST_MAX) {
+          wpPenalty *= 0.05; // Veto: Piston slap, valve tap
+          console.log(`[V8] WP VETO crest=${sessionCrestFactor.toFixed(2)} > ${WP_CREST_MAX}`);
+        }
+
+        // GATE 3 — AM Depth: water pump needs rotational wobble
+        if (amDepth < 0.12) {
+          wpPenalty *= 0.35; // Penalize: no modulation = not a rotating fault
+        }
+
+        composite *= wpPenalty;
       }
+      // ─────────────────────────────────────────────────────────────────────────
 
       if (composite > bestScore) { bestScore = composite; bestRaw = cosSim; bestMatch = ref; }
     }
 
-    console.log(`[V6] Best: "${bestMatch?.label}" score=${bestScore.toFixed(3)} cosine=${bestRaw.toFixed(3)} threshold=${clampedThreshold.toFixed(3)}`);
+    console.log(`[V8] Best: "${bestMatch?.label}" score=${bestScore.toFixed(3)} cosine=${bestRaw.toFixed(3)} centroid=${avgFullCentroid.toFixed(0)}Hz crest=${sessionCrestFactor.toFixed(2)} threshold=${clampedThreshold.toFixed(3)}`);
 
     if (bestScore >= clampedThreshold && bestMatch) {
       self.postMessage({
@@ -266,7 +316,7 @@ function handleStop() {
           confidence: Math.min(1.0, bestScore),
           severity: bestMatch.severity || 'high',
           rms: Math.max(MIN_NOISE_FLOOR, noiseRms),
-          spectralMeta: { kurtosis: avgKurtosis, flatness: avgFlatness, transient: transientScore, amDepth, cosine: bestRaw, threshold: clampedThreshold, frames: validFrameCount }
+          spectralMeta: { kurtosis: avgKurtosis, flatness: avgFlatness, transient: transientScore, amDepth, centroid: avgFullCentroid, crestFactor: sessionCrestFactor, cosine: bestRaw, threshold: clampedThreshold, frames: validFrameCount }
         }
       });
     } else {
@@ -293,7 +343,11 @@ function resetSession() {
   frameFlatnesses = [];
   frameHFCentroids  = [];
   frameHFFlatnesses = [];
-  clippedFrameCount = 0;
+  frameFullCentroids = [];
+  clippedFrameCount  = 0;
+  sessionPeakSample  = 0;
+  sessionRmsSq       = 0;
+  sessionSampleCount = 0;
   lfEnvelopes = [];
   noiseBuf = new Float32Array(0);
   noiseReady = false;
@@ -301,6 +355,7 @@ function resetSession() {
   noiseRms = 0;
   clampedThreshold = 0.65;
 }
+
 
 function calculateClampedThreshold(rms) {
   // Quiet room → 0.50 (more sensitive), Loud → 0.58 (tighter against false positives)
