@@ -156,6 +156,10 @@ const Sidebar = React.memo(function Sidebar() {
           <LogOut className="w-4 h-4 flex-shrink-0" />
           <span>Sign Out</span>
         </button>
+
+        <div className="mt-4 text-center">
+          <span className="text-[10px] text-zinc-700 font-mono tracking-tighter">v1.2.6-CALIBRATED</span>
+        </div>
       </div>
     </aside>
   );

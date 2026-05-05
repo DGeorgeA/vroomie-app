@@ -58,8 +58,8 @@ export default function Layout({ children, currentPageName }) {
           onClick={() => setFeedbackOpen(true)}
           title="Share feedback"
           aria-label="Open feedback form"
-          className="fixed z-[200] flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-900/80 border border-white/10 hover:border-yellow-400/50 hover:bg-zinc-800/90 text-zinc-500 hover:text-yellow-400 transition-all duration-200 shadow-md backdrop-blur-sm text-[11px] font-medium"
-          style={{ bottom: '24px', right: '16px' }}
+          className="fixed z-[200] flex items-center gap-1.5 px-3 py-2 rounded-xl bg-zinc-900/90 border border-white/10 hover:border-yellow-400/50 hover:bg-zinc-800 text-zinc-400 hover:text-yellow-400 transition-all duration-200 shadow-2xl backdrop-blur-md text-[12px] font-bold"
+          style={{ bottom: '80px', right: '16px' }}
         >
           <MessageSquare className="w-3 h-3 flex-shrink-0" />
           <span>Feedback</span>
@@ -68,7 +68,7 @@ export default function Layout({ children, currentPageName }) {
 
       <div className="transition-all duration-300 min-h-screen flex flex-col w-full">
         <header
-          className={`sticky top-0 z-50 transition-all duration-300 ${
+          className={`sticky top-0 z-[60] transition-all duration-300 ${
             scrolled ? "backdrop-blur-xl bg-black/80 border-b border-white/5 shadow-2xl" : "bg-black/30 backdrop-blur-sm"
           }`}
         >
