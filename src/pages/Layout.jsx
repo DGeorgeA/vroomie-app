@@ -8,9 +8,10 @@ import { FeedbackModal } from '@/components/feedback/CustomerFeedback';
 
 export default function Layout({ children, currentPageName }) {
   const { user, loading } = useAuth();
-  const { isSidebarCollapsed } = useUIStore();
+  const { isSidebarCollapsed, toggleSidebar } = useUIStore();
   const [scrolled, setScrolled] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
+
 
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 8);
@@ -39,16 +40,18 @@ export default function Layout({ children, currentPageName }) {
         })}
       </script>
 
-      {!loading && user && <Sidebar onFeedbackOpen={() => setFeedbackOpen(true)} />}
+      <Sidebar onFeedbackOpen={() => setFeedbackOpen(true)} />
       {!loading && !user && <AuthPanel />}
 
+
       {/* Sidebar Backdrop Overlay */}
-      {!loading && user && !isSidebarCollapsed && (
+      {!isSidebarCollapsed && (
         <div
-          className="fixed inset-0 bg-black/60 z-40 backdrop-blur-sm transition-opacity"
-          onClick={useUIStore.getState().toggleSidebar}
+          className="fixed inset-0 bg-black/60 z-[900] backdrop-blur-sm transition-opacity"
+          onClick={toggleSidebar}
         />
       )}
+
 
       <div className="transition-all duration-300 min-h-screen flex flex-col w-full">
         <header
@@ -59,8 +62,9 @@ export default function Layout({ children, currentPageName }) {
         <div className="flex justify-between items-center h-16 px-4 md:px-6 lg:px-10 w-full" style={{ minWidth: 0 }}>
             {/* ── Hamburger toggle — hardened for visibility ── */}
             <button
-              onClick={useUIStore.getState().toggleSidebar}
+              onClick={toggleSidebar}
               aria-label="Open navigation menu"
+
               id="mobile-menu-trigger"
               className="p-2 -ml-2 rounded-lg hover:bg-white/10 transition-all active:scale-95"
               style={{ 
