@@ -209,181 +209,64 @@ function handleStop() {
 
     if (frameVecs.length === 0) { emitNormal(0); resetSession(); return; }
 
+    // Average only non-clipped frames for the CSD vector
     const vecLen = frameVecs[0].length;
     const avgVec = new Array(vecLen).fill(0);
-    for (const v of frameVecs) for (let i = 0; i < vecLen; i++) avgVec[i] += v[i];
-    for (let i = 0; i < vecLen; i++) avgVec[i] /= frameVecs.length;
+    let validFrameCount = 0;
+    for (let fi = 0; fi < frameVecs.length; fi++) {
+      if (frameHFCentroids[fi] === -1) continue;
+      for (let i = 0; i < vecLen; i++) avgVec[i] += frameVecs[fi][i];
+      validFrameCount++;
+    }
+    if (validFrameCount === 0) { emitNormal(0); resetSession(); return; }
+    for (let i = 0; i < vecLen; i++) avgVec[i] /= validFrameCount;
 
-    const avgKurtosis = frameKurtoses.reduce((a, b) => a + b, 0) / frameKurtoses.length;
-    const avgFlatness = frameFlatnesses.reduce((a, b) => a + b, 0) / frameFlatnesses.length;
-    
-    // Feature A: Amplitude Modulation Depth (100Hz-500Hz)
-    const amDepth = computeAMDepth(lfEnvelopes);
-    
-    // Feature B: Harmonic-to-Noise Ratio (HNR)
-    const hnr = computeHNR(allSessionSamples);
-    
-    // Feature C: Transient Score
+    const validKurt = frameKurtoses.filter((_, i) => frameHFCentroids[i] !== -1);
+    const validFlat = frameFlatnesses.filter((_, i) => frameHFCentroids[i] !== -1);
+    const avgKurtosis   = validKurt.reduce((a, b) => a + b, 0) / Math.max(1, validKurt.length);
+    const avgFlatness   = validFlat.reduce((a, b) => a + b, 0) / Math.max(1, validFlat.length);
     const transientScore = computeTransientScore(allSessionSamples);
+    const amDepth       = computeAMDepth(lfEnvelopes);
 
-    console.log(`[V6 Worker] AM_Depth=${amDepth.toFixed(3)} | HNR=${hnr.toFixed(3)} | Kurt=${avgKurtosis.toFixed(2)} | Flat=${avgFlatness.toFixed(3)}`);
+    console.log(`[V6] frames=${validFrameCount}/${frameVecs.length} Kurt=${avgKurtosis.toFixed(2)} Flat=${avgFlatness.toFixed(3)} Trans=${transientScore.toFixed(3)} Thresh=${clampedThreshold.toFixed(3)}`);
 
-    // ─── HARD BYPASS: Sub-band overrides skip the normal threshold gate ───────
-    // These fire when a specific physical signature is unambiguous,
-    // regardless of cosine score or ambient noise.
-
-    // BEARING OVERRIDE: Requires ALL THREE conditions to prevent false positives:
-    // 1. PeakKurtosis > threshold (high impulsiveness in 4kHz-10kHz)
-    // 2. avgHFFlatness < 0.50 (it's a TONAL whine, not broadband wind/noise)
-    // 3. verifyTonalStability() passes (centroid stable >370ms = NOT a mic bump)
-    const peakKurtosis = frameKurtoses.length > 0 ? Math.max(...frameKurtoses) : 0;
-    const avgHFFlatness = frameHFFlatnesses.length > 0
-      ? frameHFFlatnesses.filter(v => v >= 0).reduce((a, b) => a + b, 0) / Math.max(1, frameHFFlatnesses.filter(v => v >= 0).length)
-      : 1.0;
-    const clippingRatio = clippedFrameCount / Math.max(1, frameVecs.length);
-    const tonallyStable = verifyTonalStability(frameHFCentroids);
-
-    console.log(`[V6] Bearing check: PeakKurt=${peakKurtosis.toFixed(1)} HFFlatness=${avgHFFlatness.toFixed(3)} Stable=${tonallyStable} ClipRatio=${clippingRatio.toFixed(2)}`);
-
-    if (
-      peakKurtosis > BEARING_KURTOSIS_OVERRIDE &&
-      avgHFFlatness < 0.50 &&           // must be TONAL (low flatness), not noise
-      tonallyStable &&                   // centroid must be stable for ≥370ms
-      clippingRatio < 0.25               // <25% clipped frames (not a mic bump)
-    ) {
-      const bearingRef = referenceIndex.find(r =>
-        r.fault_type === 'alternator_bearing_fault' ||
-        (r.label && r.label.toLowerCase().includes('bearing'))
-      );
-      if (bearingRef) {
-        console.log(`[V6 Worker] BEARING OVERRIDE triggered. PeakKurt=${peakKurtosis.toFixed(1)} HFFlat=${avgHFFlatness.toFixed(3)}`);
-        self.postMessage({
-          type: 'result',
-          payload: {
-            status: 'anomaly', anomaly: bearingRef.label,
-            confidence: Math.min(1.0, 0.70 + Math.min(0.25, (peakKurtosis - BEARING_KURTOSIS_OVERRIDE) / 100)),
-            severity: bearingRef.severity || 'critical',
-            rms: Math.max(MIN_NOISE_FLOOR, noiseRms),
-            spectralMeta: { kurtosis: avgKurtosis, peakKurtosis, hfFlatness: avgHFFlatness, tonallyStable, override: 'bearing_kurtosis' }
-          }
-        });
-        resetSession();
-        return;
-      }
-    }
-
-    // INTAKE LEAK OVERRIDE: Flatness > 0.65 in 8kHz-12kHz = broadband hiss.
-    if (avgFlatness > INTAKE_FLATNESS_OVERRIDE) {
-      const leakRef = referenceIndex.find(r =>
-        r.fault_type === 'intake_leak' ||
-        (r.label && r.label.toLowerCase().includes('intake'))
-      );
-      if (leakRef) {
-        console.log(`[V6 Worker] INTAKE LEAK OVERRIDE triggered. Flatness=${avgFlatness.toFixed(3)}`);
-        self.postMessage({
-          type: 'result',
-          payload: {
-            status: 'anomaly', anomaly: leakRef.label,
-            confidence: Math.min(1.0, 0.65 + Math.min(0.30, (avgFlatness - INTAKE_FLATNESS_OVERRIDE) * 2)),
-            severity: leakRef.severity || 'low',
-            rms: Math.max(MIN_NOISE_FLOOR, noiseRms),
-            spectralMeta: { kurtosis: avgKurtosis, flatness: avgFlatness, override: 'intake_flatness' }
-          }
-        });
-        resetSession();
-        return;
-      }
-    }
-    // ──────────────────────────────────────────────────────────────────────────
-
-
-    let bestScore = 0;
-    let bestRaw = 0;
-    let bestMatch = null;
-
-    // 1. Compute Healthy Engine Baseline Distance (Hard Negative)
-    // A healthy engine is strongly harmonic (High HNR), has steady low frequency rumble (Low AM Depth)
-    const baselineDistance = Math.max(0, 1.0 - (hnr * 0.5 + (1 - amDepth) * 0.5)); 
-    // Higher HNR and lower AM depth = closer to healthy engine (smaller distance)
+    // ── Single-pass composite matching (NO hard overrides) ───────────────────
+    let bestScore = 0, bestRaw = 0, bestMatch = null;
 
     for (const ref of referenceIndex) {
       if (!Array.isArray(ref.cosine_vec) || ref.cosine_vec.length !== vecLen) continue;
 
       const W = FAULT_WEIGHTS[ref.fault_type] || FAULT_WEIGHTS['default'];
-      const cosSim = cosineSimilarity(avgVec, ref.cosine_vec);
-      
+      const cosSim  = cosineSimilarity(avgVec, ref.cosine_vec);
       const refKurt = ref.kurtosis_score ?? 3.0;
       const kurtSim = 1 / (1 + Math.abs(avgKurtosis - refKurt) / (Math.max(refKurt, avgKurtosis, 1e-6)));
-      
       const refFlat = ref.flatness_score ?? 0.5;
       const flatSim = Math.max(0, 1 - Math.abs(avgFlatness - refFlat));
-      
       const refTrans = ref.transient_score ?? 0.0;
-      const transSim = 1 / (1 + Math.abs(transientScore - refTrans) / (Math.max(refTrans, transientScore, 1e-6) + 1e-6));
+      const transSim = 1 / (1 + Math.abs(transientScore - refTrans) / (Math.max(refTrans, transientScore, 0.1) + 1e-6));
 
       let composite = W.cosine * cosSim + W.kurtosis * kurtSim + W.flatness * flatSim + W.transient * transSim;
 
-      // --- GATING LOGIC ---
-
-      // Water Pump Gating: Requires high AM Depth (grind/wobble)
-      if (ref.fault_type === 'water_pump' || ref.label.includes('water_pump')) {
-        if (amDepth < 0.20) {
-          composite *= 0.1; // Severely penalize steady drone
-        } else {
-          // Boost based on AM depth
-          composite += Math.min(0.2, (amDepth - 0.2) * 0.5);
-        }
-        // Hard threshold requirement
-        if (cosSim < 0.94) composite *= 0.5;
+      // Water Pump only: requires periodic amplitude modulation (the grinding wobble).
+      // A smooth ICE drone has amDepth < 0.15 — penalize, not exclude.
+      if (ref.fault_type === 'water_pump' || (ref.label && ref.label.includes('water_pump'))) {
+        if (amDepth < 0.15) composite *= 0.35;
       }
 
-      // HNR Penalty: If the signal is perfectly harmonic (HNR > 0.8), it's likely a healthy revving engine.
-      // Penalize mechanical fault scores (which should introduce chaotic broadband noise).
-      if (hnr > 0.8 && ref.fault_type !== 'healthy') {
-        composite *= 0.7; // 30% penalty for being too "clean"
-      }
-
-      if (composite > bestScore) {
-        bestScore = composite;
-        bestRaw = cosSim;
-        bestMatch = ref;
-      }
+      if (composite > bestScore) { bestScore = composite; bestRaw = cosSim; bestMatch = ref; }
     }
 
-    // Hard Negative Rejection
-    // If the signal is closer to the Healthy Baseline than to the best anomaly match
-    const anomalyDistance = 1.0 - bestScore;
-    if (baselineDistance < anomalyDistance && hnr > 0.6 && amDepth < 0.25) {
-      console.log(`[V6 Worker] REJECTED. Closer to Healthy Engine. BaselineDist=${baselineDistance.toFixed(3)} < AnomalyDist=${anomalyDistance.toFixed(3)}`);
-      emitNormal(bestScore);
-      return;
-    }
+    console.log(`[V6] Best: "${bestMatch?.label}" score=${bestScore.toFixed(3)} cosine=${bestRaw.toFixed(3)} threshold=${clampedThreshold.toFixed(3)}`);
 
-    // Final Adaptive Threshold Check
-    // Water Pump requires 0.94. Others use clamped threshold.
-    let requiredThreshold = clampedThreshold;
-    if (bestMatch && bestMatch.fault_type === 'water_pump') requiredThreshold = 0.94;
-
-    console.log(`[V6 Worker] Best: "${bestMatch?.label}" | score=${bestScore.toFixed(3)} | req_thresh=${requiredThreshold.toFixed(3)}`);
-
-    if (bestScore >= requiredThreshold && bestMatch) {
+    if (bestScore >= clampedThreshold && bestMatch) {
       self.postMessage({
         type: 'result',
         payload: {
-          status: 'anomaly',
-          anomaly: bestMatch.label,
+          status: 'anomaly', anomaly: bestMatch.label,
           confidence: Math.min(1.0, bestScore),
           severity: bestMatch.severity || 'high',
           rms: Math.max(MIN_NOISE_FLOOR, noiseRms),
-          spectralMeta: { 
-            kurtosis: avgKurtosis, 
-            flatness: avgFlatness, 
-            transient: transientScore, 
-            amDepth: amDepth,
-            hnr: hnr,
-            cosine: bestRaw, 
-            threshold: requiredThreshold 
-          }
+          spectralMeta: { kurtosis: avgKurtosis, flatness: avgFlatness, transient: transientScore, amDepth, cosine: bestRaw, threshold: clampedThreshold, frames: validFrameCount }
         }
       });
     } else {
@@ -420,10 +303,11 @@ function resetSession() {
 }
 
 function calculateClampedThreshold(rms) {
-  if (rms <= MIN_NOISE_FLOOR) return 0.65; // Prevent oversensitivity in absolute silence
-  if (rms > 0.15) return 0.70;
+  // Quiet room → 0.50 (more sensitive), Loud → 0.58 (tighter against false positives)
+  if (rms <= MIN_NOISE_FLOOR) return 0.50;
+  if (rms > 0.15) return 0.58;
   const t = (rms - MIN_NOISE_FLOOR) / (0.15 - MIN_NOISE_FLOOR);
-  return 0.65 + t * (0.70 - 0.65);
+  return 0.50 + t * (0.58 - 0.50);
 }
 
 /**
