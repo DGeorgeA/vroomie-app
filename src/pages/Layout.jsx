@@ -8,7 +8,7 @@ import { FeedbackModal } from '@/components/feedback/CustomerFeedback';
 
 export default function Layout({ children, currentPageName }) {
   const { user, loading } = useAuth();
-  const { isSidebarCollapsed, toggleSidebar } = useUIStore();
+  const toggleSidebar = useUIStore(state => state.toggleSidebar);
   const [scrolled, setScrolled] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
 
@@ -44,13 +44,7 @@ export default function Layout({ children, currentPageName }) {
       {!loading && !user && <AuthPanel />}
 
 
-      {/* Sidebar Backdrop Overlay */}
-      {!isSidebarCollapsed && (
-        <div
-          className="fixed inset-0 bg-black/60 z-[900] backdrop-blur-sm transition-opacity"
-          onClick={toggleSidebar}
-        />
-      )}
+
 
 
       <div className="transition-all duration-300 min-h-screen flex flex-col w-full">

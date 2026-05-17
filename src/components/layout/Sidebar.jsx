@@ -38,7 +38,8 @@ const SOON_ITEMS = [
 
 const Sidebar = React.memo(function Sidebar({ onFeedbackOpen }) {
   const { user, isPro } = useAuth();
-  const { isSidebarCollapsed, toggleSidebar } = useUIStore();
+  const isSidebarCollapsed = useUIStore(state => state.isSidebarCollapsed);
+  const toggleSidebar = useUIStore(state => state.toggleSidebar);
   const showValidationMenu = useSettingsStore(state => state.showValidationMenu);
   const navigate = useNavigate();
 
@@ -63,12 +64,22 @@ const Sidebar = React.memo(function Sidebar({ onFeedbackOpen }) {
 
   // v1.2.7 — Increased z-index to 1000 for perfect mobile overlap
   return (
-    <aside
-      className={`fixed left-0 top-0 h-screen bg-zinc-950 border-r border-white/5 transition-transform duration-300 ease-in-out z-[1000] flex flex-col w-64 shadow-[10px_0_30px_rgba(0,0,0,0.5)] ${
-        isSidebarCollapsed ? '-translate-x-full' : 'translate-x-0'
-      }`}
-      style={{ willChange: 'transform' }}
-    >
+    <>
+      {/* Sidebar Backdrop Overlay */}
+      <div
+        className={`fixed inset-0 bg-black/60 z-[900] backdrop-blur-sm transition-opacity duration-300 ease-in-out ${
+          isSidebarCollapsed ? 'opacity-0 pointer-events-none' : 'opacity-100 pointer-events-auto'
+        }`}
+        onClick={toggleSidebar}
+        style={{ willChange: 'opacity' }}
+      />
+
+      <aside
+        className={`fixed left-0 top-0 h-screen bg-zinc-950 border-r border-white/5 transition-transform duration-300 ease-in-out z-[1000] flex flex-col w-64 shadow-[10px_0_30px_rgba(0,0,0,0.5)] ${
+          isSidebarCollapsed ? '-translate-x-full' : 'translate-x-0'
+        }`}
+        style={{ willChange: 'transform' }}
+      >
 
       {/* Header */}
       <div className="h-16 flex justify-between items-center px-4 border-b border-white/5 flex-shrink-0">
@@ -153,7 +164,7 @@ const Sidebar = React.memo(function Sidebar({ onFeedbackOpen }) {
                   src={`https://api.dicebear.com/7.x/notionists/svg?seed=${user.email}`}
                   alt="Avatar"
                   className="w-8 h-8 rounded-full opacity-80"
-                  loading="lazy"
+                  fetchPriority="high"
                 />
               </div>
               <div className="overflow-hidden flex-1 min-w-0">
@@ -186,6 +197,7 @@ const Sidebar = React.memo(function Sidebar({ onFeedbackOpen }) {
       </div>
 
     </aside>
+    </>
   );
 });
 
