@@ -9,7 +9,7 @@ import { toast } from 'sonner';
 import {
   User, Bell, Volume2, Shield, CreditCard,
   Languages, Activity, LogOut, Mic, Database,
-  History, ChevronRight, CheckCircle2, Zap, Lock, Wrench
+  History, ChevronRight, CheckCircle2, Zap, Lock, Wrench, Code2, ExternalLink
 } from 'lucide-react';
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -441,6 +441,47 @@ export default function Settings() {
             />
           }
         />
+      </SettingsCard>
+
+      {/* ══ API DOCS ════════════════════════════════════════════════════ */}
+      <SectionHeader title="API Docs" />
+      <SettingsCard>
+        {/* Overview row */}
+        <SettingsRow
+          icon={Code2}
+          iconColor="text-yellow-400"
+          title="Vroomie Public API"
+          description="Integrate audio diagnostics into your own application"
+          border={true}
+          onClick={() => navigate('/api-docs')}
+          right={
+            <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border bg-yellow-500/10 text-yellow-400 border-yellow-500/30">
+              <ExternalLink className="w-3 h-3" /> VIEW
+            </span>
+          }
+        />
+        {/* Quick-stat pill row */}
+        <div className="px-4 py-3 flex flex-wrap gap-2">
+          {[
+            { label: '1,000 calls / mo', cls: 'bg-zinc-800/80 text-zinc-300 border-zinc-700' },
+            { label: 'Free tier',        cls: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' },
+            { label: 'REST · JSON',      cls: 'bg-blue-500/10 text-blue-400 border-blue-500/20' },
+            { label: 'TLS required',     cls: 'bg-purple-500/10 text-purple-400 border-purple-500/20' },
+          ].map(({ label, cls }) => (
+            <span key={label} className={`text-[10px] font-semibold px-2.5 py-0.5 rounded-full border ${cls}`}>{label}</span>
+          ))}
+        </div>
+        {/* CTA */}
+        <div className="px-4 pb-4">
+          <button
+            id="settings-api-docs-cta"
+            onClick={() => navigate('/api-docs')}
+            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-yellow-500/20 bg-yellow-500/5 text-yellow-400 font-semibold text-sm hover:bg-yellow-500/10 hover:border-yellow-500/40 transition-all active:scale-[0.98]"
+          >
+            <Code2 className="w-4 h-4" />
+            Browse API Documentation
+          </button>
+        </div>
       </SettingsCard>
 
       {/* ── Privacy Policy link ───────────────────────────────────────────── */}

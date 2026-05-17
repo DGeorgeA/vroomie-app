@@ -12,6 +12,7 @@ const AIUpdates             = lazy(() => import(/* webpackChunkName: "ai-updates
 const ComingSoon            = lazy(() => import(/* webpackChunkName: "coming-soon" */ "./ComingSoon"));
 const ValidationBench       = lazy(() => import(/* webpackChunkName: "validation" */ "./ValidationBench"));
 const TestDetection         = lazy(() => import(/* webpackChunkName: "test-detection" */ "./TestDetection"));
+const ApiDocs               = lazy(() => import(/* webpackChunkName: "api-docs" */ "./ApiDocs"));
 
 function PageSkeleton() {
   return (
@@ -83,6 +84,12 @@ function PagesContent() {
         <Route path="/settings" element={
           <Layout currentPageName="Settings">
             <Settings />
+          </Layout>
+        } />
+
+        <Route path="/api-docs" element={
+          <Layout currentPageName="API Docs">
+            <ApiDocs />
           </Layout>
         } />
 
