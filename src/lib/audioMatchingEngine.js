@@ -123,7 +123,10 @@ function findBestMatch(live) {
   let bestRef   = null;
 
   for (const ref of referenceIndex) {
-    const refVec = ref.embedding_vector;
+    // Support both vector formats:
+    //   embedding_vector — YAMNet 1024-dim (anomaly_embeddings DB table)
+    //   cosine_vec       — V6 worker 743-dim (4kHz–12kHz FFT band, anomaly-patterns bucket JSON)
+    const refVec = ref.embedding_vector || ref.cosine_vec;
     if (!Array.isArray(refVec) || refVec.length < 50) continue; // accept any reasonable embedding
     
     const rawCos = cosine(live, refVec);

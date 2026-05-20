@@ -103,6 +103,13 @@ self.onmessage = function (ev) {
       referenceIndex = payload || [];
       console.log(`[V6 Worker] Loaded ${referenceIndex.length} mechanical signatures.`);
       break;
+    case 'setThresholds':
+      // External threshold override — honour the caller's requested abs threshold
+      if (payload && typeof payload.absThreshold === 'number') {
+        clampedThreshold = payload.absThreshold;
+        console.log(`[V6 Worker] Threshold overridden to ${clampedThreshold.toFixed(3)} (external)`);
+      }
+      break;
     case 'process': handleProcess(payload); break;
     case 'stop':    handleStop();           break;
   }
