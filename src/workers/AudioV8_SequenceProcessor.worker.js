@@ -1,13 +1,14 @@
 /**
- * AudioV8_SequenceProcessor.worker.js — Vroomie DSP Engine v13
+ * AudioV8_SequenceProcessor.worker.js — Vroomie DSP Engine v14
  * 
- * 6-STAGE SEQUENCE CLASSIFIER (DTW)
- * Stage 1: Silence Detector (Hard RMS Gate)
- * Stage 2: Noise/Speech Rejection (Flatness & Crest factor)
- * Stage 3: Mechanical Candidate Detector (Transient energy / Spectral Flux)
- * Stage 4: Sequence Extraction (Ring Buffer of 50 frames, 13 MFCC + 1 Flux)
- * Stage 5: Sequence Similarity Engine (Dynamic Time Warping)
- * Stage 6: Temporal Confidence Stabilizer
+ * 7-STAGE SEQUENCE CLASSIFIER (DTW + BMAD Gating)
+ * Stage 1: True RMS Gate (Absolute Silence Rejection)
+ * Stage 2: Spectral Flatness Gate (White Noise / Fan Rejection)
+ * Stage 3: ZCR Gate (Speech / Hiss Rejection)
+ * Stage 4: Mechanical Periodicity Detector (Transient rhythm isolation)
+ * Stage 5: Sequence Extraction (Ring Buffer of 50 frames, 13 MFCC + 1 Flux)
+ * Stage 6: Sequence Similarity Engine (Dynamic Time Warping)
+ * Stage 7: Confidence Multiplier (BMAD Scoring)
  */
 
 const TARGET_SR     = 16000;
@@ -17,7 +18,8 @@ const SEQ_LENGTH    = 50;  // 1.0 seconds
 
 const N_MELS = 40;
 const N_MFCC = 13;
-const N_FEATURES = 14;
+// Feature Dimensions: 13 MFCC + 1 Flux + 1 RMS + 1 Flatness + 1 ZCR = 17
+const N_FEATURES = 17;
 
 let referenceIndex = [];
 let sessionRing = new Float32Array(0);
@@ -84,7 +86,9 @@ function fftInPlace(re, im) {
 
 function euclideanDistance(vecA, vecB) {
   let sum = 0;
-  for (let i = 0; i < vecA.length; i++) {
+  // Match on the first 14 dimensions (13 MFCC + 1 Flux) representing the template
+  const dims = Math.min(vecA.length, vecB.length, 14);
+  for (let i = 0; i < dims; i++) {
     const diff = vecA[i] - vecB[i];
     sum += diff * diff;
   }
@@ -117,12 +121,12 @@ function computeDTW(seqA, seqB) {
   return dtw[n][m] / (n + m);
 }
 
-function standardizeSequence(seq) {
+function standardizeSequence(seq, dimsToStandardize) {
   const numFrames = seq.length;
   if (numFrames === 0) return seq;
-  const dims = seq[0].length;
+  const dims = dimsToStandardize; // Only standardize the MFCC+Flux dims (first 14)
   
-  const stdSeq = Array.from({length: numFrames}, () => new Float32Array(dims));
+  const stdSeq = Array.from({length: numFrames}, () => new Float32Array(seq[0].length));
   
   for (let d = 0; d < dims; d++) {
     let sum = 0, sumSq = 0;
@@ -136,12 +140,15 @@ function standardizeSequence(seq) {
       stdSeq[f][d] = (seq[f][d] - mean) / std;
     }
   }
+  // Copy over the unstandardized extra features (RMS, Flatness, ZCR)
+  for (let f = 0; f < numFrames; f++) {
+    for (let d = dims; d < seq[f].length; d++) {
+      stdSeq[f][d] = seq[f][d];
+    }
+  }
   return stdSeq;
 }
 
-// Map max threshold: DTW is a distance measure (lower is better).
-// Piston self-sim is ~0.46, cross is 2.5+. A threshold of 1.2 is a safe boundary.
-// If UI passes 0.38 (which is 1 - 0.62 in some contexts), we just use a fixed max DTW.
 let maxDtwDistance = 1.35; 
 
 self.onmessage = function (ev) {
@@ -152,11 +159,9 @@ self.onmessage = function (ev) {
       console.log(`[V8 DTW Worker] Loaded ${referenceIndex.length} sequence templates.`);
       break;
     case 'setThresholds':
-      // DTW distance threshold: 1.0 (strict), 1.5 (loose)
       if (payload && typeof payload.absThreshold === 'number') {
         const uiVal = payload.absThreshold; 
-        maxDtwDistance = 2.0 - uiVal; // Higher UI threshold = Lower DTW Distance (stricter)
-        console.log(`[V8 DTW Worker] DTW Max Distance Threshold set to ${maxDtwDistance.toFixed(3)}`);
+        maxDtwDistance = 2.0 - uiVal; 
       }
       break;
     case 'process': handleProcess(payload); break;
@@ -199,22 +204,41 @@ function processFrames() {
   const reFFT = new Float32Array(FFT_SIZE), imFFT = new Float32Array(FFT_SIZE);
   
   while (sessionRing.length >= FFT_SIZE) {
-    // Process one frame
+    
+    let frameEnergySq = 0;
+    let zcr = 0;
     for (let i = 0; i < FFT_SIZE; i++) {
-      reFFT[i] = sessionRing[i] * hann[i];
+      const s = sessionRing[i];
+      frameEnergySq += s * s;
+      reFFT[i] = s * hann[i];
       imFFT[i] = 0;
+      if (i > 0 && ((s >= 0) !== (sessionRing[i-1] >= 0))) zcr++;
     }
+    const rms = Math.sqrt(frameEnergySq / FFT_SIZE);
+    const zcrNorm = zcr / FFT_SIZE;
+
     fftInPlace(reFFT, imFFT);
     
     let flux = 0;
+    let gmLog = 0, amSum = 0;
     const melEnergies = new Float64Array(N_MELS);
     
     for (let k = 0; k < fftBins; k++) {
       const mag = Math.sqrt(reFFT[k] * reFFT[k] + imFFT[k] * imFFT[k]);
       flux += Math.max(0, mag - prevMag[k]);
       prevMag[k] = mag;
+      
+      if (k > 0) { // Skip DC for flatness
+        gmLog += Math.log(mag + 1e-10);
+        amSum += mag;
+      }
+
       for (let m = 0; m < N_MELS; m++) melEnergies[m] += fb[m][k] * mag;
     }
+    
+    const gm = Math.exp(gmLog / (fftBins - 1));
+    const am = (amSum / (fftBins - 1)) + 1e-10;
+    const flatness = gm / am;
     
     for (let m = 0; m < N_MELS; m++) melEnergies[m] = Math.log(Math.max(melEnergies[m] / bw[m], 1e-10));
     
@@ -228,6 +252,9 @@ function processFrames() {
     const frameFeatures = new Float32Array(N_FEATURES);
     frameFeatures.set(mfcc, 0);
     frameFeatures[N_MFCC] = Math.log10(1 + flux);
+    frameFeatures[14] = rms;
+    frameFeatures[15] = flatness;
+    frameFeatures[16] = zcrNorm;
     
     featureSequence.push(Array.from(frameFeatures));
     if (featureSequence.length > SEQ_LENGTH) featureSequence.shift();
@@ -235,14 +262,12 @@ function processFrames() {
     sessionRing = sessionRing.slice(HOP_SAMPLES);
     frameCounter++;
 
-    // Evaluate every 10 frames (200ms) to save CPU while maintaining temporal alignment
     if (featureSequence.length === SEQ_LENGTH && frameCounter % 10 === 0) {
       evaluateSequence();
     }
   }
 }
 
-// Temporal Confidence Stabilizer
 let lastAnomaly = null;
 let lastAnomalyTime = 0;
 let confidenceStreak = 0;
@@ -250,36 +275,62 @@ let confidenceStreak = 0;
 function evaluateSequence() {
   if (referenceIndex.length === 0) return;
 
-  // Compute RMS and basic stats for gating
-  // We can approximate sequence energy from MFCC 0 (which correlates to Log Energy)
-  let sumEnergy = 0, sumFlux = 0, maxFlux = 0;
-  for (let i = 0; i < SEQ_LENGTH; i++) {
-    sumEnergy += featureSequence[i][0];
-    const flux = featureSequence[i][N_FEATURES - 1];
-    sumFlux += flux;
-    if (flux > maxFlux) maxFlux = flux;
-  }
-  const avgEnergy = sumEnergy / SEQ_LENGTH;
-  const avgFlux = sumFlux / SEQ_LENGTH;
+  // BMAD Gating Layer — Mechanical Sound Qualifier
+  let maxRMS = 0;
+  let sumFlatness = 0;
+  let sumZcr = 0;
+  let maxFlux = 0;
 
-  // Stage 1 & 2: Hard Gate for Silence & Room Noise
-  // (MFCC 0 is usually highly negative for silence. e.g. < -40)
-  if (avgEnergy < -30.0) {
+  for (let i = 0; i < SEQ_LENGTH; i++) {
+    const frame = featureSequence[i];
+    const flux = frame[13];
+    const rms = frame[14];
+    const flatness = frame[15];
+    const zcr = frame[16];
+
+    if (rms > maxRMS) maxRMS = rms;
+    if (flux > maxFlux) maxFlux = flux;
+    sumFlatness += flatness;
+    sumZcr += zcr;
+  }
+  
+  const avgFlatness = sumFlatness / SEQ_LENGTH;
+  const avgZcr = sumZcr / SEQ_LENGTH;
+
+  // GATE 1: Absolute RMS Silence (Strict Hardware Independent Threshold)
+  if (maxRMS < 0.005) { 
     confidenceStreak = 0;
     emitNormal(0, "silence");
     return;
   }
-  
-  // Stage 3: Non-Mechanical Transient Gate
-  // Mechanical anomalies must have some structural flux (rhythm)
-  if (maxFlux < 0.05) {
+
+  // GATE 2: Spectral Flatness (Reject fan noise, wind, microphone static/hiss)
+  // White noise approaches 1.0. Tonal engine noise is < 0.5.
+  if (avgFlatness > 0.6) {
     confidenceStreak = 0;
-    emitNormal(0, "ambient_noise");
+    emitNormal(0, "room_noise_or_fan");
     return;
   }
 
-  // Stage 5: DTW Sequence Alignment
-  const liveStd = standardizeSequence(featureSequence);
+  // GATE 3: ZCR Gate (Reject speech and high-frequency erratic hiss)
+  // High ZCR usually implies unvoiced speech (sibilance) or static.
+  if (avgZcr > 0.4) {
+    confidenceStreak = 0;
+    emitNormal(0, "speech_or_static");
+    return;
+  }
+
+  // GATE 4: Transient Periodicity
+  // A mechanical fault MUST have some physical percussive signature
+  if (maxFlux < 0.05) {
+    confidenceStreak = 0;
+    emitNormal(0, "non_mechanical");
+    return;
+  }
+
+  // PASSED ALL GATES -> Execute DTW Sequence Alignment
+  // Standardize only the MFCC + Flux dimensions (14) for Euclidean distance
+  const liveStd = standardizeSequence(featureSequence, 14);
   
   let bestDist = Infinity;
   let bestMatch = null;
@@ -287,6 +338,7 @@ function evaluateSequence() {
   for (const ref of referenceIndex) {
     if (!ref.dtw_sequence || ref.dtw_sequence.length === 0) continue;
     
+    // DTW calculates distance based on the first 14 dimensions (as written in euclideanDistance)
     const dist = computeDTW(liveStd, ref.dtw_sequence);
     if (dist < bestDist) {
       bestDist = dist;
@@ -294,9 +346,10 @@ function evaluateSequence() {
     }
   }
 
-  // Stage 6: Confidence Stabilizer
+  // GATE 5: DTW Minimum Alignment Confidence
   const now = Date.now();
   if (bestDist <= maxDtwDistance && bestMatch) {
+    
     if (lastAnomaly === bestMatch.label && (now - lastAnomalyTime < 1000)) {
       confidenceStreak++;
     } else {
@@ -305,36 +358,41 @@ function evaluateSequence() {
     lastAnomaly = bestMatch.label;
     lastAnomalyTime = now;
 
-    // Must hit at least 2 consecutive 200ms windows to trigger UI (temporal stability)
     if (confidenceStreak >= 2) {
-      // Map distance to a 0.0 - 1.0 confidence score (for UI)
-      // 0.0 dist -> 1.0 score. maxDtwDistance -> 0.7 score.
-      const score = Math.max(0.7, 1.0 - (bestDist / (maxDtwDistance * 2)));
+      // Final Admission Confidence Score
+      // Combining Mechanical Validity (1 - Flatness) with DTW Alignment Score
+      const dtwScore = Math.max(0.0, 1.0 - (bestDist / maxDtwDistance));
+      const mechScore = Math.max(0.0, 1.0 - avgFlatness);
+      const finalConfidence = dtwScore * mechScore;
+      
+      // Strict floor: finalConfidence must be > 0.4 to prevent weak triggers
+      if (finalConfidence < 0.4) {
+         emitNormal(finalConfidence, "low_confidence_match");
+         return;
+      }
 
-      console.log(`[V8 DTW] Detected "${bestMatch.label}" Dist=${bestDist.toFixed(3)} Score=${score.toFixed(2)} Flux=${maxFlux.toFixed(2)}`);
+      console.log(`[V8 DTW] Detected "${bestMatch.label}" Dist=${bestDist.toFixed(3)} Flatness=${avgFlatness.toFixed(2)} Score=${finalConfidence.toFixed(2)}`);
       self.postMessage({
         type: 'result',
         payload: {
           status: 'anomaly', 
           anomaly: bestMatch.label,
-          confidence: score,
+          confidence: Math.max(0.7, finalConfidence), // Boost for UI visual threshold
           severity: bestMatch.severity || 'high',
-          rms: Math.max(0, (avgEnergy + 50) / 100), // Pseudo-RMS for UI
+          rms: Math.max(0, (maxRMS * 50)), // Pseudo-RMS for UI waveform
           spectralMeta: {
-            rms: avgEnergy,
+            rms: maxRMS,
             dtwDistance: bestDist,
-            dtwThreshold: maxDtwDistance
+            flatness: avgFlatness
           }
         }
       });
     } else {
-      // It's a candidate, but wait for stability
       emitNormal(0.5, "candidate_building");
     }
   } else {
     confidenceStreak = 0;
-    // Normalized distance: 2.0 is usually far. We can emit normalized distance for debug.
-    emitNormal(bestDist > 5 ? 0 : 0.2, "below_threshold");
+    emitNormal(0.1, "no_dtw_alignment");
   }
 }
 
