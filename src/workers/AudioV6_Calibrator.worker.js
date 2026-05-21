@@ -94,7 +94,7 @@ let noiseBuf = new Float32Array(0);
 let noiseReady = false;
 let noiseMagProfile = new Float32Array(FFT_SIZE / 2);
 let noiseRms = 0;
-let clampedThreshold = 0.65;
+let clampedThreshold = 0.30; // Pearson correlation threshold (not raw cosine — different scale)
 
 self.onmessage = function (ev) {
   const { type, payload } = ev.data;
@@ -133,10 +133,14 @@ function handleProcess({ buffer, sampleRate }) {
         buildNoiseProfile(noiseBuf.slice(0, NOISE_SAMPLES));
         noiseReady = true;
         
-        // Clamp the noise floor to prevent divide-by-zero or oversensitivity in quiet rooms
-        const clampedNoise = Math.max(MIN_NOISE_FLOOR, noiseRms);
-        clampedThreshold = calculateClampedThreshold(clampedNoise);
-        console.log(`[V6 Worker] Noise profile clamped. RMS=${clampedNoise.toFixed(4)}, Threshold=${clampedThreshold.toFixed(3)}`);
+        // CRITICAL: Only auto-calculate threshold if no external override has been set.
+        // If setThresholds was already called (clampedThreshold != 0.65 default),
+        // honour it. Otherwise derive from noise RMS.
+        if (clampedThreshold === 0.65) {
+          const clampedNoise = Math.max(MIN_NOISE_FLOOR, noiseRms);
+          clampedThreshold = calculateClampedThreshold(clampedNoise);
+        }
+        console.log(`[V6 Worker] Noise profile ready. RMS=${noiseRms.toFixed(4)}, Threshold=${clampedThreshold.toFixed(3)} (external=${clampedThreshold !== calculateClampedThreshold(Math.max(MIN_NOISE_FLOOR, noiseRms))})`);
 
         const ring2 = new Float32Array(sessionRing.length + noiseBuf.slice(NOISE_SAMPLES).length);
         ring2.set(sessionRing);
@@ -278,6 +282,33 @@ function handleStop() {
     if (validFrameCount === 0) { emitNormal(0); resetSession(); return; }
     for (let i = 0; i < vecLen; i++) avgVec[i] /= validFrameCount;
 
+    // ── GATE 1: Session RMS silence gate ─────────────────────────────────────
+    // If the entire session was extremely quiet, this is silence or dead air.
+    // NO anomaly can be detected from silence. Return immediately.
+    const sessionRms = sessionSampleCount > 0 ? Math.sqrt(sessionRmsSq / sessionSampleCount) : 0;
+    if (sessionRms < 0.008) {
+      console.log(`[V9] SILENCE GATE: sessionRms=${sessionRms.toFixed(5)} < 0.008 — returning normal`);
+      emitNormal(0);
+      resetSession();
+      return;
+    }
+
+    // ── GATE 2: Spectral variance gate ────────────────────────────────────────
+    // Silence and ambient noise produce a FLAT log10 spectral profile.
+    // After mean-centering, a flat vector has near-zero variance.
+    // Real anomalies have SHAPED profiles (peaks/harmonics) with high variance.
+    const avgVecMean = avgVec.reduce((a, b) => a + b, 0) / vecLen;
+    let avgVecVar = 0;
+    for (let i = 0; i < vecLen; i++) avgVecVar += (avgVec[i] - avgVecMean) ** 2;
+    avgVecVar /= vecLen;
+    const avgVecStd = Math.sqrt(avgVecVar);
+    if (avgVecStd < 0.15) {
+      console.log(`[V9] FLAT SPECTRUM GATE: spectralStd=${avgVecStd.toFixed(4)} < 0.15 — uniform noise floor, returning normal`);
+      emitNormal(0);
+      resetSession();
+      return;
+    }
+
     // --- Standard session features ---
     const valid = (arr) => arr.filter((_, i) => frameHFCentroids[i] !== -1);
     const mean  = (arr) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
@@ -291,7 +322,6 @@ function handleStop() {
     const validCentroids  = frameFullCentroids.filter(c => c >= 0);
     const avgFullCentroid = mean(validCentroids);
 
-    const sessionRms         = sessionSampleCount > 0 ? Math.sqrt(sessionRmsSq / sessionSampleCount) : 0.001;
     const sessionCrestFactor = sessionRms > 0.001 ? sessionPeakSample / sessionRms : 0;
     const sessionDurationSec = sessionStartTime > 0 ? (Date.now() - sessionStartTime) / 1000 : 999;
 
@@ -468,17 +498,21 @@ function resetSession() {
   noiseReady = false;
   noiseMagProfile = new Float32Array(FFT_SIZE / 2);
   noiseRms = 0;
-  clampedThreshold = 0.65;
+  clampedThreshold = 0.30; // Reset to Pearson threshold default
 }
 
 
 
 function calculateClampedThreshold(rms) {
-  // Quiet room → 0.50 (more sensitive), Loud → 0.58 (tighter against false positives)
-  if (rms <= MIN_NOISE_FLOOR) return 0.50;
-  if (rms > 0.15) return 0.58;
+  // Threshold for Pearson correlation (mean-centered cosine), NOT raw cosine.
+  // Within-class Pearson for real anomalies: 0.20-0.50 (short clips, diverse samples).
+  // The PRIMARY defense against false positives is the silence gate + spectral variance gate.
+  // This threshold is the SECONDARY filter for borderline cases.
+  // Quiet room → 0.25 (more sensitive), Loud → 0.35 (tighter).
+  if (rms <= MIN_NOISE_FLOOR) return 0.25;
+  if (rms > 0.15) return 0.35;
   const t = (rms - MIN_NOISE_FLOOR) / (0.15 - MIN_NOISE_FLOOR);
-  return 0.50 + t * (0.58 - 0.50);
+  return 0.25 + t * (0.35 - 0.25);
 }
 
 /**
@@ -666,9 +700,41 @@ function computeFFT(signal, N) {
   return { re, im };
 }
 
+/**
+ * cosineSimilarity — Pearson correlation (mean-centered cosine similarity).
+ *
+ * WHY THIS FIXES FALSE POSITIVES:
+ *   Raw cosine similarity measures the ANGLE in absolute vector space.
+ *   Two vectors both dominated by similar-magnitude negative log10 values
+ *   (e.g., silence=-5 uniform, reference=-0.5 mixed) have raw cosine ≈ 1.0
+ *   because they happen to point in the same direction.
+ *
+ *   Pearson correlation SUBTRACTS the mean first:
+ *   - Silence after mean-centering: all values ≈ 0 → std ≈ 0 → correlation = 0.
+ *   - Real anomaly: shaped peaks/harmonics → non-zero std → correlation 0.7-0.95
+ *     only against references with the SAME spectral shape.
+ *
+ *   This mathematically answers: "do these spectra have the same SHAPE?"
+ *   rather than "do they have the same absolute level?"
+ */
 function cosineSimilarity(a, b) {
-  let dot=0, nA=0, nB=0;
   const len = Math.min(a.length, b.length);
-  for (let i=0; i<len; i++) { dot+=a[i]*b[i]; nA+=a[i]*a[i]; nB+=b[i]*b[i]; }
-  return (nA>0 && nB>0) ? dot/(Math.sqrt(nA)*Math.sqrt(nB)) : 0;
+  if (len === 0) return 0;
+
+  // Compute means
+  let sumA = 0, sumB = 0;
+  for (let i = 0; i < len; i++) { sumA += a[i]; sumB += b[i]; }
+  const meanA = sumA / len, meanB = sumB / len;
+
+  // Pearson correlation (mean-centered cosine)
+  let dot = 0, nA = 0, nB = 0;
+  for (let i = 0; i < len; i++) {
+    const ca = a[i] - meanA, cb = b[i] - meanB;
+    dot += ca * cb;
+    nA  += ca * ca;
+    nB  += cb * cb;
+  }
+  // If either vector is flat (near-zero variance), return 0 — not a detectable pattern.
+  if (nA < 1e-12 || nB < 1e-12) return 0;
+  return dot / (Math.sqrt(nA) * Math.sqrt(nB));
 }

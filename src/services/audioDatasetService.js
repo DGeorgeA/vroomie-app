@@ -78,12 +78,23 @@ async function idbPut(db, record) {
 // ── Validate that a cosine_vec is in V6 log10 space (must be all-negative) ────
 function isV6LogSpace(vec) {
   if (!Array.isArray(vec) || vec.length < 100) return false;
-  // V6 log10 vectors are always negative (log10 of magnitudes < 1)
-  // v5-symmetric vectors are in [0,1] positive range — we must reject those
   const negativeCount = vec.filter(v => v < 0).length;
-  const positiveCount = vec.filter(v => v >= 0).length;
-  // Accept if >80% of values are negative (log10 space characteristic)
   return negativeCount / vec.length > 0.80;
+}
+
+// ── Pearson correlation for deduplication ────────────────────────────────────
+function pearsonCorr(a, b) {
+  const len = Math.min(a.length, b.length);
+  if (len === 0) return 0;
+  let sumA = 0, sumB = 0;
+  for (let i = 0; i < len; i++) { sumA += a[i]; sumB += b[i]; }
+  const mA = sumA / len, mB = sumB / len;
+  let dot = 0, nA = 0, nB = 0;
+  for (let i = 0; i < len; i++) {
+    const ca = a[i] - mA, cb = b[i] - mB;
+    dot += ca * cb; nA += ca * ca; nB += cb * cb;
+  }
+  return (nA < 1e-12 || nB < 1e-12) ? 0 : dot / (Math.sqrt(nA) * Math.sqrt(nB));
 }
 
 // ── Hanning window ─────────────────────────────────────────────────────────────
@@ -230,23 +241,67 @@ export async function initializeAudioDataset(forceRefresh = false) {
   // These are generated from actual WAV files using the identical V6 FFT pipeline.
   // This is the GUARANTEED source — no Supabase RLS, no network dependency.
   if (EMBEDDED_FINGERPRINTS && EMBEDDED_FINGERPRINTS.length > 0) {
-    let embeddedCount = 0;
+    const allValid = [];
     for (const fp of EMBEDDED_FINGERPRINTS) {
       if (!fp.cosine_vec || fp.cosine_vec.length < 100) continue;
-      // Only accept vectors with reasonable values (not all-NaN or corrupt)
       const mean = fp.cosine_vec.reduce((a,b) => a+b, 0) / fp.cosine_vec.length;
       if (!isFinite(mean)) {
-        Logger.warn(`[Dataset] Skipping embedded ${fp.id} — NaN vector (source file may be silent)`); 
+        Logger.warn(`[Dataset] Skipping embedded ${fp.id} — NaN vector (source file may be silent)`);
         continue;
       }
-      referenceIndex.push(fp);
-      embeddedCount++;
+      // Spectral variance check: reject flat vectors (silence/noise)
+      let vsum = 0;
+      for (const v of fp.cosine_vec) vsum += (v - mean) ** 2;
+      const std = Math.sqrt(vsum / fp.cosine_vec.length);
+      if (std < 0.05) {
+        Logger.warn(`[Dataset] Skipping ${fp.id} — spectral std=${std.toFixed(4)} too flat (not a real anomaly pattern)`);
+        continue;
+      }
+      allValid.push(fp);
     }
+
+    // ── Deduplication: max 5 diverse representatives per fault type ────────────
+    // 81 nearly-identical serpentine/power-steering vectors = 81× false-match surface.
+    // Pearson correlation groups similar ones; we keep the most spread-out subset.
+    const MAX_PER_TYPE = 5;
+    const byFaultType = {};
+    for (const fp of allValid) {
+      if (!byFaultType[fp.fault_type]) byFaultType[fp.fault_type] = [];
+      byFaultType[fp.fault_type].push(fp);
+    }
+
+    for (const [faultType, fps] of Object.entries(byFaultType)) {
+      if (fps.length <= MAX_PER_TYPE) {
+        fps.forEach(fp => referenceIndex.push(fp));
+        continue;
+      }
+      // Greedy max-spread selection: pick 5 vectors that are most different from each other
+      const selected = [fps[0]];
+      while (selected.length < MAX_PER_TYPE) {
+        let bestCandidate = null, bestMinDist = -1;
+        for (const candidate of fps) {
+          if (selected.includes(candidate)) continue;
+          // Min Pearson correlation to any already-selected vector (lower = more diverse)
+          let minCorr = 1.0;
+          for (const sel of selected) {
+            const corr = pearsonCorr(candidate.cosine_vec, sel.cosine_vec);
+            if (corr < minCorr) minCorr = corr;
+          }
+          if (minCorr > bestMinDist) { bestMinDist = minCorr; bestCandidate = candidate; }
+        }
+        if (bestCandidate) selected.push(bestCandidate);
+        else break;
+      }
+      selected.forEach(fp => referenceIndex.push(fp));
+      Logger.info(`[Dataset] Dedup ${faultType}: ${fps.length} → ${selected.length} diverse representatives`);
+    }
+
     const byType = {};
     referenceIndex.forEach(r => { byType[r.fault_type] = (byType[r.fault_type]||0)+1; });
-    Logger.info(`[Dataset] ✅ Loaded ${embeddedCount} embedded fingerprints:`, JSON.stringify(byType));
-    return; // Embedded fingerprints loaded — no need to hit the network
+    Logger.info(`[Dataset] ✅ Loaded ${referenceIndex.length} fingerprints (deduped from ${allValid.length}):`, JSON.stringify(byType));
+    return;
   }
+
 
   // ── Fallback: Supabase bucket ─────────────────────────────────────────────────
   Logger.info('[Dataset] No embedded fingerprints found. Falling back to Supabase bucket...');
