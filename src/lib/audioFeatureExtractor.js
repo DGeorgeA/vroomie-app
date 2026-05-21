@@ -88,8 +88,9 @@ export async function startExtraction(callback) {
 
     featureWorker = new Worker(workerUrl, { type: 'module' });
 
-    // Set thresholds in worker (dual-gate: absolute + margin)
-    featureWorker.postMessage({ type: 'setThresholds', payload: { absThreshold: 0.72, margin: 0.04, rmsGate: 0.005 } });
+    // Threshold calibrated for HYBRID scoring (Pearson + rawCosine + energyMatch).
+    // Real anomalies score 0.97+. Speech scores ~0.354. Threshold 0.38 gives clean separation.
+    featureWorker.postMessage({ type: 'setThresholds', payload: { absThreshold: 0.38, margin: 0.04, rmsGate: 0.003 } });
 
     // Send reference index ONCE (not per frame — expensive serialization)
     const sendRefsToWorker = () => {

@@ -260,10 +260,11 @@ export async function initializeAudioDataset(forceRefresh = false) {
       allValid.push(fp);
     }
 
-    // ── Deduplication: max 5 diverse representatives per fault type ────────────
+    // ── Deduplication: max 8 diverse representatives per fault type ────────────
     // 81 nearly-identical serpentine/power-steering vectors = 81× false-match surface.
     // Pearson correlation groups similar ones; we keep the most spread-out subset.
-    const MAX_PER_TYPE = 5;
+    // 8 (vs 5 before) provides better recall coverage without excessive false positives.
+    const MAX_PER_TYPE = 8;
     const byFaultType = {};
     for (const fp of allValid) {
       if (!byFaultType[fp.fault_type]) byFaultType[fp.fault_type] = [];

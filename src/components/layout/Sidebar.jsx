@@ -43,6 +43,21 @@ const Sidebar = React.memo(function Sidebar({ onFeedbackOpen }) {
   const showValidationMenu = useSettingsStore(state => state.showValidationMenu);
   const navigate = useNavigate();
 
+  const [showBlur, setShowBlur] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!isSidebarCollapsed) {
+      // Sidebar is opening. Wait for the transition (300ms) to complete before showing blur.
+      const timer = setTimeout(() => {
+        setShowBlur(true);
+      }, 300);
+      return () => clearTimeout(timer);
+    } else {
+      // Sidebar is closing. Instantly remove blur to avoid lag during fade out.
+      setShowBlur(false);
+    }
+  }, [isSidebarCollapsed]);
+
   const activeLinks = [...ACTIVE_ITEMS];
   if (showValidationMenu) {
     activeLinks.push({ name: 'Validate Audio', path: '/validate-audio', icon: ShieldCheck });
@@ -67,9 +82,9 @@ const Sidebar = React.memo(function Sidebar({ onFeedbackOpen }) {
     <>
       {/* Sidebar Backdrop Overlay */}
       <div
-        className={`fixed inset-0 bg-black/60 z-[900] backdrop-blur-sm transition-opacity duration-300 ease-in-out ${
+        className={`fixed inset-0 bg-black/60 z-[900] transition-opacity duration-300 ease-in-out ${
           isSidebarCollapsed ? 'opacity-0 pointer-events-none' : 'opacity-100 pointer-events-auto'
-        }`}
+        } ${showBlur ? 'backdrop-blur-sm' : ''}`}
         onClick={toggleSidebar}
         style={{ willChange: 'opacity' }}
       />

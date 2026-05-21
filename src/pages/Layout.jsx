@@ -1,4 +1,4 @@
-import React, { useState, useEffect, Suspense } from "react";
+import React, { useState, useEffect, useCallback, Suspense } from "react";
 import { useAuth } from '@/contexts/AuthContext';
 import { useUIStore } from '@/store/uiStore';
 import Sidebar from '@/components/layout/Sidebar';
@@ -11,6 +11,10 @@ export default function Layout({ children, currentPageName }) {
   const toggleSidebar = useUIStore(state => state.toggleSidebar);
   const [scrolled, setScrolled] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
+
+  const handleFeedbackOpen = useCallback(() => {
+    setFeedbackOpen(true);
+  }, []);
 
 
   useEffect(() => {
@@ -40,7 +44,7 @@ export default function Layout({ children, currentPageName }) {
         })}
       </script>
 
-      <Sidebar onFeedbackOpen={() => setFeedbackOpen(true)} />
+      <Sidebar onFeedbackOpen={handleFeedbackOpen} />
       {!loading && !user && <AuthPanel />}
 
 
@@ -68,7 +72,8 @@ export default function Layout({ children, currentPageName }) {
                 minHeight: '44px',
                 display: 'flex',
                 alignItems: 'center',
-                justifyContent: 'center'
+                justifyContent: 'center',
+                touchAction: 'manipulation'
               }}
             >
               <svg 
