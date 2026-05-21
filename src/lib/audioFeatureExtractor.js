@@ -79,8 +79,8 @@ export async function startExtraction(callback) {
     analyserNode.fftSize = 1024; // smaller than before (was 2048)
     mediaStreamSource.connect(analyserNode);
 
-    // Spawn the Web Worker — V7 Advanced Processing
-    const workerUrl = new URL('../workers/AudioV7_AdvancedProcessor.worker.js', import.meta.url);
+    // Spawn the Web Worker — V8 Sequence Processing (DTW)
+    const workerUrl = new URL('../workers/AudioV8_SequenceProcessor.worker.js', import.meta.url);
 
     featureWorker = new Worker(workerUrl, { type: 'module' });
 

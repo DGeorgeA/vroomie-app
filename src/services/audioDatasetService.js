@@ -23,7 +23,7 @@
 
 import { supabase } from '../lib/supabase';
 import { Logger } from '../lib/logger';
-import { EMBEDDED_FINGERPRINTS } from '../data/embeddedFingerprints';
+import { DTW_FINGERPRINTS } from '../data/dtwFingerprints';
 
 export let referenceIndex = [];
 
@@ -233,76 +233,20 @@ export async function initializeAudioDataset(forceRefresh = false) {
   }
 
   referenceIndex = [];
-  Logger.info('🎵 [Dataset v6] Initializing audio reference library...');
+  Logger.info('🎵 [Dataset V8] Initializing DTW sequence reference library...');
 
-  // ── Priority 0: Embedded fingerprints (V6 log10 space, instant, no network) ──
-  // These are generated from actual WAV files using the identical V6 FFT pipeline.
-  // This is the GUARANTEED source — no Supabase RLS, no network dependency.
-  if (EMBEDDED_FINGERPRINTS && EMBEDDED_FINGERPRINTS.length > 0) {
-    const allValid = [];
-    for (const fp of EMBEDDED_FINGERPRINTS) {
-      if (!fp.cosine_vec || fp.cosine_vec.length < 100) continue;
-      const mean = fp.cosine_vec.reduce((a,b) => a+b, 0) / fp.cosine_vec.length;
-      if (!isFinite(mean)) {
-        Logger.warn(`[Dataset] Skipping embedded ${fp.id} — NaN vector (source file may be silent)`);
-        continue;
-      }
-      if (fp.source_file && fp.source_file.toLowerCase().includes('issue_with')) {
-        Logger.warn(`[Dataset] Skipping ambiguous file ${fp.source_file}`);
-        continue;
-      }
-
-      allValid.push(fp);
-    }
-
-    // ── Deduplication: Compute Centroid per Fault Type ────────────
-    // Using max-spread outliers caused classes with many samples (e.g. Power Steering) 
-    // to dominate the vector space. Using a centroid ensures each class has exactly 
-    // one highly representative vector.
-    const byFaultType = {};
-    for (const fp of allValid) {
-      if (!byFaultType[fp.fault_type]) byFaultType[fp.fault_type] = [];
-      byFaultType[fp.fault_type].push(fp);
-    }
-
-    for (const [faultType, fps] of Object.entries(byFaultType)) {
-      if (fps.length === 1) {
-        referenceIndex.push(fps[0]);
-        continue;
-      }
-      
-      // Compute centroid of all vectors in this class
-      const centroidVec = new Float64Array(fps[0].cosine_vec.length);
-      for (const fp of fps) {
-        for (let i = 0; i < centroidVec.length; i++) {
-          centroidVec[i] += fp.cosine_vec[i];
-        }
-      }
-      for (let i = 0; i < centroidVec.length; i++) {
-        centroidVec[i] /= fps.length;
-      }
-      
-      // L2 Normalize the centroid
-      let norm = 0;
-      for (let i = 0; i < centroidVec.length; i++) norm += centroidVec[i] * centroidVec[i];
-      norm = Math.sqrt(norm) || 1e-10;
-      for (let i = 0; i < centroidVec.length; i++) centroidVec[i] /= norm;
-
-      // Create a representative fingerprint
-      const rep = { ...fps[0] };
-      rep.id = `${faultType}_centroid`;
-      rep.source_file = `centroid_of_${fps.length}_samples`;
-      rep.cosine_vec = Array.from(centroidVec);
-      
-      referenceIndex.push(rep);
-      Logger.info(`[Dataset] Computed centroid for ${faultType} from ${fps.length} samples`);
+  if (DTW_FINGERPRINTS && DTW_FINGERPRINTS.length > 0) {
+    for (const fp of DTW_FINGERPRINTS) {
+      if (!fp.dtw_sequence || fp.dtw_sequence.length < 10) continue;
+      referenceIndex.push(fp);
     }
 
     const byType = {};
     referenceIndex.forEach(r => { byType[r.fault_type] = (byType[r.fault_type]||0)+1; });
-    Logger.info(`[Dataset] ✅ Loaded ${referenceIndex.length} class centroids (from ${allValid.length}):`, JSON.stringify(byType));
+    Logger.info(`[Dataset] ✅ Loaded ${referenceIndex.length} DTW sequences:`, JSON.stringify(byType));
     return;
   }
+
 
 
   // ── Fallback: Supabase bucket ─────────────────────────────────────────────────
