@@ -247,6 +247,11 @@ export async function initializeAudioDataset(forceRefresh = false) {
         Logger.warn(`[Dataset] Skipping embedded ${fp.id} — NaN vector (source file may be silent)`);
         continue;
       }
+      if (fp.source_file && fp.source_file.toLowerCase().includes('issue_with')) {
+        Logger.warn(`[Dataset] Skipping ambiguous file ${fp.source_file}`);
+        continue;
+      }
+
       allValid.push(fp);
     }
 
