@@ -87,62 +87,109 @@ function computeCompositeEmbedding(samples, sr) {
   const hann = getHannWindow(N_FFT);
   const fftBins = N_FFT / 2 + 1;
   const numFrames = Math.max(1, Math.floor((samples.length - N_FFT) / HOP));
+  
   const melHistory = Array.from({ length: N_MELS }, () => new Float64Array(numFrames));
+  const mfccHistory = Array.from({ length: N_MFCC }, () => new Float64Array(numFrames));
+  const fluxHistory = new Float64Array(numFrames);
+  const crestHistory = new Float64Array(numFrames);
+
   let totalZCR = 0, totalRMS = 0, totalCentroid = 0;
   const reFFT = new Float32Array(N_FFT), imFFT = new Float32Array(N_FFT);
+  let prevMag = new Float32Array(fftBins);
+
   for (let f = 0; f < numFrames; f++) {
     const start = f * HOP;
     for (let i = 0; i < N_FFT; i++) { reFFT[i] = (samples[start + i] || 0) * hann[i]; imFFT[i] = 0; }
     fftInPlace(reFFT, imFFT);
+    
     let frameRMS = 0, weightedSum = 0, powerSum = 0;
+    let maxMag = 0, flux = 0;
+
     for (let k = 0; k < fftBins; k++) {
       const mag = Math.sqrt(reFFT[k] * reFFT[k] + imFFT[k] * imFFT[k]);
+      if (mag > maxMag) maxMag = mag;
+      flux += Math.max(0, mag - prevMag[k]);
+      prevMag[k] = mag;
+
       frameRMS += reFFT[k] * reFFT[k] + imFFT[k] * imFFT[k];
       weightedSum += k * mag; powerSum += mag;
       for (let m = 0; m < N_MELS; m++) melHistory[m][f] += fb[m][k] * mag;
     }
-    totalRMS += Math.sqrt(frameRMS / fftBins);
+    
+    fluxHistory[f] = flux;
+    const rms = Math.sqrt(frameRMS / fftBins);
+    totalRMS += rms;
+    crestHistory[f] = rms > 0 ? maxMag / rms : 0;
+    
     totalCentroid += powerSum > 0 ? (weightedSum / powerSum) / fftBins : 0;
     let zcr = 0;
     for (let i = 1; i < N_FFT; i++) if ((samples[start + i] >= 0) !== (samples[start + i - 1] >= 0)) zcr++;
     totalZCR += zcr / N_FFT;
+    
+    for (let m = 0; m < N_MELS; m++) melHistory[m][f] = Math.log(Math.max(melHistory[m][f] / bw[m], 1e-10));
+    for (let k = 0; k < N_MFCC; k++) {
+      let sum = 0;
+      for (let m = 0; m < N_MELS; m++) sum += melHistory[m][f] * Math.cos(Math.PI * k * (m + 0.5) / N_MELS);
+      mfccHistory[k][f] = sum;
+    }
   }
-  const melMean = new Float64Array(N_MELS), melSD = new Float64Array(N_MELS);
-  let sumNorm = 0, sumLogNorm = 0;
-  for (let m = 0; m < N_MELS; m++) {
-    const history = melHistory[m]; let sum = 0, sumSq = 0;
-    for (let f = 0; f < numFrames; f++) { sum += history[f]; sumSq += history[f] * history[f]; }
-    const mean = sum / numFrames, sd = Math.sqrt(Math.max(0, (sumSq / numFrames) - mean * mean));
-    melMean[m] = Math.log(Math.max(mean / bw[m], 1e-10));
-    melSD[m] = Math.log(Math.max(sd / bw[m], 1e-10));
-    const normE = Math.max(mean / bw[m], 1e-10); sumNorm += normE; sumLogNorm += Math.log(normE);
-  }
-  const SF = sumNorm / N_MELS > 0 ? Math.exp(sumLogNorm / N_MELS) / (sumNorm / N_MELS) : 0;
-  let mSum = 0, mVar = 0;
-  for (let m = 0; m < N_MELS; m++) mSum += melMean[m];
-  const mAvg = mSum / N_MELS;
-  for (let m = 0; m < N_MELS; m++) { melMean[m] -= mAvg; mVar += melMean[m] * melMean[m]; }
-  const mStd = Math.max(Math.sqrt(mVar / N_MELS), 1.2);
-  for (let m = 0; m < N_MELS; m++) melMean[m] /= mStd;
-  let sSum = 0, sVar = 0;
-  for (let m = 0; m < N_MELS; m++) sSum += melSD[m];
-  const sAvg = sSum / N_MELS;
-  for (let m = 0; m < N_MELS; m++) { melSD[m] -= sAvg; sVar += melSD[m] * melSD[m]; }
-  const sStd = Math.max(Math.sqrt(sVar / N_MELS), 1.2);
-  for (let m = 0; m < N_MELS; m++) melSD[m] /= sStd;
-  const mfcc = new Float32Array(N_MFCC);
+
+  const deltaMfccHistory = Array.from({ length: N_MFCC }, () => new Float64Array(numFrames));
   for (let k = 0; k < N_MFCC; k++) {
-    let sum = 0;
-    for (let m = 0; m < N_MELS; m++) sum += melMean[m] * Math.cos(Math.PI * k * (m + 0.5) / N_MELS);
-    mfcc[k] = sum;
+    for (let f = 1; f < numFrames - 1; f++) {
+      deltaMfccHistory[k][f] = (mfccHistory[k][f+1] - mfccHistory[k][f-1]) / 2;
+    }
   }
-  const normMean = l2Norm(melMean), normSD = l2Norm(melSD), normMfcc = l2Norm(mfcc);
-  const raw = new Float32Array(N_MELS * 2 + N_MFCC + 1 + 3);
-  raw.set(normMean, 0); raw.set(normSD, N_MELS); raw.set(normMfcc, N_MELS * 2);
-  raw[N_MELS * 2 + N_MFCC] = SF;
-  raw[N_MELS * 2 + N_MFCC + 1] = Math.min(1.0, (totalRMS / numFrames) * 1.5);
-  raw[N_MELS * 2 + N_MFCC + 2] = Math.min(1.0, (totalZCR / numFrames) * 2.0);
-  raw[N_MELS * 2 + N_MFCC + 3] = Math.min(1.0, (totalCentroid / numFrames) * 1.2);
+
+  const melMean = new Float64Array(N_MELS), melSD = new Float64Array(N_MELS);
+  const mfccMean = new Float64Array(N_MFCC), mfccSD = new Float64Array(N_MFCC);
+  const dMfccMean = new Float64Array(N_MFCC), dMfccSD = new Float64Array(N_MFCC);
+  
+  let fluxMean = 0, fluxMax = 0, crestMean = 0, crestMax = 0;
+  for (let f = 0; f < numFrames; f++) {
+    fluxMean += fluxHistory[f];
+    if (fluxHistory[f] > fluxMax) fluxMax = fluxHistory[f];
+    crestMean += crestHistory[f];
+    if (crestHistory[f] > crestMax) crestMax = crestHistory[f];
+  }
+  fluxMean /= numFrames; crestMean /= numFrames;
+
+  for (let m = 0; m < N_MELS; m++) {
+    let sum = 0, sumSq = 0;
+    for (let f = 0; f < numFrames; f++) { sum += melHistory[m][f]; sumSq += melHistory[m][f] * melHistory[m][f]; }
+    melMean[m] = sum / numFrames; melSD[m] = Math.sqrt(Math.max(0, (sumSq / numFrames) - melMean[m] * melMean[m]));
+  }
+  
+  for (let k = 0; k < N_MFCC; k++) {
+    let sum = 0, sumSq = 0, dSum = 0, dSumSq = 0;
+    for (let f = 0; f < numFrames; f++) { 
+      sum += mfccHistory[k][f]; sumSq += mfccHistory[k][f] * mfccHistory[k][f]; 
+      dSum += deltaMfccHistory[k][f]; dSumSq += deltaMfccHistory[k][f] * deltaMfccHistory[k][f]; 
+    }
+    mfccMean[k] = sum / numFrames; mfccSD[k] = Math.sqrt(Math.max(0, (sumSq / numFrames) - mfccMean[k] * mfccMean[k]));
+    dMfccMean[k] = dSum / numFrames; dMfccSD[k] = Math.sqrt(Math.max(0, (dSumSq / numFrames) - dMfccMean[k] * dMfccMean[k]));
+  }
+
+  const transientFeatures = new Float32Array(8);
+  transientFeatures[0] = Math.min(1.0, (totalRMS / numFrames) * 1.5);
+  transientFeatures[1] = Math.min(1.0, (totalZCR / numFrames) * 2.0);
+  transientFeatures[2] = Math.min(1.0, (totalCentroid / numFrames) * 1.2);
+  transientFeatures[3] = Math.min(1.0, fluxMean * 0.1);
+  transientFeatures[4] = Math.min(1.0, fluxMax * 0.05);
+  transientFeatures[5] = Math.min(1.0, crestMean * 0.1);
+  transientFeatures[6] = Math.min(1.0, crestMax * 0.05);
+  transientFeatures[7] = crestMax > crestMean * 3 ? 1.0 : 0.0;
+
+  const raw = new Float32Array(N_MELS * 2 + N_MFCC * 4 + 8);
+  let offset = 0;
+  raw.set(l2Norm(melMean), offset); offset += N_MELS;
+  raw.set(l2Norm(melSD), offset); offset += N_MELS;
+  raw.set(l2Norm(mfccMean), offset); offset += N_MFCC;
+  raw.set(l2Norm(mfccSD), offset); offset += N_MFCC;
+  raw.set(l2Norm(dMfccMean), offset); offset += N_MFCC;
+  raw.set(l2Norm(dMfccSD), offset); offset += N_MFCC;
+  raw.set(l2Norm(transientFeatures), offset);
+  
   return l2Norm(raw);
 }
 

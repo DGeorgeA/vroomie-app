@@ -75,11 +75,9 @@ async function idbPut(db, record) {
   });
 }
 
-// ── Validate that a cosine_vec is in V6 log10 space (must be all-negative) ────
-function isV6LogSpace(vec) {
-  if (!Array.isArray(vec) || vec.length < 100) return false;
-  const negativeCount = vec.filter(v => v < 0).length;
-  return negativeCount / vec.length > 0.80;
+// ── Validate embedding length ────
+function isValidEmbedding(vec) {
+  return Array.isArray(vec) && vec.length >= 100;
 }
 
 // ── Pearson correlation for deduplication ────────────────────────────────────
@@ -249,14 +247,6 @@ export async function initializeAudioDataset(forceRefresh = false) {
         Logger.warn(`[Dataset] Skipping embedded ${fp.id} — NaN vector (source file may be silent)`);
         continue;
       }
-      // Spectral variance check: reject flat vectors (silence/noise)
-      let vsum = 0;
-      for (const v of fp.cosine_vec) vsum += (v - mean) ** 2;
-      const std = Math.sqrt(vsum / fp.cosine_vec.length);
-      if (std < 0.05) {
-        Logger.warn(`[Dataset] Skipping ${fp.id} — spectral std=${std.toFixed(4)} too flat (not a real anomaly pattern)`);
-        continue;
-      }
       allValid.push(fp);
     }
 
@@ -343,8 +333,8 @@ export async function initializeAudioDataset(forceRefresh = false) {
         // v5 uses [0,1] normalized values (all positive). V6 uses log10
         // (all negative). Cosine similarity between them = ~0 → no detection.
         if (Array.isArray(pattern.cosine_vec) && pattern.cosine_vec.length > 100) {
-          if (!isV6LogSpace(pattern.cosine_vec)) {
-            Logger.warn(`[Dataset] REJECTING ${file.name} — old v5-symmetric vector space (pipeline=${pattern.pipeline}). Run regen_fingerprints.cjs to fix.`);
+          if (!isValidEmbedding(pattern.cosine_vec)) {
+            Logger.warn(`[Dataset] REJECTING ${file.name} — invalid vector. Run generate_v7_fingerprints.mjs to fix.`);
             rejectedOld++;
             continue;
           }
@@ -381,7 +371,7 @@ export async function initializeAudioDataset(forceRefresh = false) {
         // Check IndexedDB cache first
         if (idb) {
           const cached = await idbGet(idb, baseName).catch(() => null);
-          if (cached && isV6LogSpace(cached.cosine_vec)) {
+          if (cached && isValidEmbedding(cached.cosine_vec)) {
             referenceIndex.push(cached);
             Logger.info(`[Dataset] Loaded from IndexedDB cache: ${baseName}`);
             continue;
