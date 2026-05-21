@@ -250,11 +250,10 @@ export async function initializeAudioDataset(forceRefresh = false) {
       allValid.push(fp);
     }
 
-    // ── Deduplication: max 8 diverse representatives per fault type ────────────
-    // 81 nearly-identical serpentine/power-steering vectors = 81× false-match surface.
-    // Pearson correlation groups similar ones; we keep the most spread-out subset.
-    // 8 (vs 5 before) provides better recall coverage without excessive false positives.
-    const MAX_PER_TYPE = 8;
+    // ── Deduplication: Compute Centroid per Fault Type ────────────
+    // Using max-spread outliers caused classes with many samples (e.g. Power Steering) 
+    // to dominate the vector space. Using a centroid ensures each class has exactly 
+    // one highly representative vector.
     const byFaultType = {};
     for (const fp of allValid) {
       if (!byFaultType[fp.fault_type]) byFaultType[fp.fault_type] = [];
@@ -262,34 +261,41 @@ export async function initializeAudioDataset(forceRefresh = false) {
     }
 
     for (const [faultType, fps] of Object.entries(byFaultType)) {
-      if (fps.length <= MAX_PER_TYPE) {
-        fps.forEach(fp => referenceIndex.push(fp));
+      if (fps.length === 1) {
+        referenceIndex.push(fps[0]);
         continue;
       }
-      // Greedy max-spread selection: pick 5 vectors that are most different from each other
-      const selected = [fps[0]];
-      while (selected.length < MAX_PER_TYPE) {
-        let bestCandidate = null, bestMinDist = -1;
-        for (const candidate of fps) {
-          if (selected.includes(candidate)) continue;
-          // Min Pearson correlation to any already-selected vector (lower = more diverse)
-          let minCorr = 1.0;
-          for (const sel of selected) {
-            const corr = pearsonCorr(candidate.cosine_vec, sel.cosine_vec);
-            if (corr < minCorr) minCorr = corr;
-          }
-          if (minCorr > bestMinDist) { bestMinDist = minCorr; bestCandidate = candidate; }
+      
+      // Compute centroid of all vectors in this class
+      const centroidVec = new Float64Array(fps[0].cosine_vec.length);
+      for (const fp of fps) {
+        for (let i = 0; i < centroidVec.length; i++) {
+          centroidVec[i] += fp.cosine_vec[i];
         }
-        if (bestCandidate) selected.push(bestCandidate);
-        else break;
       }
-      selected.forEach(fp => referenceIndex.push(fp));
-      Logger.info(`[Dataset] Dedup ${faultType}: ${fps.length} → ${selected.length} diverse representatives`);
+      for (let i = 0; i < centroidVec.length; i++) {
+        centroidVec[i] /= fps.length;
+      }
+      
+      // L2 Normalize the centroid
+      let norm = 0;
+      for (let i = 0; i < centroidVec.length; i++) norm += centroidVec[i] * centroidVec[i];
+      norm = Math.sqrt(norm) || 1e-10;
+      for (let i = 0; i < centroidVec.length; i++) centroidVec[i] /= norm;
+
+      // Create a representative fingerprint
+      const rep = { ...fps[0] };
+      rep.id = `${faultType}_centroid`;
+      rep.source_file = `centroid_of_${fps.length}_samples`;
+      rep.cosine_vec = Array.from(centroidVec);
+      
+      referenceIndex.push(rep);
+      Logger.info(`[Dataset] Computed centroid for ${faultType} from ${fps.length} samples`);
     }
 
     const byType = {};
     referenceIndex.forEach(r => { byType[r.fault_type] = (byType[r.fault_type]||0)+1; });
-    Logger.info(`[Dataset] ✅ Loaded ${referenceIndex.length} fingerprints (deduped from ${allValid.length}):`, JSON.stringify(byType));
+    Logger.info(`[Dataset] ✅ Loaded ${referenceIndex.length} class centroids (from ${allValid.length}):`, JSON.stringify(byType));
     return;
   }
 

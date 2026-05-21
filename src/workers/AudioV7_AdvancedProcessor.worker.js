@@ -119,8 +119,8 @@ self.onmessage = function (ev) {
       break;
     case 'setThresholds':
       if (payload && typeof payload.absThreshold === 'number') {
-        // Map legacy 0.35 threshold scale to our new 0.82 scale if necessary
-        clampedThreshold = payload.absThreshold > 0.60 ? payload.absThreshold : 0.82;
+        // Map legacy 0.38 threshold to a safer 0.88 to prevent noise from triggering anomalies
+        clampedThreshold = payload.absThreshold > 0.60 ? payload.absThreshold : 0.88;
         console.log(`[V7 Worker] Threshold set to ${clampedThreshold.toFixed(3)}`);
       }
       break;
@@ -279,9 +279,15 @@ function handleStop() {
     // STAGE 2: HARD SILENCE & NOISE REJECTION
     // ==========================================
     const sessionRms = totalRMS / numFrames;
-    if (sessionRms < 0.003) {
-      console.log(`[V7] Reject Stage 1 (Silence): rms=${sessionRms.toFixed(5)}`);
+    if (sessionRms < 0.012) {
+      console.log(`[V7] Reject Stage 1 (Silence/Room Noise): rms=${sessionRms.toFixed(5)}`);
       emitNormal(0, "silence");
+      return;
+    }
+    
+    if (crestMax < 2.2 || fluxMax < 0.02) {
+      console.log(`[V7] Reject Stage 2 (Non-Mechanical Noise): crest=${crestMax.toFixed(2)}, flux=${fluxMax.toFixed(3)}`);
+      emitNormal(0, "ambient_noise");
       return;
     }
 
