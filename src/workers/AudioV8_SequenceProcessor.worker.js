@@ -181,6 +181,7 @@ function linearResample(signal, oldSr, newSr) {
 }
 
 let prevMag = new Float32Array(FFT_SIZE / 2 + 1);
+let noiseFloor = 0.005;
 
 function handleProcess({ buffer, sampleRate }) {
   try {
@@ -215,6 +216,15 @@ function processFrames() {
       if (i > 0 && ((s >= 0) !== (sessionRing[i-1] >= 0))) zcr++;
     }
     const rms = Math.sqrt(frameEnergySq / FFT_SIZE);
+    
+    // Live Mic Dynamic Calibration: Trailing Noise Floor
+    if (rms < noiseFloor) noiseFloor = 0.95 * noiseFloor + 0.05 * rms;
+    else noiseFloor = 0.995 * noiseFloor + 0.005 * rms;
+    
+    // Bounds for safety
+    if (noiseFloor < 0.001) noiseFloor = 0.001;
+    if (noiseFloor > 0.05) noiseFloor = 0.05;
+
     const zcrNorm = zcr / FFT_SIZE;
 
     fftInPlace(reFFT, imFFT);
@@ -297,10 +307,11 @@ function evaluateSequence() {
   const avgFlatness = sumFlatness / SEQ_LENGTH;
   const avgZcr = sumZcr / SEQ_LENGTH;
 
-  // GATE 1: Absolute RMS Silence (Strict Hardware Independent Threshold)
-  if (maxRMS < 0.005) { 
+  // GATE 1: Dynamic RMS Gate (Live Mic Calibration)
+  // Must be significantly above the calibrated environmental noise floor
+  if (maxRMS < Math.max(0.005, noiseFloor * 2.5)) { 
     confidenceStreak = 0;
-    emitNormal(0, "silence");
+    emitNormal(0, `silence_or_floor_${noiseFloor.toFixed(4)}`);
     return;
   }
 
@@ -332,18 +343,30 @@ function evaluateSequence() {
   // Standardize only the MFCC + Flux dimensions (14) for Euclidean distance
   const liveStd = standardizeSequence(featureSequence, 14);
   
-  let bestDist = Infinity;
-  let bestMatch = null;
-
+  const results = [];
   for (const ref of referenceIndex) {
     if (!ref.dtw_sequence || ref.dtw_sequence.length === 0) continue;
     
-    // DTW calculates distance based on the first 14 dimensions (as written in euclideanDistance)
     const dist = computeDTW(liveStd, ref.dtw_sequence);
-    if (dist < bestDist) {
-      bestDist = dist;
-      bestMatch = ref;
-    }
+    results.push({ ref, dist });
+  }
+
+  results.sort((a, b) => a.dist - b.dist);
+
+  if (results.length === 0) return;
+
+  const bestMatch = results[0].ref;
+  const bestDist = results[0].dist;
+  const secondBestDist = results.length > 1 ? results[1].dist : Infinity;
+
+  // PART 3: TOP-2 DIFFERENCE VALIDATION
+  // True anomalies have a massive separation margin (e.g. 2.0+). 
+  // Noise collapses with small margins (e.g. 0.1).
+  const separationMargin = secondBestDist - bestDist;
+  if (results.length > 1 && separationMargin < 0.25) {
+    confidenceStreak = 0;
+    emitNormal(0, `ambiguous_collapse_margin_${separationMargin.toFixed(2)}`);
+    return;
   }
 
   // GATE 5: DTW Minimum Alignment Confidence
@@ -359,31 +382,34 @@ function evaluateSequence() {
     lastAnomalyTime = now;
 
     if (confidenceStreak >= 2) {
-      // Final Admission Confidence Score
-      // Combining Mechanical Validity (1 - Flatness) with DTW Alignment Score
+      // Final Admission Confidence Score (BMAD formula)
+      // Combines: DTW Quality, Mechanical Periodicity (1-Flatness), and Separation Margin
       const dtwScore = Math.max(0.0, 1.0 - (bestDist / maxDtwDistance));
       const mechScore = Math.max(0.0, 1.0 - avgFlatness);
-      const finalConfidence = dtwScore * mechScore;
+      const marginBonus = Math.min(1.0, separationMargin / 2.0); // Reward high separation
       
-      // Strict floor: finalConfidence must be > 0.4 to prevent weak triggers
-      if (finalConfidence < 0.4) {
+      const finalConfidence = dtwScore * mechScore * marginBonus;
+      
+      // Strict floor: finalConfidence must be > 0.3
+      if (finalConfidence < 0.3) {
          emitNormal(finalConfidence, "low_confidence_match");
          return;
       }
 
-      console.log(`[V8 DTW] Detected "${bestMatch.label}" Dist=${bestDist.toFixed(3)} Flatness=${avgFlatness.toFixed(2)} Score=${finalConfidence.toFixed(2)}`);
+      console.log(`[V8 DTW] Detected "${bestMatch.label}" Dist=${bestDist.toFixed(3)} Margin=${separationMargin.toFixed(2)} Score=${finalConfidence.toFixed(2)}`);
       self.postMessage({
         type: 'result',
         payload: {
           status: 'anomaly', 
           anomaly: bestMatch.label,
-          confidence: Math.max(0.7, finalConfidence), // Boost for UI visual threshold
+          confidence: Math.min(1.0, Math.max(0.75, finalConfidence + 0.4)), // Boost for UI visual threshold
           severity: bestMatch.severity || 'high',
           rms: Math.max(0, (maxRMS * 50)), // Pseudo-RMS for UI waveform
           spectralMeta: {
             rms: maxRMS,
             dtwDistance: bestDist,
-            flatness: avgFlatness
+            flatness: avgFlatness,
+            margin: separationMargin
           }
         }
       });
