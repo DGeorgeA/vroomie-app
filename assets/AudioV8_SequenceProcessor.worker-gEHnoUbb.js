@@ -161,7 +161,11 @@ function standardizeSequence(seq, dimsToStandardize) {
       sumSq += seq[f][d] * seq[f][d];
     }
     const mean = sum / numFrames;
-    const std = Math.max(1e-5, Math.sqrt(Math.max(0, (sumSq / numFrames) - mean * mean)));
+    // CRITICAL FIX: "Noise Floor Explosion"
+    // Apply an acoustically grounded floor to prevent microscopic noise amplification.
+    // Without this, quiet TV audio gets amplified by 10,000x into massive patterns.
+    const floor = d < N_MFCC ? 0.2 : 0.05;
+    const std = Math.max(floor, Math.sqrt(Math.max(0, (sumSq / numFrames) - mean * mean)));
     for (let f = 0; f < numFrames; f++) {
       stdSeq[f][d] = (seq[f][d] - mean) / std;
     }
@@ -223,14 +227,35 @@ function computeCoeffOfVariation(seq, featureIdx) {
   return (Math.abs(mean) > 1e-8) ? (std / Math.abs(mean)) : std;
 }
 
+function computeScaleInvariantVariance(seq, featureIdx) {
+  let min = Infinity, max = -Infinity;
+  for (let i = 0; i < seq.length; i++) {
+    const v = seq[i][featureIdx];
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
+  // Enforce a minimum acoustic scale to prevent engine noise amplification
+  const range = Math.max(0.1, max - min); 
+  
+  let sum = 0, sumSq = 0;
+  for (let i = 0; i < seq.length; i++) {
+    const norm = (seq[i][featureIdx] - min) / range;
+    sum += norm;
+    sumSq += norm * norm;
+  }
+  const mean = sum / seq.length;
+  return (sumSq / seq.length) - (mean * mean);
+}
+
 function classifyAudioDomain(seq) {
   // 1. MFCC temporal dynamics: compute variance of MFCCs 1-12 across time
   //    (Skip MFCC 0 which is just energy level)
   //    Speech has VERY high MFCC variance (changing phonemes).
   //    Engine sounds have LOW MFCC variance (stationary spectrum).
+  //    CRITICAL FIX: Use Scale-Invariant Variance so quiet speech is still detected.
   let mfccVarSum = 0;
   for (let c = 1; c < N_MFCC; c++) {
-    mfccVarSum += computeTemporalVariance(seq, c);
+    mfccVarSum += computeScaleInvariantVariance(seq, c);
   }
   const avgMfccVar = mfccVarSum / (N_MFCC - 1);
   
@@ -270,8 +295,8 @@ function classifyAudioDomain(seq) {
   // Each feature contributes a normalized [0,1] score indicating "human-ness".
   // These are empirically calibrated.
   
-  // MFCC variance: engine < 5, speech > 20 typically
-  const mfccScore = Math.min(1.0, avgMfccVar / 30.0);
+  // MFCC scale-invariant variance: engine < 0.05, speech > 0.15 typically
+  const mfccScore = Math.min(1.0, avgMfccVar / 0.20);
   
   // RMS CV: engine < 0.2, speech > 0.4 typically
   const rmsScore = Math.min(1.0, rmsCV / 0.8);
@@ -529,7 +554,8 @@ async function evaluateSequence() {
     topClass = YAMNET_CLASSES[topIndices[0].i] || "unknown";
 
     // INVERTED ARCHITECTURE: Default = REJECT.
-    // Only admit if YAMNet positively confirms mechanical domain in top-5.
+    // Only admit if YAMNet positively confirms mechanical domain in top-5
+    // AND the confidence of that match is at least 0.15.
     const mechanicalKeywords = [
       'engine', 'mechanisms', 'vehicle', 'gears', 'car', 'motor',
       'idling', 'accelerating', 'squeal', 'hiss', 'rattle', 'knock',
@@ -540,7 +566,10 @@ async function evaluateSequence() {
 
     for (let j = 0; j < topIndices.length; j++) {
       const cls = (YAMNET_CLASSES[topIndices[j].i] || "").toLowerCase();
-      if (mechanicalKeywords.some(kw => cls.includes(kw))) { isMechanical = true; break; }
+      if (mechanicalKeywords.some(kw => cls.includes(kw)) && topIndices[j].score >= 0.15) { 
+        isMechanical = true; 
+        break; 
+      }
     }
 
     console.log(`[V8 YAMNet] Top: "${topClass}" (${topIndices[0].score.toFixed(3)}) | DSP_human=${domain.humanAudioScore.toFixed(3)} | Mechanical=${isMechanical}`);
