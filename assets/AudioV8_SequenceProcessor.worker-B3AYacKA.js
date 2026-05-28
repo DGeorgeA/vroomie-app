@@ -473,50 +473,82 @@ async function evaluateSequence() {
   }
 
   // ═══════════════════════════════════════════════════════
-  // PART 1: YAMNET DOMAIN CLASSIFIER (THE PRE-GATE)
+  // PART 1A: DSP DOMAIN PRE-FILTER (INDEPENDENT OF YAMNET)
+  // Must pass BEFORE YAMNet is even consulted.
+  // This catches TV/speech/music/ambient via temporal acoustic
+  // dynamics — the fastest and most reliable discriminator.
+  // ═══════════════════════════════════════════════════════
+  const domain = classifyAudioDomain(featureSequence);
+  if (domain.humanAudioScore > 0.35) {
+    confidenceStreak = 0;
+    emitNormal(0, `dsp_pre_reject_score${domain.humanAudioScore.toFixed(2)}`);
+    return;
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // PART 1B: YAMNET DOMAIN CLASSIFIER (FAIL-CLOSED)
+  // If YAMNet model has not yet loaded, REJECT ALL AUDIO.
+  // Never allow unverified audio to reach DTW inference.
   // ═══════════════════════════════════════════════════════
   let isMechanical = false;
-  let isForbidden = false;
   let topClass = "unknown";
-  
-  if (yamnetModel) {
+
+  if (!yamnetModel) {
+    // Fail-closed: YAMNet not ready → reject everything.
+    // This prevents ALL audio from reaching DTW while the
+    // 1.5MB TFHub model is still loading over the network.
+    confidenceStreak = 0;
+    emitNormal(0, "yamnet_not_ready");
+    return;
+  }
+
+  {
     const tensor = tf.tensor1d(yamnetRing);
-    const preds = yamnetModel.predict(tensor);
-    
-    // FIX: YAMNet from TFHub returns [scores, embeddings, spectrogram]
+    let preds;
+    try {
+      preds = yamnetModel.predict(tensor);
+    } catch (e) {
+      tensor.dispose();
+      confidenceStreak = 0;
+      emitNormal(0, "yamnet_predict_error");
+      return;
+    }
+
+    // YAMNet from TFHub returns [scores, embeddings, spectrogram]
     const scoresTensor = Array.isArray(preds) ? preds[0] : preds;
     const scores = await scoresTensor.data();
-    
-    // Clean up all tensors
-    if (Array.isArray(preds)) {
-      preds.forEach(p => p.dispose());
-    } else {
-      preds.dispose();
-    }
+    if (Array.isArray(preds)) preds.forEach(p => p.dispose()); else preds.dispose();
     tensor.dispose();
 
-    // Find top 3 classes
-    const topIndices = Array.from(scores).map((score, i) => ({ score, i }))
-      .sort((a, b) => b.score - a.score).slice(0, 3);
-    
+    // Top 5 classes for robustness
+    const topIndices = Array.from(scores)
+      .map((score, i) => ({ score, i }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5);
+
     topClass = YAMNET_CLASSES[topIndices[0].i] || "unknown";
 
-    // INVERTED ARCHITECTURE: Default = REJECT. Only admit if YAMNet positively
-    // confirms mechanical/engine/vehicle domain. This eliminates the impossible
-    // task of enumerating all 521 non-mechanical YAMNet classes.
-    const mechanicalKeywords = ['engine', 'mechanisms', 'vehicle', 'gears', 'tools', 'car', 'motor', 'idling', 'accelerating', 'squeal', 'hiss', 'rattle', 'knock', 'mechanical', 'power tool', 'drill', 'chainsaw', 'lawn mower', 'medium engine', 'heavy engine', 'light engine', 'engine knocking', 'engine starting'];
+    // INVERTED ARCHITECTURE: Default = REJECT.
+    // Only admit if YAMNet positively confirms mechanical domain in top-5.
+    const mechanicalKeywords = [
+      'engine', 'mechanisms', 'vehicle', 'gears', 'car', 'motor',
+      'idling', 'accelerating', 'squeal', 'hiss', 'rattle', 'knock',
+      'mechanical', 'power tool', 'drill', 'chainsaw', 'lawn mower',
+      'medium engine', 'heavy engine', 'light engine',
+      'engine knocking', 'engine starting'
+    ];
 
     for (let j = 0; j < topIndices.length; j++) {
       const cls = (YAMNET_CLASSES[topIndices[j].i] || "").toLowerCase();
-      if (mechanicalKeywords.some(kw => cls.includes(kw))) isMechanical = true;
+      if (mechanicalKeywords.some(kw => cls.includes(kw))) { isMechanical = true; break; }
     }
 
-    console.log(`[V8 YAMNet] Top: "${topClass}" (${topIndices[0].score.toFixed(3)}) | Mechanical=${isMechanical}`);
+    console.log(`[V8 YAMNet] Top: "${topClass}" (${topIndices[0].score.toFixed(3)}) | DSP_human=${domain.humanAudioScore.toFixed(3)} | Mechanical=${isMechanical}`);
 
     if (!isMechanical) {
       confidenceStreak = 0;
-      emitNormal(0, `yamnet_domain_reject_${topClass.replace(/\s+/g, '_')}`);
-      return; // ABSOLUTE DOMAIN REJECT — only mechanical audio proceeds
+      emitNormal(0, `yamnet_reject_${topClass.replace(/\s+/g, '_').replace(/[^a-z0-9_]/gi, '')}`);
+      return; // ABSOLUTE DOMAIN REJECT
     }
   }
 
@@ -557,13 +589,8 @@ async function evaluateSequence() {
     return;
   }
 
-  // Gate 4: Harmonic/Centroid Validator (REMOVED - handled by YAMNet)
-  const domain = classifyAudioDomain(featureSequence);
-  if (domain.humanAudioScore > 0.40) {
-    confidenceStreak = 0;
-    emitNormal(0, "dsp_domain_reject");
-    return;
-  }
+  // Gate 4: DSP domain already computed above (Part 1A), re-use result
+  // (classifyAudioDomain was already called; no need to call again)
 
   // ═══════════════════════════════════════════════════════
   // PART 3: DTW SEQUENCE ALIGNMENT
@@ -627,7 +654,7 @@ async function evaluateSequence() {
         payload: {
           status: 'anomaly', 
           anomaly: bestMatch.label,
-          confidence: Math.min(1.0, Math.max(0.75, finalConfidence)),
+          confidence: Math.min(1.0, finalConfidence),
           severity: bestMatch.severity || 'high',
           rms: Math.max(0, maxRMS * 50),
           spectralMeta: {
