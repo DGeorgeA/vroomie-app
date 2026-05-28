@@ -109,8 +109,11 @@ function computeDTW(seqA, seqB) {
   
   const dtw = Array.from({ length: n + 1 }, () => new Float64Array(m + 1).fill(Infinity));
   dtw[0][0] = 0;
-  
-  const window = Math.max(Math.abs(n - m), Math.floor(Math.max(n, m) * 0.2));
+  // CRITICAL FIX: Constrain DTW warping window to max 2 frames (40ms).
+  // Previously this was 20% (10 frames = 200ms), which allowed DTW to stretch 
+  // a single phoneme of human speech to match an entire 1-second engine sequence!
+  // Mechanical engines are highly rhythmic and require strict temporal alignment.
+  const window = Math.max(Math.abs(n - m), 2);
   
   for (let i = 1; i <= n; i++) {
     const start = Math.max(1, i - window);
@@ -482,15 +485,17 @@ function evaluateSequence() {
   // ═══════════════════════════════════════════════════════
   // STAGE 4: AUDIO DOMAIN CLASSIFIER (Speech/Music/TV)
   // Analyzes TEMPORAL DYNAMICS across the 1-second window.
-  // BMAD data: Real anomalies score 0.03-0.62.
-  //            Synthetic speech scores 0.26.
-  //            Real speech/TV will score much higher (~0.5-0.9) due
-  //            to rapid phoneme changes, syllabic modulation, pauses.
-  // We keep this as a SOFT gate that feeds into confidence scoring
-  // rather than a hard reject, since some real anomalies (SerpentineBelt)
-  // have high temporal variance.
   // ═══════════════════════════════════════════════════════
   const domain = classifyAudioDomain(featureSequence);
+
+  // HARD GATE: Real speech/TV has syllabic amplitude modulation (rmsScore > 0.6)
+  // and natural pauses between words/syllables (pauseScore > 0).
+  // Serpentine belts have high variance but NO pauses and lower RMS modulation.
+  if (domain.pauseScore > 0.1 || domain.rmsScore > 0.6) {
+    confidenceStreak = 0;
+    emitNormal(0, `speech_tv_rejected`);
+    return;
+  }
 
   // ═══════════════════════════════════════════════════════
   // STAGE 5: DTW SEQUENCE ALIGNMENT

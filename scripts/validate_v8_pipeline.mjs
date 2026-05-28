@@ -257,7 +257,7 @@ function computeDTW(seqA, seqB) {
   if (n === 0 || m === 0) return Infinity;
   const dtw = Array.from({ length: n + 1 }, () => new Float64Array(m + 1).fill(Infinity));
   dtw[0][0] = 0;
-  const window = Math.max(Math.abs(n - m), Math.floor(Math.max(n, m) * 0.2));
+  const window = Math.max(Math.abs(n - m), 2);
   for (let i = 1; i <= n; i++) {
     const start = Math.max(1, i - window);
     const end = Math.min(m, i + window);
@@ -409,6 +409,7 @@ async function runValidation() {
     if (maxRMS < 0.005) { verdict = 'REJECT'; rejectReason = 'silence'; }
     else if (avgFlatness > 0.90) { verdict = 'REJECT'; rejectReason = `pure_white_noise_flatness=${avgFlatness.toFixed(3)}`; }
     else if (maxFlux < 0.05) { verdict = 'REJECT'; rejectReason = `non_mechanical_flux=${maxFlux.toFixed(3)}`; }
+    else if (domain.pauseScore > 0.1 || domain.rmsScore > 0.6) { verdict = 'REJECT'; rejectReason = `speech_tv_rejected_rms=${domain.rmsScore.toFixed(2)}_pause=${domain.pauseScore.toFixed(2)}`; }
     else if (best.dist > maxDtwDistance) { verdict = 'REJECT'; rejectReason = `no_dtw_alignment_dist=${best.dist.toFixed(3)}`; }
     else if (margin < 0.15) { verdict = 'REJECT'; rejectReason = `ambiguous_margin=${margin.toFixed(3)}`; }
     
