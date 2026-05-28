@@ -234,8 +234,10 @@ function computeScaleInvariantVariance(seq, featureIdx) {
     if (v < min) min = v;
     if (v > max) max = v;
   }
-  // Enforce a minimum acoustic scale to prevent engine noise amplification
-  const range = Math.max(0.1, max - min); 
+  // Perfect Scale Invariance: map strictly to [0,1] range so quiet speech
+  // exhibits identical dynamic variance to loud speech.
+  const range = max - min; 
+  if (range < 1e-5) return 0; // Pure flat line
   
   let sum = 0, sumSq = 0;
   for (let i = 0; i < seq.length; i++) {
@@ -545,39 +547,60 @@ async function evaluateSequence() {
     if (Array.isArray(preds)) preds.forEach(p => p.dispose()); else preds.dispose();
     tensor.dispose();
 
-    // Top 5 classes for robustness
-    const topIndices = Array.from(scores)
-      .map((score, i) => ({ score, i }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 5);
-
-    topClass = YAMNET_CLASSES[topIndices[0].i] || "unknown";
-
-    // INVERTED ARCHITECTURE: Default = REJECT.
-    // Only admit if YAMNet positively confirms mechanical domain in top-5
-    // AND the confidence of that match is at least 0.15.
-    const mechanicalKeywords = [
-      'engine', 'mechanisms', 'vehicle', 'gears', 'car', 'motor',
-      'idling', 'accelerating', 'squeal', 'hiss', 'rattle', 'knock',
-      'mechanical', 'power tool', 'drill', 'chainsaw', 'lawn mower',
-      'medium engine', 'heavy engine', 'light engine',
-      'engine knocking', 'engine starting'
+    // Evaluate ALL classes from YAMNet output for deterministic domain veto
+    const humanKeywords = [
+      'speech', 'conversation', 'music', 'television', 'radio', 'singing', 
+      'laughter', 'breathing', 'cough', 'sneeze', 'sniff', 'crying', 'shout', 
+      'yell', 'whisper', 'footsteps', 'clapping', 'cheering', 'animal', 
+      'bird', 'dog', 'cat', 'water', 'rain', 'wind', 'thunder'
+    ];
+    
+    // STRICT mechanical keywords (removed generic hiss, squeal, rattle, knock)
+    const strictMechKeywords = [
+      'engine', 'mechanisms', 'vehicle', 'gears', 'car', 'motor', 'idling', 
+      'accelerating', 'power tool', 'drill', 'chainsaw', 'lawn mower', 
+      'heavy engine', 'light engine', 'engine starting'
     ];
 
-    for (let j = 0; j < topIndices.length; j++) {
-      const cls = (YAMNET_CLASSES[topIndices[j].i] || "").toLowerCase();
-      if (mechanicalKeywords.some(kw => cls.includes(kw)) && topIndices[j].score >= 0.15) { 
-        isMechanical = true; 
-        break; 
+    let cumulativeHumanScore = 0;
+    let cumulativeMechScore = 0;
+    let maxScore = -1;
+
+    for (let i = 0; i < scores.length; i++) {
+      const score = scores[i];
+      if (score < 0.01) continue; // Skip negligible scores for performance
+      
+      if (score > maxScore) {
+        maxScore = score;
+        topClass = YAMNET_CLASSES[i] || "unknown";
+      }
+
+      const cls = (YAMNET_CLASSES[i] || "").toLowerCase();
+      if (humanKeywords.some(kw => cls.includes(kw))) {
+        cumulativeHumanScore += score;
+      }
+      if (strictMechKeywords.some(kw => cls.includes(kw))) {
+        cumulativeMechScore += score;
       }
     }
 
-    console.log(`[V8 YAMNet] Top: "${topClass}" (${topIndices[0].score.toFixed(3)}) | DSP_human=${domain.humanAudioScore.toFixed(3)} | Mechanical=${isMechanical}`);
+    console.log(`[V8 YAMNet] Top: "${topClass}" (${maxScore.toFixed(3)}) | HumanVeto=${cumulativeHumanScore.toFixed(3)} | Mech=${cumulativeMechScore.toFixed(3)} | DSP_human=${domain.humanAudioScore.toFixed(3)}`);
 
-    if (!isMechanical) {
+    // 1. PROBABILISTIC VETO GATE (Domain Validation FIRST)
+    // If human/environmental probability crosses 10%, IMMEDIATELY REJECT.
+    // A TV playing engine sounds is still a TV.
+    if (cumulativeHumanScore > 0.10) {
       confidenceStreak = 0;
-      emitNormal(0, `yamnet_reject_${topClass.replace(/\s+/g, '_').replace(/[^a-z0-9_]/gi, '')}`);
-      return; // ABSOLUTE DOMAIN REJECT
+      emitNormal(0, `yamnet_veto_human_audio_${(cumulativeHumanScore*100).toFixed(0)}pct`);
+      return; 
+    }
+
+    // 2. STRICT MECHANICAL QUALIFICATION
+    // Must clearly identify as mechanical to proceed to anomaly inference.
+    if (cumulativeMechScore < 0.15) {
+      confidenceStreak = 0;
+      emitNormal(0, `yamnet_reject_non_mechanical`);
+      return; 
     }
   }
 
