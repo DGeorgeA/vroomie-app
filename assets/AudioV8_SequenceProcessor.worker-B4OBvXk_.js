@@ -17,7 +17,7 @@
  * STAGE 8: Temporal Consistency Stabilizer
  */
 
-const TARGET_SR     = 16000;
+// TARGET_SR declared below after imports
 import * as tf from '@tensorflow/tfjs';
 import { YAMNET_CLASSES } from '../data/yamnet_classes.js';
 
@@ -322,10 +322,10 @@ self.onmessage = function (ev) {
       console.log(`[V8 DTW Worker] Loaded ${referenceIndex.length} sequence templates.`);
       break;
     case 'setThresholds':
-      if (payload && typeof payload.absThreshold === 'number') {
-        // We ignore frontend sliders and enforce a strict mathematically sound distance
-        maxDtwDistance = 1.35; 
-      }
+      // LOCKED: maxDtwDistance is hard-coded at 0.80. Frontend overrides are ignored.
+      // The previous override to 1.35 was the secondary cause of false positives.
+      break;
+    case '_legacy_setThresholds': // dead code, kept for reference
       break;
     case 'process': handleProcess(payload); break;
     case 'stop':    handleStop();           break;
@@ -449,7 +449,7 @@ function processFrames() {
     featureSequence.push(Array.from(frameFeatures));
     if (featureSequence.length > SEQ_LENGTH) featureSequence.shift();
     
-    sessionRing = sessionRing.slice(HOP_SAMPLES);
+    sessionRing = sessionRing.slice(HOP);
     frameCounter++;
 
     if (featureSequence.length === SEQ_LENGTH && frameCounter % 10 === 0) {
@@ -501,19 +501,22 @@ async function evaluateSequence() {
     
     topClass = YAMNET_CLASSES[topIndices[0].i] || "unknown";
 
-    const forbiddenKeywords = ['speech', 'music', 'television', 'silence', 'wind', 'breathing', 'laugh', 'conversation', 'room', 'noise', 'static', 'hum', 'environment', 'inside', 'outside', 'radio'];
-    const allowedKeywords = ['engine', 'mechanisms', 'vehicle', 'gears', 'tools', 'car', 'motor', 'idling', 'accelerating', 'whimper', 'squeal', 'hiss'];
+    // INVERTED ARCHITECTURE: Default = REJECT. Only admit if YAMNet positively
+    // confirms mechanical/engine/vehicle domain. This eliminates the impossible
+    // task of enumerating all 521 non-mechanical YAMNet classes.
+    const mechanicalKeywords = ['engine', 'mechanisms', 'vehicle', 'gears', 'tools', 'car', 'motor', 'idling', 'accelerating', 'squeal', 'hiss', 'rattle', 'knock', 'mechanical', 'power tool', 'drill', 'chainsaw', 'lawn mower', 'medium engine', 'heavy engine', 'light engine', 'engine knocking', 'engine starting'];
 
     for (let j = 0; j < topIndices.length; j++) {
       const cls = (YAMNET_CLASSES[topIndices[j].i] || "").toLowerCase();
-      if (forbiddenKeywords.some(kw => cls.includes(kw))) isForbidden = true;
-      if (allowedKeywords.some(kw => cls.includes(kw))) isMechanical = true;
+      if (mechanicalKeywords.some(kw => cls.includes(kw))) isMechanical = true;
     }
 
-    if (isForbidden && !isMechanical) {
+    console.log(`[V8 YAMNet] Top: "${topClass}" (${topIndices[0].score.toFixed(3)}) | Mechanical=${isMechanical}`);
+
+    if (!isMechanical) {
       confidenceStreak = 0;
-      emitNormal(0, `yamnet_reject_${topClass.replace(/\s+/g, '_')}`);
-      return; // HARD DOMAIN REJECT
+      emitNormal(0, `yamnet_domain_reject_${topClass.replace(/\s+/g, '_')}`);
+      return; // ABSOLUTE DOMAIN REJECT — only mechanical audio proceeds
     }
   }
 
@@ -605,7 +608,7 @@ async function evaluateSequence() {
     lastAnomaly = bestMatch.label;
     lastAnomalyTime = now;
 
-    if (confidenceStreak >= 2) {
+    if (confidenceStreak >= 3) {
       const dtwScore = Math.max(0.0, 1.0 - (bestDist / maxDtwDistance));
       const relativeMargin = bestDist > 0.001 ? separationMargin / bestDist : separationMargin * 10;
       const marginBonus = Math.min(1.0, relativeMargin / 5.0);
