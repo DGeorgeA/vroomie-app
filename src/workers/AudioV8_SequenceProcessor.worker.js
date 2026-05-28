@@ -18,17 +18,33 @@
  */
 
 const TARGET_SR     = 16000;
-const FFT_SIZE      = 512;
-const HOP_SAMPLES   = 320; // 20ms frame
-const SEQ_LENGTH    = 50;  // 1.0 seconds (50 frames × 20ms)
+import * as tf from '@tensorflow/tfjs';
+import { YAMNET_CLASSES } from '../data/yamnet_classes.js';
 
+let yamnetModel = null;
+tf.loadGraphModel('https://tfhub.dev/google/tfjs-model/yamnet/tfjs/1', { fromTFHub: true })
+  .then(model => {
+    yamnetModel = model;
+    console.log('[V8 Worker] YAMNet loaded successfully.');
+    // Warmup
+    const dummy = tf.zeros([15600]);
+    model.predict(dummy).dispose();
+    dummy.dispose();
+  })
+  .catch(err => console.error('[V8 Worker] YAMNet load failed:', err));
+
+const TARGET_SR = 16000;
+const FFT_SIZE = 512;
+const HOP = 320;
 const N_MELS = 40;
 const N_MFCC = 13;
+const SEQ_LENGTH = 50;
 // Per-frame features: 13 MFCC + 1 Flux + 1 RMS + 1 Flatness + 1 ZCR + 1 SpectralCentroid = 18
 const N_FEATURES = 18;
 
 let referenceIndex = [];
 let sessionRing = new Float32Array(0);
+let yamnetRing = new Float32Array(0); // 15600 samples for YAMNet
 
 const featureSequence = []; 
 let frameCounter = 0;
@@ -338,6 +354,15 @@ function handleProcess({ buffer, sampleRate }) {
     ring2.set(pcm, sessionRing.length);
     sessionRing = ring2;
 
+    const yRing2 = new Float32Array(yamnetRing.length + pcm.length);
+    yRing2.set(yamnetRing);
+    yRing2.set(pcm, yamnetRing.length);
+    if (yRing2.length > 15600) {
+      yamnetRing = yRing2.slice(yRing2.length - 15600);
+    } else {
+      yamnetRing = yRing2;
+    }
+
     processFrames();
   } catch (err) {
     console.error('[V8 DTW Worker] process error:', err);
@@ -437,11 +462,47 @@ let lastAnomaly = null;
 let lastAnomalyTime = 0;
 let confidenceStreak = 0;
 
-function evaluateSequence() {
+async function evaluateSequence() {
   if (referenceIndex.length === 0) return;
 
   // ═══════════════════════════════════════════════════════
-  // STAGE 1: DYNAMIC RMS SILENCE GATE
+  // PART 1: YAMNET DOMAIN CLASSIFIER (THE PRE-GATE)
+  // ═══════════════════════════════════════════════════════
+  let isMechanical = false;
+  let isForbidden = false;
+  let topClass = "unknown";
+  
+  if (yamnetModel && yamnetRing.length === 15600) {
+    const tensor = tf.tensor1d(yamnetRing);
+    const preds = yamnetModel.predict(tensor);
+    const scores = await preds.data();
+    tensor.dispose();
+    preds.dispose();
+
+    // Find top 3 classes
+    const topIndices = Array.from(scores).map((score, i) => ({ score, i }))
+      .sort((a, b) => b.score - a.score).slice(0, 3);
+    
+    topClass = YAMNET_CLASSES[topIndices[0].i] || "unknown";
+
+    const forbiddenKeywords = ['speech', 'music', 'television', 'silence', 'wind', 'breathing', 'laugh', 'music', 'conversation'];
+    const allowedKeywords = ['engine', 'mechanisms', 'vehicle', 'gears', 'tools', 'car', 'motor', 'idling', 'accelerating', 'whimper', 'squeal', 'hiss'];
+
+    for (let j = 0; j < topIndices.length; j++) {
+      const cls = (YAMNET_CLASSES[topIndices[j].i] || "").toLowerCase();
+      if (forbiddenKeywords.some(kw => cls.includes(kw))) isForbidden = true;
+      if (allowedKeywords.some(kw => cls.includes(kw))) isMechanical = true;
+    }
+
+    if (isForbidden && !isMechanical) {
+      confidenceStreak = 0;
+      emitNormal(0, `yamnet_reject_${topClass.replace(/\s+/g, '_')}`);
+      return; // HARD DOMAIN REJECT
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // PART 2: THE 6-STAGE STRICT MECHANICAL ADMISSION PIPELINE
   // ═══════════════════════════════════════════════════════
   let maxRMS = 0;
   let sumFlatness = 0;
@@ -456,49 +517,32 @@ function evaluateSequence() {
   
   const avgFlatness = sumFlatness / SEQ_LENGTH;
 
-  if (maxRMS < Math.max(0.005, noiseFloor * 2.5)) { 
+  // Gate 1: Strict Silence Reject
+  if (maxRMS < 0.01) { 
     confidenceStreak = 0;
-    emitNormal(0, "silence");
+    emitNormal(0, "strict_silence");
     return;
   }
 
-  // ═══════════════════════════════════════════════════════
-  // STAGE 2: SPECTRAL FLATNESS GATE (Pure white noise only)
-  // BMAD data: Real engine sounds have flatness 0.05-0.85.
-  // Only pure white noise exceeds 0.90.
-  // ═══════════════════════════════════════════════════════
-  if (avgFlatness > 0.90) {
+  // Gate 2: Strict Flatness Reject
+  if (avgFlatness > 0.85) {
     confidenceStreak = 0;
     emitNormal(0, "pure_white_noise");
     return;
   }
 
-  // ═══════════════════════════════════════════════════════
-  // STAGE 3: MECHANICAL PERIODICITY GATE
-  // ═══════════════════════════════════════════════════════
-  if (maxFlux < 0.05) {
+  // Gate 3: Transient Periodicity
+  if (maxFlux < 0.1) {
     confidenceStreak = 0;
-    emitNormal(0, "non_mechanical");
+    emitNormal(0, "non_mechanical_flux");
     return;
   }
 
-  // ═══════════════════════════════════════════════════════
-  // STAGE 4: AUDIO DOMAIN CLASSIFIER (Speech/Music/TV)
-  // Analyzes TEMPORAL DYNAMICS across the 1-second window.
-  // ═══════════════════════════════════════════════════════
+  // Gate 4: Harmonic/Centroid Validator (REMOVED - handled by YAMNet)
   const domain = classifyAudioDomain(featureSequence);
 
-  // HARD GATE: Real speech/TV has syllabic amplitude modulation (rmsScore > 0.6)
-  // and natural pauses between words/syllables (pauseScore > 0).
-  // Serpentine belts have high variance but NO pauses and lower RMS modulation.
-  if (domain.pauseScore > 0.1 || domain.rmsScore > 0.6) {
-    confidenceStreak = 0;
-    emitNormal(0, `speech_tv_rejected`);
-    return;
-  }
-
   // ═══════════════════════════════════════════════════════
-  // STAGE 5: DTW SEQUENCE ALIGNMENT
+  // PART 3: DTW SEQUENCE ALIGNMENT
   // ═══════════════════════════════════════════════════════
   const liveStd = standardizeSequence(featureSequence, 14);
   
@@ -517,19 +561,17 @@ function evaluateSequence() {
   const secondBestDist = results.length > 1 ? results[1].dist : Infinity;
 
   // ═══════════════════════════════════════════════════════
-  // STAGE 6: TOP-2 CLASS SEPARATION MARGIN
-  // BMAD data: Self-match margin is ~2.3, noise margin is ~0.07-0.17
-  // With V15-aligned refs, real anomalies will have margin > 0.5
+  // PART 4: TOP-2 CLASS COLLAPSE MARGIN
   // ═══════════════════════════════════════════════════════
   const separationMargin = secondBestDist - bestDist;
-  if (results.length > 1 && separationMargin < 0.15) {
+  if (results.length > 1 && separationMargin < 0.25) {
     confidenceStreak = 0;
     emitNormal(0, `ambiguous_margin_${separationMargin.toFixed(2)}`);
     return;
   }
 
   // ═══════════════════════════════════════════════════════
-  // STAGE 7: BMAD COMPOSITE CONFIDENCE
+  // PART 5: BMAD COMPOSITE CONFIDENCE
   // ═══════════════════════════════════════════════════════
   const now = Date.now();
   if (bestDist <= maxDtwDistance && bestMatch) {
@@ -542,18 +584,10 @@ function evaluateSequence() {
     lastAnomaly = bestMatch.label;
     lastAnomalyTime = now;
 
-    // ═══════════════════════════════════════════════════════
-    // STAGE 8: TEMPORAL CONSISTENCY (2 consecutive windows)
-    // ═══════════════════════════════════════════════════════
     if (confidenceStreak >= 2) {
-      // BMAD Composite Confidence
-      // DTW quality score: 1.0 at dist=0, 0.0 at dist=maxDtwDistance
       const dtwScore = Math.max(0.0, 1.0 - (bestDist / maxDtwDistance));
-      // Margin quality: normalize by best distance to get relative separation
       const relativeMargin = bestDist > 0.001 ? separationMargin / bestDist : separationMargin * 10;
       const marginBonus = Math.min(1.0, relativeMargin / 5.0);
-      // Domain penalty: penalize signals that look like speech/music
-      // But don't fully reject — some anomalies have temporal variance
       const domainPenalty = Math.max(0.3, 1.0 - domain.humanAudioScore);
       
       const finalConfidence = dtwScore * marginBonus * domainPenalty;
@@ -563,7 +597,7 @@ function evaluateSequence() {
         return;
       }
 
-      console.log(`[V8 DTW] ✅ "${bestMatch.label}" Dist=${bestDist.toFixed(3)} Margin=${separationMargin.toFixed(2)} Human=${domain.humanAudioScore.toFixed(2)} Conf=${finalConfidence.toFixed(2)}`);
+      console.log(`[V8 DTW] ✅ "${bestMatch.label}" Dist=${bestDist.toFixed(3)} Margin=${separationMargin.toFixed(2)} YAMNet=${topClass} Conf=${finalConfidence.toFixed(2)}`);
       self.postMessage({
         type: 'result',
         payload: {
