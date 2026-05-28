@@ -94,7 +94,7 @@ function standardizeSequence(seq) {
     let sum = 0, sumSq = 0;
     for (let f = 0; f < numFrames; f++) { sum += seq[f][d]; sumSq += seq[f][d] * seq[f][d]; }
     const mean = sum / numFrames;
-    const std = Math.sqrt(Math.max(0, (sumSq / numFrames) - mean * mean)) || 1;
+    const std = Math.max(1.0, Math.sqrt(Math.max(0, (sumSq / numFrames) - mean * mean)));
     for (let f = 0; f < numFrames; f++) stdSeq[f][d] = (seq[f][d] - mean) / std;
   }
   // Copy remaining dims raw
