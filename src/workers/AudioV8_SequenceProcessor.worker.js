@@ -291,7 +291,9 @@ function classifyAudioDomain(seq) {
 }
 
 // ── Config ──────────────────────────────────────────────────
-let maxDtwDistance = 1.35; 
+// With V15-aligned references, self-similarity is ~0.0 and cross-class is ~2.0+.
+// maxDtwDistance 0.8 gives generous margin for speaker→mic degradation.
+let maxDtwDistance = 0.80; 
 
 self.onmessage = function (ev) {
   const { type, payload } = ev.data;
@@ -458,37 +460,37 @@ function evaluateSequence() {
   }
 
   // ═══════════════════════════════════════════════════════
-  // STAGE 2: AUDIO DOMAIN CLASSIFIER (Speech/Music/TV)
-  // This is the PRIMARY defense against non-mechanical audio.
-  // Analyzes TEMPORAL DYNAMICS across the 1-second window.
+  // STAGE 2: SPECTRAL FLATNESS GATE (Pure white noise only)
+  // BMAD data: Real engine sounds have flatness 0.05-0.85.
+  // Only pure white noise exceeds 0.90.
   // ═══════════════════════════════════════════════════════
-  const domain = classifyAudioDomain(featureSequence);
-  
-  // Threshold: 0.35 — calibrated to reject speech/music/TV
-  // while passing through engine sounds which have humanScore < 0.2
-  if (domain.humanAudioScore > 0.35) {
+  if (avgFlatness > 0.90) {
     confidenceStreak = 0;
-    emitNormal(0, `speech_music_tv_${domain.humanAudioScore.toFixed(2)}`);
+    emitNormal(0, "pure_white_noise");
     return;
   }
 
   // ═══════════════════════════════════════════════════════
-  // STAGE 3: SPECTRAL FLATNESS GATE (Broadband noise)
-  // ═══════════════════════════════════════════════════════
-  if (avgFlatness > 0.6) {
-    confidenceStreak = 0;
-    emitNormal(0, "broadband_noise");
-    return;
-  }
-
-  // ═══════════════════════════════════════════════════════
-  // STAGE 4: MECHANICAL PERIODICITY GATE
+  // STAGE 3: MECHANICAL PERIODICITY GATE
   // ═══════════════════════════════════════════════════════
   if (maxFlux < 0.05) {
     confidenceStreak = 0;
     emitNormal(0, "non_mechanical");
     return;
   }
+
+  // ═══════════════════════════════════════════════════════
+  // STAGE 4: AUDIO DOMAIN CLASSIFIER (Speech/Music/TV)
+  // Analyzes TEMPORAL DYNAMICS across the 1-second window.
+  // BMAD data: Real anomalies score 0.03-0.62.
+  //            Synthetic speech scores 0.26.
+  //            Real speech/TV will score much higher (~0.5-0.9) due
+  //            to rapid phoneme changes, syllabic modulation, pauses.
+  // We keep this as a SOFT gate that feeds into confidence scoring
+  // rather than a hard reject, since some real anomalies (SerpentineBelt)
+  // have high temporal variance.
+  // ═══════════════════════════════════════════════════════
+  const domain = classifyAudioDomain(featureSequence);
 
   // ═══════════════════════════════════════════════════════
   // STAGE 5: DTW SEQUENCE ALIGNMENT
@@ -511,9 +513,11 @@ function evaluateSequence() {
 
   // ═══════════════════════════════════════════════════════
   // STAGE 6: TOP-2 CLASS SEPARATION MARGIN
+  // BMAD data: Self-match margin is ~2.3, noise margin is ~0.07-0.17
+  // With V15-aligned refs, real anomalies will have margin > 0.5
   // ═══════════════════════════════════════════════════════
   const separationMargin = secondBestDist - bestDist;
-  if (results.length > 1 && separationMargin < 0.25) {
+  if (results.length > 1 && separationMargin < 0.15) {
     confidenceStreak = 0;
     emitNormal(0, `ambiguous_margin_${separationMargin.toFixed(2)}`);
     return;
@@ -534,17 +538,22 @@ function evaluateSequence() {
     lastAnomalyTime = now;
 
     // ═══════════════════════════════════════════════════════
-    // STAGE 8: TEMPORAL CONSISTENCY (3 consecutive windows)
+    // STAGE 8: TEMPORAL CONSISTENCY (2 consecutive windows)
     // ═══════════════════════════════════════════════════════
-    if (confidenceStreak >= 3) {
+    if (confidenceStreak >= 2) {
+      // BMAD Composite Confidence
+      // DTW quality score: 1.0 at dist=0, 0.0 at dist=maxDtwDistance
       const dtwScore = Math.max(0.0, 1.0 - (bestDist / maxDtwDistance));
-      const mechScore = Math.max(0.0, 1.0 - avgFlatness);
-      const marginBonus = Math.min(1.0, separationMargin / 2.0);
-      const domainBonus = Math.max(0.0, 1.0 - (domain.humanAudioScore * 2.0)); // Penalize borderline human-ish sounds
+      // Margin quality: normalize by best distance to get relative separation
+      const relativeMargin = bestDist > 0.001 ? separationMargin / bestDist : separationMargin * 10;
+      const marginBonus = Math.min(1.0, relativeMargin / 5.0);
+      // Domain penalty: penalize signals that look like speech/music
+      // But don't fully reject — some anomalies have temporal variance
+      const domainPenalty = Math.max(0.3, 1.0 - domain.humanAudioScore);
       
-      const finalConfidence = dtwScore * mechScore * marginBonus * domainBonus;
+      const finalConfidence = dtwScore * marginBonus * domainPenalty;
       
-      if (finalConfidence < 0.15) {
+      if (finalConfidence < 0.10) {
         emitNormal(finalConfidence, "low_composite_confidence");
         return;
       }
@@ -555,7 +564,7 @@ function evaluateSequence() {
         payload: {
           status: 'anomaly', 
           anomaly: bestMatch.label,
-          confidence: Math.min(1.0, Math.max(0.75, finalConfidence + 0.4)),
+          confidence: Math.min(1.0, Math.max(0.75, finalConfidence)),
           severity: bestMatch.severity || 'high',
           rms: Math.max(0, maxRMS * 50),
           spectralMeta: {
