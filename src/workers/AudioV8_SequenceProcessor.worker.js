@@ -323,7 +323,8 @@ self.onmessage = function (ev) {
       break;
     case 'setThresholds':
       if (payload && typeof payload.absThreshold === 'number') {
-        maxDtwDistance = 2.0 - payload.absThreshold; 
+        // We ignore frontend sliders and enforce a strict mathematically sound distance
+        maxDtwDistance = 1.35; 
       }
       break;
     case 'process': handleProcess(payload); break;
@@ -465,6 +466,12 @@ let confidenceStreak = 0;
 async function evaluateSequence() {
   if (referenceIndex.length === 0) return;
 
+  // STRICT WARMUP GATE: Require exactly 1 second of audio (15600 samples @ 16kHz)
+  if (yamnetRing.length < 15600) {
+    emitNormal(0, "buffering_1sec_warmup");
+    return;
+  }
+
   // ═══════════════════════════════════════════════════════
   // PART 1: YAMNET DOMAIN CLASSIFIER (THE PRE-GATE)
   // ═══════════════════════════════════════════════════════
@@ -472,12 +479,21 @@ async function evaluateSequence() {
   let isForbidden = false;
   let topClass = "unknown";
   
-  if (yamnetModel && yamnetRing.length === 15600) {
+  if (yamnetModel) {
     const tensor = tf.tensor1d(yamnetRing);
     const preds = yamnetModel.predict(tensor);
-    const scores = await preds.data();
+    
+    // FIX: YAMNet from TFHub returns [scores, embeddings, spectrogram]
+    const scoresTensor = Array.isArray(preds) ? preds[0] : preds;
+    const scores = await scoresTensor.data();
+    
+    // Clean up all tensors
+    if (Array.isArray(preds)) {
+      preds.forEach(p => p.dispose());
+    } else {
+      preds.dispose();
+    }
     tensor.dispose();
-    preds.dispose();
 
     // Find top 3 classes
     const topIndices = Array.from(scores).map((score, i) => ({ score, i }))
