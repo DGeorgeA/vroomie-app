@@ -1,33 +1,39 @@
 /**
- * AudioV8_SequenceProcessor.worker.js — Vroomie DSP Engine v14
+ * AudioV8_SequenceProcessor.worker.js — Vroomie DSP Engine v15
  * 
- * 7-STAGE SEQUENCE CLASSIFIER (DTW + BMAD Gating)
- * Stage 1: True RMS Gate (Absolute Silence Rejection)
- * Stage 2: Spectral Flatness Gate (White Noise / Fan Rejection)
- * Stage 3: ZCR Gate (Speech / Hiss Rejection)
- * Stage 4: Mechanical Periodicity Detector (Transient rhythm isolation)
- * Stage 5: Sequence Extraction (Ring Buffer of 50 frames, 13 MFCC + 1 Flux)
- * Stage 6: Sequence Similarity Engine (Dynamic Time Warping)
- * Stage 7: Confidence Multiplier (BMAD Scoring)
+ * 8-STAGE AUDIO DOMAIN CLASSIFIER + DTW ANOMALY ENGINE
+ *
+ * STAGE 1: RMS Silence Gate (dynamic noise floor)
+ * STAGE 2: Audio Domain Classifier — Speech/Music/TV Detector
+ *          Uses TEMPORAL DYNAMICS of MFCC, ZCR, Flatness, and RMS
+ *          to distinguish human audio (speech, music, TV) from engine audio.
+ *          Speech changes spectrally every 50-200ms (syllables).
+ *          Engine sounds are spectrally STATIONARY at a given RPM.
+ * STAGE 3: Spectral Flatness Gate (broadband noise)
+ * STAGE 4: Mechanical Periodicity Gate (transient flux)
+ * STAGE 5: DTW Sequence Alignment
+ * STAGE 6: Top-2 Class Separation Margin
+ * STAGE 7: BMAD Composite Confidence
+ * STAGE 8: Temporal Consistency Stabilizer
  */
 
 const TARGET_SR     = 16000;
 const FFT_SIZE      = 512;
 const HOP_SAMPLES   = 320; // 20ms frame
-const SEQ_LENGTH    = 50;  // 1.0 seconds
+const SEQ_LENGTH    = 50;  // 1.0 seconds (50 frames × 20ms)
 
 const N_MELS = 40;
 const N_MFCC = 13;
-// Feature Dimensions: 13 MFCC + 1 Flux + 1 RMS + 1 Flatness + 1 ZCR = 17
-const N_FEATURES = 17;
+// Per-frame features: 13 MFCC + 1 Flux + 1 RMS + 1 Flatness + 1 ZCR + 1 SpectralCentroid = 18
+const N_FEATURES = 18;
 
 let referenceIndex = [];
 let sessionRing = new Float32Array(0);
 
-// Sequence Ring Buffer
 const featureSequence = []; 
 let frameCounter = 0;
 
+// ── Mel Filterbank ──────────────────────────────────────────
 let _cachedFB = null, _cachedFBsr = -1;
 function getMelFilterbank(sr) {
   if (_cachedFB && _cachedFBsr === sr) return _cachedFB;
@@ -60,6 +66,7 @@ function getHannWindow(size) {
   return w;
 }
 
+// ── FFT ─────────────────────────────────────────────────────
 function fftInPlace(re, im) {
   const n = re.length;
   for (let i = 1, j = 0; i < n; i++) {
@@ -84,9 +91,9 @@ function fftInPlace(re, im) {
   }
 }
 
+// ── DTW Engine ──────────────────────────────────────────────
 function euclideanDistance(vecA, vecB) {
   let sum = 0;
-  // Match on the first 14 dimensions (13 MFCC + 1 Flux) representing the template
   const dims = Math.min(vecA.length, vecB.length, 14);
   for (let i = 0; i < dims; i++) {
     const diff = vecA[i] - vecB[i];
@@ -111,9 +118,9 @@ function computeDTW(seqA, seqB) {
     for (let j = start; j <= end; j++) {
       const cost = euclideanDistance(seqA[i - 1], seqB[j - 1]);
       dtw[i][j] = cost + Math.min(
-        dtw[i - 1][j],    // insertion
-        dtw[i][j - 1],    // deletion
-        dtw[i - 1][j - 1] // match
+        dtw[i - 1][j],
+        dtw[i][j - 1],
+        dtw[i - 1][j - 1]
       );
     }
   }
@@ -124,7 +131,7 @@ function computeDTW(seqA, seqB) {
 function standardizeSequence(seq, dimsToStandardize) {
   const numFrames = seq.length;
   if (numFrames === 0) return seq;
-  const dims = dimsToStandardize; // Only standardize the MFCC+Flux dims (first 14)
+  const dims = dimsToStandardize;
   
   const stdSeq = Array.from({length: numFrames}, () => new Float32Array(seq[0].length));
   
@@ -140,7 +147,6 @@ function standardizeSequence(seq, dimsToStandardize) {
       stdSeq[f][d] = (seq[f][d] - mean) / std;
     }
   }
-  // Copy over the unstandardized extra features (RMS, Flatness, ZCR)
   for (let f = 0; f < numFrames; f++) {
     for (let d = dims; d < seq[f].length; d++) {
       stdSeq[f][d] = seq[f][d];
@@ -149,6 +155,142 @@ function standardizeSequence(seq, dimsToStandardize) {
   return stdSeq;
 }
 
+// ══════════════════════════════════════════════════════════════
+// AUDIO DOMAIN CLASSIFIER — Speech/Music/TV Detector
+// ══════════════════════════════════════════════════════════════
+//
+// The key insight: Speech and music CHANGE their spectral shape
+// rapidly (every 50-200ms for syllables/notes). Engine sounds are
+// spectrally STATIONARY at a given RPM — their MFCC trajectory
+// is nearly flat over time.
+//
+// We measure the TEMPORAL VARIANCE of multiple features across
+// the 50-frame (1-second) window. High variance = human audio.
+// Low variance = steady mechanical/engine audio.
+//
+// Features analyzed:
+//   1. MFCC temporal variance (speech shifts vowels/consonants)
+//   2. RMS modulation index (speech has syllabic amplitude envelope)
+//   3. ZCR temporal variance (speech alternates voiced/unvoiced)
+//   4. Spectral centroid variance (speech formants shift)
+//   5. Flatness temporal variance (speech: tonal↔noisy alternation)
+//
+// Each produces a "human audio score". If the combined score
+// exceeds a threshold, the signal is classified as speech/music/TV
+// and REJECTED before DTW ever executes.
+// ══════════════════════════════════════════════════════════════
+
+function computeTemporalVariance(seq, featureIdx) {
+  let sum = 0, sumSq = 0;
+  for (let i = 0; i < seq.length; i++) {
+    const v = seq[i][featureIdx];
+    sum += v;
+    sumSq += v * v;
+  }
+  const mean = sum / seq.length;
+  return (sumSq / seq.length) - (mean * mean);
+}
+
+function computeCoeffOfVariation(seq, featureIdx) {
+  let sum = 0, sumSq = 0;
+  for (let i = 0; i < seq.length; i++) {
+    const v = seq[i][featureIdx];
+    sum += v;
+    sumSq += v * v;
+  }
+  const mean = sum / seq.length;
+  const variance = (sumSq / seq.length) - (mean * mean);
+  const std = Math.sqrt(Math.max(0, variance));
+  return (Math.abs(mean) > 1e-8) ? (std / Math.abs(mean)) : std;
+}
+
+function classifyAudioDomain(seq) {
+  // 1. MFCC temporal dynamics: compute variance of MFCCs 1-12 across time
+  //    (Skip MFCC 0 which is just energy level)
+  //    Speech has VERY high MFCC variance (changing phonemes).
+  //    Engine sounds have LOW MFCC variance (stationary spectrum).
+  let mfccVarSum = 0;
+  for (let c = 1; c < N_MFCC; c++) {
+    mfccVarSum += computeTemporalVariance(seq, c);
+  }
+  const avgMfccVar = mfccVarSum / (N_MFCC - 1);
+  
+  // 2. RMS modulation index (coefficient of variation of RMS)
+  //    Speech has high modulation (~0.3-0.8) due to syllables/pauses.
+  //    Engine sounds have low modulation (~0.05-0.15).
+  const rmsCV = computeCoeffOfVariation(seq, 14); // RMS at index 14
+  
+  // 3. ZCR temporal variance
+  //    Speech alternates between voiced (low ZCR) and unvoiced (high ZCR).
+  //    Engine sounds have more consistent ZCR.
+  const zcrVar = computeTemporalVariance(seq, 16); // ZCR at index 16
+  
+  // 4. Spectral centroid variance  
+  //    Speech formants shift → centroid moves.
+  //    Engine has stable centroid.
+  const centroidVar = computeTemporalVariance(seq, 17); // Centroid at index 17
+  
+  // 5. Flatness temporal variance
+  //    Speech alternates tonal vowels (low flatness) and noisy consonants (high flatness).
+  //    Engine has more consistent flatness.
+  const flatnessVar = computeTemporalVariance(seq, 15); // Flatness at index 15
+
+  // 6. RMS zero-run detection: count frames where RMS drops to near-silence
+  //    Speech has natural pauses between words/sentences.
+  //    Engine sounds are continuous.
+  let silentFrames = 0;
+  let sumRms = 0;
+  for (let i = 0; i < seq.length; i++) {
+    sumRms += seq[i][14];
+    if (seq[i][14] < 0.005) silentFrames++;
+  }
+  const avgRms = sumRms / seq.length;
+  const silenceRatio = silentFrames / seq.length;
+
+  // ── Scoring ──
+  // Each feature contributes a normalized [0,1] score indicating "human-ness".
+  // These are empirically calibrated.
+  
+  // MFCC variance: engine < 5, speech > 20 typically
+  const mfccScore = Math.min(1.0, avgMfccVar / 30.0);
+  
+  // RMS CV: engine < 0.2, speech > 0.4 typically
+  const rmsScore = Math.min(1.0, rmsCV / 0.8);
+  
+  // ZCR variance: engine < 0.002, speech > 0.005
+  const zcrScore = Math.min(1.0, zcrVar / 0.01);
+  
+  // Centroid variance: engine < 0.001, speech > 0.005  
+  const centroidScore = Math.min(1.0, centroidVar / 0.01);
+  
+  // Flatness variance: engine < 0.002, speech > 0.005
+  const flatnessScore = Math.min(1.0, flatnessVar / 0.01);
+
+  // Silence ratio: engine ~0, speech > 0.1 
+  const pauseScore = Math.min(1.0, silenceRatio / 0.3);
+
+  // Weighted combination — MFCC variance and RMS modulation are the strongest discriminators
+  const humanAudioScore = 
+    0.30 * mfccScore +
+    0.25 * rmsScore +
+    0.15 * zcrScore +
+    0.10 * centroidScore +
+    0.10 * flatnessScore +
+    0.10 * pauseScore;
+
+  return {
+    humanAudioScore,
+    mfccScore,
+    rmsScore,
+    zcrScore,
+    centroidScore,
+    flatnessScore,
+    pauseScore,
+    debug: { avgMfccVar, rmsCV, zcrVar, centroidVar, flatnessVar, silenceRatio }
+  };
+}
+
+// ── Config ──────────────────────────────────────────────────
 let maxDtwDistance = 1.35; 
 
 self.onmessage = function (ev) {
@@ -160,8 +302,7 @@ self.onmessage = function (ev) {
       break;
     case 'setThresholds':
       if (payload && typeof payload.absThreshold === 'number') {
-        const uiVal = payload.absThreshold; 
-        maxDtwDistance = 2.0 - uiVal; 
+        maxDtwDistance = 2.0 - payload.absThreshold; 
       }
       break;
     case 'process': handleProcess(payload); break;
@@ -217,11 +358,9 @@ function processFrames() {
     }
     const rms = Math.sqrt(frameEnergySq / FFT_SIZE);
     
-    // Live Mic Dynamic Calibration: Trailing Noise Floor
+    // Dynamic noise floor tracking
     if (rms < noiseFloor) noiseFloor = 0.95 * noiseFloor + 0.05 * rms;
     else noiseFloor = 0.995 * noiseFloor + 0.005 * rms;
-    
-    // Bounds for safety
     if (noiseFloor < 0.001) noiseFloor = 0.001;
     if (noiseFloor > 0.05) noiseFloor = 0.05;
 
@@ -231,6 +370,7 @@ function processFrames() {
     
     let flux = 0;
     let gmLog = 0, amSum = 0;
+    let centroidNum = 0, centroidDen = 0;
     const melEnergies = new Float64Array(N_MELS);
     
     for (let k = 0; k < fftBins; k++) {
@@ -238,10 +378,15 @@ function processFrames() {
       flux += Math.max(0, mag - prevMag[k]);
       prevMag[k] = mag;
       
-      if (k > 0) { // Skip DC for flatness
+      if (k > 0) {
         gmLog += Math.log(mag + 1e-10);
         amSum += mag;
       }
+      
+      // Spectral centroid (normalized 0-1 by Nyquist)
+      const freq = k * TARGET_SR / FFT_SIZE;
+      centroidNum += freq * mag;
+      centroidDen += mag;
 
       for (let m = 0; m < N_MELS; m++) melEnergies[m] += fb[m][k] * mag;
     }
@@ -249,6 +394,9 @@ function processFrames() {
     const gm = Math.exp(gmLog / (fftBins - 1));
     const am = (amSum / (fftBins - 1)) + 1e-10;
     const flatness = gm / am;
+    
+    // Normalized spectral centroid (0.0 = DC, 1.0 = Nyquist)
+    const centroid = centroidDen > 1e-10 ? (centroidNum / centroidDen) / (TARGET_SR / 2) : 0;
     
     for (let m = 0; m < N_MELS; m++) melEnergies[m] = Math.log(Math.max(melEnergies[m] / bw[m], 1e-10));
     
@@ -260,11 +408,12 @@ function processFrames() {
     }
     
     const frameFeatures = new Float32Array(N_FEATURES);
-    frameFeatures.set(mfcc, 0);
-    frameFeatures[N_MFCC] = Math.log10(1 + flux);
-    frameFeatures[14] = rms;
-    frameFeatures[15] = flatness;
-    frameFeatures[16] = zcrNorm;
+    frameFeatures.set(mfcc, 0);           // [0..12] MFCCs
+    frameFeatures[13] = Math.log10(1 + flux); // [13] Spectral Flux
+    frameFeatures[14] = rms;              // [14] RMS
+    frameFeatures[15] = flatness;         // [15] Spectral Flatness
+    frameFeatures[16] = zcrNorm;          // [16] Zero-Crossing Rate
+    frameFeatures[17] = centroid;         // [17] Spectral Centroid (normalized)
     
     featureSequence.push(Array.from(frameFeatures));
     if (featureSequence.length > SEQ_LENGTH) featureSequence.shift();
@@ -278,6 +427,7 @@ function processFrames() {
   }
 }
 
+// ── Temporal Confidence Stabilizer ──────────────────────────
 let lastAnomaly = null;
 let lastAnomalyTime = 0;
 let confidenceStreak = 0;
@@ -285,95 +435,97 @@ let confidenceStreak = 0;
 function evaluateSequence() {
   if (referenceIndex.length === 0) return;
 
-  // BMAD Gating Layer — Mechanical Sound Qualifier
+  // ═══════════════════════════════════════════════════════
+  // STAGE 1: DYNAMIC RMS SILENCE GATE
+  // ═══════════════════════════════════════════════════════
   let maxRMS = 0;
   let sumFlatness = 0;
-  let sumZcr = 0;
   let maxFlux = 0;
 
   for (let i = 0; i < SEQ_LENGTH; i++) {
     const frame = featureSequence[i];
-    const flux = frame[13];
-    const rms = frame[14];
-    const flatness = frame[15];
-    const zcr = frame[16];
-
-    if (rms > maxRMS) maxRMS = rms;
-    if (flux > maxFlux) maxFlux = flux;
-    sumFlatness += flatness;
-    sumZcr += zcr;
+    if (frame[14] > maxRMS) maxRMS = frame[14];
+    if (frame[13] > maxFlux) maxFlux = frame[13];
+    sumFlatness += frame[15];
   }
   
   const avgFlatness = sumFlatness / SEQ_LENGTH;
-  const avgZcr = sumZcr / SEQ_LENGTH;
 
-  // GATE 1: Dynamic RMS Gate (Live Mic Calibration)
-  // Must be significantly above the calibrated environmental noise floor
   if (maxRMS < Math.max(0.005, noiseFloor * 2.5)) { 
     confidenceStreak = 0;
-    emitNormal(0, `silence_or_floor_${noiseFloor.toFixed(4)}`);
+    emitNormal(0, "silence");
     return;
   }
 
-  // GATE 2: Spectral Flatness (Reject fan noise, wind, microphone static/hiss)
-  // White noise approaches 1.0. Tonal engine noise is < 0.5.
+  // ═══════════════════════════════════════════════════════
+  // STAGE 2: AUDIO DOMAIN CLASSIFIER (Speech/Music/TV)
+  // This is the PRIMARY defense against non-mechanical audio.
+  // Analyzes TEMPORAL DYNAMICS across the 1-second window.
+  // ═══════════════════════════════════════════════════════
+  const domain = classifyAudioDomain(featureSequence);
+  
+  // Threshold: 0.35 — calibrated to reject speech/music/TV
+  // while passing through engine sounds which have humanScore < 0.2
+  if (domain.humanAudioScore > 0.35) {
+    confidenceStreak = 0;
+    emitNormal(0, `speech_music_tv_${domain.humanAudioScore.toFixed(2)}`);
+    return;
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // STAGE 3: SPECTRAL FLATNESS GATE (Broadband noise)
+  // ═══════════════════════════════════════════════════════
   if (avgFlatness > 0.6) {
     confidenceStreak = 0;
-    emitNormal(0, "room_noise_or_fan");
+    emitNormal(0, "broadband_noise");
     return;
   }
 
-  // GATE 3: ZCR Gate (Reject speech and high-frequency erratic hiss)
-  // High ZCR usually implies unvoiced speech (sibilance) or static.
-  if (avgZcr > 0.4) {
-    confidenceStreak = 0;
-    emitNormal(0, "speech_or_static");
-    return;
-  }
-
-  // GATE 4: Transient Periodicity
-  // A mechanical fault MUST have some physical percussive signature
+  // ═══════════════════════════════════════════════════════
+  // STAGE 4: MECHANICAL PERIODICITY GATE
+  // ═══════════════════════════════════════════════════════
   if (maxFlux < 0.05) {
     confidenceStreak = 0;
     emitNormal(0, "non_mechanical");
     return;
   }
 
-  // PASSED ALL GATES -> Execute DTW Sequence Alignment
-  // Standardize only the MFCC + Flux dimensions (14) for Euclidean distance
+  // ═══════════════════════════════════════════════════════
+  // STAGE 5: DTW SEQUENCE ALIGNMENT
+  // ═══════════════════════════════════════════════════════
   const liveStd = standardizeSequence(featureSequence, 14);
   
   const results = [];
   for (const ref of referenceIndex) {
     if (!ref.dtw_sequence || ref.dtw_sequence.length === 0) continue;
-    
     const dist = computeDTW(liveStd, ref.dtw_sequence);
     results.push({ ref, dist });
   }
 
   results.sort((a, b) => a.dist - b.dist);
-
   if (results.length === 0) return;
 
   const bestMatch = results[0].ref;
   const bestDist = results[0].dist;
   const secondBestDist = results.length > 1 ? results[1].dist : Infinity;
 
-  // PART 3: TOP-2 DIFFERENCE VALIDATION
-  // True anomalies have a massive separation margin (e.g. 2.0+). 
-  // Noise collapses with small margins (e.g. 0.1).
+  // ═══════════════════════════════════════════════════════
+  // STAGE 6: TOP-2 CLASS SEPARATION MARGIN
+  // ═══════════════════════════════════════════════════════
   const separationMargin = secondBestDist - bestDist;
   if (results.length > 1 && separationMargin < 0.25) {
     confidenceStreak = 0;
-    emitNormal(0, `ambiguous_collapse_margin_${separationMargin.toFixed(2)}`);
+    emitNormal(0, `ambiguous_margin_${separationMargin.toFixed(2)}`);
     return;
   }
 
-  // GATE 5: DTW Minimum Alignment Confidence
+  // ═══════════════════════════════════════════════════════
+  // STAGE 7: BMAD COMPOSITE CONFIDENCE
+  // ═══════════════════════════════════════════════════════
   const now = Date.now();
   if (bestDist <= maxDtwDistance && bestMatch) {
     
-    if (lastAnomaly === bestMatch.label && (now - lastAnomalyTime < 1000)) {
+    if (lastAnomaly === bestMatch.label && (now - lastAnomalyTime < 1500)) {
       confidenceStreak++;
     } else {
       confidenceStreak = 1;
@@ -381,44 +533,46 @@ function evaluateSequence() {
     lastAnomaly = bestMatch.label;
     lastAnomalyTime = now;
 
-    if (confidenceStreak >= 2) {
-      // Final Admission Confidence Score (BMAD formula)
-      // Combines: DTW Quality, Mechanical Periodicity (1-Flatness), and Separation Margin
+    // ═══════════════════════════════════════════════════════
+    // STAGE 8: TEMPORAL CONSISTENCY (3 consecutive windows)
+    // ═══════════════════════════════════════════════════════
+    if (confidenceStreak >= 3) {
       const dtwScore = Math.max(0.0, 1.0 - (bestDist / maxDtwDistance));
       const mechScore = Math.max(0.0, 1.0 - avgFlatness);
-      const marginBonus = Math.min(1.0, separationMargin / 2.0); // Reward high separation
+      const marginBonus = Math.min(1.0, separationMargin / 2.0);
+      const domainBonus = Math.max(0.0, 1.0 - (domain.humanAudioScore * 2.0)); // Penalize borderline human-ish sounds
       
-      const finalConfidence = dtwScore * mechScore * marginBonus;
+      const finalConfidence = dtwScore * mechScore * marginBonus * domainBonus;
       
-      // Strict floor: finalConfidence must be > 0.3
-      if (finalConfidence < 0.3) {
-         emitNormal(finalConfidence, "low_confidence_match");
-         return;
+      if (finalConfidence < 0.15) {
+        emitNormal(finalConfidence, "low_composite_confidence");
+        return;
       }
 
-      console.log(`[V8 DTW] Detected "${bestMatch.label}" Dist=${bestDist.toFixed(3)} Margin=${separationMargin.toFixed(2)} Score=${finalConfidence.toFixed(2)}`);
+      console.log(`[V8 DTW] ✅ "${bestMatch.label}" Dist=${bestDist.toFixed(3)} Margin=${separationMargin.toFixed(2)} Human=${domain.humanAudioScore.toFixed(2)} Conf=${finalConfidence.toFixed(2)}`);
       self.postMessage({
         type: 'result',
         payload: {
           status: 'anomaly', 
           anomaly: bestMatch.label,
-          confidence: Math.min(1.0, Math.max(0.75, finalConfidence + 0.4)), // Boost for UI visual threshold
+          confidence: Math.min(1.0, Math.max(0.75, finalConfidence + 0.4)),
           severity: bestMatch.severity || 'high',
-          rms: Math.max(0, (maxRMS * 50)), // Pseudo-RMS for UI waveform
+          rms: Math.max(0, maxRMS * 50),
           spectralMeta: {
             rms: maxRMS,
             dtwDistance: bestDist,
             flatness: avgFlatness,
-            margin: separationMargin
+            margin: separationMargin,
+            humanAudioScore: domain.humanAudioScore
           }
         }
       });
     } else {
-      emitNormal(0.5, "candidate_building");
+      emitNormal(0.3, "candidate_building");
     }
   } else {
     confidenceStreak = 0;
-    emitNormal(0.1, "no_dtw_alignment");
+    emitNormal(0.0, "no_dtw_alignment");
   }
 }
 
