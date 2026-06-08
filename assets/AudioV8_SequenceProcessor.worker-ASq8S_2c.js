@@ -161,11 +161,11 @@ function standardizeSequence(seq, dimsToStandardize) {
       sumSq += seq[f][d] * seq[f][d];
     }
     const mean = sum / numFrames;
-    // CRITICAL FIX: "Noise Floor Explosion"
+    // CRITICAL FIX: "Noise Floor Explosion" + Mismatch
     // Apply an acoustically grounded floor to prevent microscopic noise amplification.
     // Without this, quiet TV audio gets amplified by 10,000x into massive patterns.
-    const floor = d < N_MFCC ? 0.2 : 0.05;
-    const std = Math.max(floor, Math.sqrt(Math.max(0, (sumSq / numFrames) - mean * mean)));
+    // MATCH GENERATOR: 1.0 floor ensures reference space parity
+    const std = Math.max(1.0, Math.sqrt(Math.max(0, (sumSq / numFrames) - mean * mean)));
     for (let f = 0; f < numFrames; f++) {
       stdSeq[f][d] = (seq[f][d] - mean) / std;
     }
@@ -645,29 +645,56 @@ async function evaluateSequence() {
   // (classifyAudioDomain was already called; no need to call again)
 
   // ═══════════════════════════════════════════════════════
-  // PART 3: DTW SEQUENCE ALIGNMENT
+  // PART 3: DTW SEQUENCE ALIGNMENT (Positive vs Negative)
   // ═══════════════════════════════════════════════════════
   const liveStd = standardizeSequence(featureSequence, 14);
   
-  const results = [];
+  const posResults = [];
+  const negResults = [];
+
   for (const ref of referenceIndex) {
     if (!ref.dtw_sequence || ref.dtw_sequence.length === 0) continue;
     const dist = computeDTW(liveStd, ref.dtw_sequence);
-    results.push({ ref, dist });
+    if (ref.fault_type === 'negative_rejection') {
+      negResults.push({ ref, dist });
+    } else {
+      posResults.push({ ref, dist });
+    }
   }
 
-  results.sort((a, b) => a.dist - b.dist);
-  if (results.length === 0) return;
+  posResults.sort((a, b) => a.dist - b.dist);
+  negResults.sort((a, b) => a.dist - b.dist);
 
-  const bestMatch = results[0].ref;
-  const bestDist = results[0].dist;
-  const secondBestDist = results.length > 1 ? results[1].dist : Infinity;
+  if (posResults.length === 0) return;
+
+  const bestPosDist = posResults[0].dist;
+  const bestPosMatch = posResults[0].ref;
+  const bestNegDist = negResults.length > 0 ? negResults[0].dist : Infinity;
+
+  // ═══════════════════════════════════════════════════════
+  // PART 3.5: NEGATIVE CLASS REJECTION
+  // ═══════════════════════════════════════════════════════
+  if (bestNegDist < bestPosDist) {
+    confidenceStreak = 0;
+    emitNormal(0, `rejected_by_negative_class_${bestPosDist.toFixed(2)}vs${bestNegDist.toFixed(2)}`);
+    return;
+  }
+
+  if (bestNegDist < Infinity && (bestPosDist / bestNegDist) > 0.8) {
+    confidenceStreak = 0;
+    emitNormal(0, `ambiguous_negative_margin_${(bestPosDist / bestNegDist).toFixed(2)}`);
+    return;
+  }
+
+  const bestMatch = bestPosMatch;
+  const bestDist = bestPosDist;
+  const secondBestDist = posResults.length > 1 ? posResults[1].dist : Infinity;
 
   // ═══════════════════════════════════════════════════════
   // PART 4: TOP-2 CLASS COLLAPSE MARGIN
   // ═══════════════════════════════════════════════════════
   const separationMargin = secondBestDist - bestDist;
-  if (results.length > 1 && separationMargin < 0.25) {
+  if (posResults.length > 1 && separationMargin < 0.25) {
     confidenceStreak = 0;
     emitNormal(0, `ambiguous_margin_${separationMargin.toFixed(2)}`);
     return;
@@ -742,3 +769,15 @@ function resetSession() {
   frameCounter = 0;
   confidenceStreak = 0;
 }
+
+// ── Testing Exports ─────────────────────────────────────────
+export const __TEST__ = {
+  standardizeSequence,
+  computeDTW,
+  setFeatureSequence: (seq) => { featureSequence.length = 0; featureSequence.push(...seq); },
+  setReferenceIndex: (idx) => { referenceIndex.splice(0, referenceIndex.length, ...idx); },
+  setYamnetRing: (arr) => { yamnetRing = new Float32Array(arr); },
+  evaluateSequence,
+  getConfidenceStreak: () => confidenceStreak,
+  resetSession
+};
