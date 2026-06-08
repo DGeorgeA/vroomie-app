@@ -34,6 +34,7 @@ export default function AudioRecorder({
   const streamRef = useRef(null);
   const sessionAnomaliesRef = useRef([]);
   const sessionConfidenceRef = useRef([]); 
+  const sessionRejectionsRef = useRef(0);
   
   const [remainingTime, setRemainingTime] = useState(120);
   // Read voice alerts + detection mode from global settings store (persisted)
@@ -138,6 +139,7 @@ export default function AudioRecorder({
       // ══════════════════════════════════════════════════════════════
       sessionAnomaliesRef.current  = [];
       sessionConfidenceRef.current = [];
+      sessionRejectionsRef.current = 0;
 
       isRecordingRef.current = true;   // ← update ref FIRST (used by async callbacks)
       setIsRecording(true);            // ← triggers waveform BURST immediately
@@ -215,6 +217,11 @@ export default function AudioRecorder({
         const anomaly    = workerResult.anomaly     || null;
         const severity   = workerResult.severity    || 'medium';
         const rms        = workerResult.rms         || features.rms || 0;
+        const reason     = workerResult.reason      || '';
+
+        if (status === 'normal' && reason.startsWith('rejected_')) {
+          sessionRejectionsRef.current++;
+        }
 
         if (confidence > 0) {
           sessionConfidenceRef.current.push(confidence);
@@ -353,10 +360,22 @@ export default function AudioRecorder({
     try {
       const activeMode = getDetectionMode();
       const realAnomalies = sessionAnomaliesRef.current || [];
+      const rejections = sessionRejectionsRef.current || 0;
+      
       const totalConf = sessionConfidenceRef.current.reduce((a, b) => a + b, 0);
       const avgConfidence = sessionConfidenceRef.current.length > 0
         ? (totalConf / sessionConfidenceRef.current.length) * 100
         : 75;
+
+      // ── Shazam Approach: Rejection Gate ──
+      // If we found no anomalies, OR if the system actively rejected the audio domain (e.g. TV/Speech)
+      if (realAnomalies.length === 0) {
+        console.warn(`[Vroomie] Audio not matched. Rejections: ${rejections}. Aborting report publish.`);
+        toast.error("Unable to detect. Try again.", { duration: 4000 });
+        if (onRecordingComplete) onRecordingComplete(null);
+        return;
+      }
+
 
       const overallHealth = realAnomalies.length === 0
         ? 'healthy'

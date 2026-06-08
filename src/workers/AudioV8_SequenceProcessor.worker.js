@@ -17,7 +17,7 @@
  * STAGE 8: Temporal Consistency Stabilizer
  */
 
-const TARGET_SR     = 16000;
+// TARGET_SR declared below after imports
 import * as tf from '@tensorflow/tfjs';
 import { YAMNET_CLASSES } from '../data/yamnet_classes.js';
 
@@ -161,6 +161,10 @@ function standardizeSequence(seq, dimsToStandardize) {
       sumSq += seq[f][d] * seq[f][d];
     }
     const mean = sum / numFrames;
+    // CRITICAL FIX: "Noise Floor Explosion" + Mismatch
+    // Apply an acoustically grounded floor to prevent microscopic noise amplification.
+    // Without this, quiet TV audio gets amplified by 10,000x into massive patterns.
+    // MATCH GENERATOR: 1.0 floor ensures reference space parity
     const std = Math.max(1.0, Math.sqrt(Math.max(0, (sumSq / numFrames) - mean * mean)));
     for (let f = 0; f < numFrames; f++) {
       stdSeq[f][d] = (seq[f][d] - mean) / std;
@@ -223,14 +227,37 @@ function computeCoeffOfVariation(seq, featureIdx) {
   return (Math.abs(mean) > 1e-8) ? (std / Math.abs(mean)) : std;
 }
 
+function computeScaleInvariantVariance(seq, featureIdx) {
+  let min = Infinity, max = -Infinity;
+  for (let i = 0; i < seq.length; i++) {
+    const v = seq[i][featureIdx];
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
+  // Perfect Scale Invariance: map strictly to [0,1] range so quiet speech
+  // exhibits identical dynamic variance to loud speech.
+  const range = max - min; 
+  if (range < 1e-5) return 0; // Pure flat line
+  
+  let sum = 0, sumSq = 0;
+  for (let i = 0; i < seq.length; i++) {
+    const norm = (seq[i][featureIdx] - min) / range;
+    sum += norm;
+    sumSq += norm * norm;
+  }
+  const mean = sum / seq.length;
+  return (sumSq / seq.length) - (mean * mean);
+}
+
 function classifyAudioDomain(seq) {
   // 1. MFCC temporal dynamics: compute variance of MFCCs 1-12 across time
   //    (Skip MFCC 0 which is just energy level)
   //    Speech has VERY high MFCC variance (changing phonemes).
   //    Engine sounds have LOW MFCC variance (stationary spectrum).
+  //    CRITICAL FIX: Use Scale-Invariant Variance so quiet speech is still detected.
   let mfccVarSum = 0;
   for (let c = 1; c < N_MFCC; c++) {
-    mfccVarSum += computeTemporalVariance(seq, c);
+    mfccVarSum += computeScaleInvariantVariance(seq, c);
   }
   const avgMfccVar = mfccVarSum / (N_MFCC - 1);
   
@@ -270,8 +297,8 @@ function classifyAudioDomain(seq) {
   // Each feature contributes a normalized [0,1] score indicating "human-ness".
   // These are empirically calibrated.
   
-  // MFCC variance: engine < 5, speech > 20 typically
-  const mfccScore = Math.min(1.0, avgMfccVar / 30.0);
+  // MFCC scale-invariant variance: engine < 0.05, speech > 0.15 typically
+  const mfccScore = Math.min(1.0, avgMfccVar / 0.20);
   
   // RMS CV: engine < 0.2, speech > 0.4 typically
   const rmsScore = Math.min(1.0, rmsCV / 0.8);
@@ -322,10 +349,10 @@ self.onmessage = function (ev) {
       console.log(`[V8 DTW Worker] Loaded ${referenceIndex.length} sequence templates.`);
       break;
     case 'setThresholds':
-      if (payload && typeof payload.absThreshold === 'number') {
-        // We ignore frontend sliders and enforce a strict mathematically sound distance
-        maxDtwDistance = 1.35; 
-      }
+      // LOCKED: maxDtwDistance is hard-coded at 0.80. Frontend overrides are ignored.
+      // The previous override to 1.35 was the secondary cause of false positives.
+      break;
+    case '_legacy_setThresholds': // dead code, kept for reference
       break;
     case 'process': handleProcess(payload); break;
     case 'stop':    handleStop();           break;
@@ -449,7 +476,7 @@ function processFrames() {
     featureSequence.push(Array.from(frameFeatures));
     if (featureSequence.length > SEQ_LENGTH) featureSequence.shift();
     
-    sessionRing = sessionRing.slice(HOP_SAMPLES);
+    sessionRing = sessionRing.slice(HOP);
     frameCounter++;
 
     if (featureSequence.length === SEQ_LENGTH && frameCounter % 10 === 0) {
@@ -473,47 +500,107 @@ async function evaluateSequence() {
   }
 
   // ═══════════════════════════════════════════════════════
-  // PART 1: YAMNET DOMAIN CLASSIFIER (THE PRE-GATE)
+  // PART 1A: DSP DOMAIN PRE-FILTER (INDEPENDENT OF YAMNET)
+  // Must pass BEFORE YAMNet is even consulted.
+  // This catches TV/speech/music/ambient via temporal acoustic
+  // dynamics — the fastest and most reliable discriminator.
+  // ═══════════════════════════════════════════════════════
+  const domain = classifyAudioDomain(featureSequence);
+  if (domain.humanAudioScore > 0.35) {
+    confidenceStreak = 0;
+    emitNormal(0, `dsp_pre_reject_score${domain.humanAudioScore.toFixed(2)}`);
+    return;
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // PART 1B: YAMNET DOMAIN CLASSIFIER (FAIL-CLOSED)
+  // If YAMNet model has not yet loaded, REJECT ALL AUDIO.
+  // Never allow unverified audio to reach DTW inference.
   // ═══════════════════════════════════════════════════════
   let isMechanical = false;
-  let isForbidden = false;
   let topClass = "unknown";
-  
-  if (yamnetModel) {
+
+  if (!yamnetModel) {
+    // Fail-closed: YAMNet not ready → reject everything.
+    // This prevents ALL audio from reaching DTW while the
+    // 1.5MB TFHub model is still loading over the network.
+    confidenceStreak = 0;
+    emitNormal(0, "yamnet_not_ready");
+    return;
+  }
+
+  {
     const tensor = tf.tensor1d(yamnetRing);
-    const preds = yamnetModel.predict(tensor);
-    
-    // FIX: YAMNet from TFHub returns [scores, embeddings, spectrogram]
+    let preds;
+    try {
+      preds = yamnetModel.predict(tensor);
+    } catch (e) {
+      tensor.dispose();
+      confidenceStreak = 0;
+      emitNormal(0, "yamnet_predict_error");
+      return;
+    }
+
+    // YAMNet from TFHub returns [scores, embeddings, spectrogram]
     const scoresTensor = Array.isArray(preds) ? preds[0] : preds;
     const scores = await scoresTensor.data();
-    
-    // Clean up all tensors
-    if (Array.isArray(preds)) {
-      preds.forEach(p => p.dispose());
-    } else {
-      preds.dispose();
-    }
+    if (Array.isArray(preds)) preds.forEach(p => p.dispose()); else preds.dispose();
     tensor.dispose();
 
-    // Find top 3 classes
-    const topIndices = Array.from(scores).map((score, i) => ({ score, i }))
-      .sort((a, b) => b.score - a.score).slice(0, 3);
+    // Evaluate ALL classes from YAMNet output for deterministic domain veto
+    const humanKeywords = [
+      'speech', 'conversation', 'music', 'television', 'radio', 'singing', 
+      'laughter', 'breathing', 'cough', 'sneeze', 'sniff', 'crying', 'shout', 
+      'yell', 'whisper', 'footsteps', 'clapping', 'cheering', 'animal', 
+      'bird', 'dog', 'cat', 'water', 'rain', 'wind', 'thunder'
+    ];
     
-    topClass = YAMNET_CLASSES[topIndices[0].i] || "unknown";
+    // STRICT mechanical keywords (removed generic hiss, squeal, rattle, knock)
+    const strictMechKeywords = [
+      'engine', 'mechanisms', 'vehicle', 'gears', 'car', 'motor', 'idling', 
+      'accelerating', 'power tool', 'drill', 'chainsaw', 'lawn mower', 
+      'heavy engine', 'light engine', 'engine starting'
+    ];
 
-    const forbiddenKeywords = ['speech', 'music', 'television', 'silence', 'wind', 'breathing', 'laugh', 'music', 'conversation'];
-    const allowedKeywords = ['engine', 'mechanisms', 'vehicle', 'gears', 'tools', 'car', 'motor', 'idling', 'accelerating', 'whimper', 'squeal', 'hiss'];
+    let cumulativeHumanScore = 0;
+    let cumulativeMechScore = 0;
+    let maxScore = -1;
 
-    for (let j = 0; j < topIndices.length; j++) {
-      const cls = (YAMNET_CLASSES[topIndices[j].i] || "").toLowerCase();
-      if (forbiddenKeywords.some(kw => cls.includes(kw))) isForbidden = true;
-      if (allowedKeywords.some(kw => cls.includes(kw))) isMechanical = true;
+    for (let i = 0; i < scores.length; i++) {
+      const score = scores[i];
+      if (score < 0.01) continue; // Skip negligible scores for performance
+      
+      if (score > maxScore) {
+        maxScore = score;
+        topClass = YAMNET_CLASSES[i] || "unknown";
+      }
+
+      const cls = (YAMNET_CLASSES[i] || "").toLowerCase();
+      if (humanKeywords.some(kw => cls.includes(kw))) {
+        cumulativeHumanScore += score;
+      }
+      if (strictMechKeywords.some(kw => cls.includes(kw))) {
+        cumulativeMechScore += score;
+      }
     }
 
-    if (isForbidden && !isMechanical) {
+    console.log(`[V8 YAMNet] Top: "${topClass}" (${maxScore.toFixed(3)}) | HumanVeto=${cumulativeHumanScore.toFixed(3)} | Mech=${cumulativeMechScore.toFixed(3)} | DSP_human=${domain.humanAudioScore.toFixed(3)}`);
+
+    // 1. PROBABILISTIC VETO GATE (Domain Validation FIRST)
+    // If human/environmental probability crosses 10%, IMMEDIATELY REJECT.
+    // A TV playing engine sounds is still a TV.
+    if (cumulativeHumanScore > 0.10) {
       confidenceStreak = 0;
-      emitNormal(0, `yamnet_reject_${topClass.replace(/\s+/g, '_')}`);
-      return; // HARD DOMAIN REJECT
+      emitNormal(0, `yamnet_veto_human_audio_${(cumulativeHumanScore*100).toFixed(0)}pct`);
+      return; 
+    }
+
+    // 2. STRICT MECHANICAL QUALIFICATION
+    // Must clearly identify as mechanical to proceed to anomaly inference.
+    if (cumulativeMechScore < 0.15) {
+      confidenceStreak = 0;
+      emitNormal(0, `yamnet_reject_non_mechanical`);
+      return; 
     }
   }
 
@@ -534,7 +621,7 @@ async function evaluateSequence() {
   const avgFlatness = sumFlatness / SEQ_LENGTH;
 
   // Gate 1: Strict Silence Reject
-  if (maxRMS < 0.01) { 
+  if (maxRMS < 0.015) { 
     confidenceStreak = 0;
     emitNormal(0, "strict_silence");
     return;
@@ -554,33 +641,60 @@ async function evaluateSequence() {
     return;
   }
 
-  // Gate 4: Harmonic/Centroid Validator (REMOVED - handled by YAMNet)
-  const domain = classifyAudioDomain(featureSequence);
+  // Gate 4: DSP domain already computed above (Part 1A), re-use result
+  // (classifyAudioDomain was already called; no need to call again)
 
   // ═══════════════════════════════════════════════════════
-  // PART 3: DTW SEQUENCE ALIGNMENT
+  // PART 3: DTW SEQUENCE ALIGNMENT (Positive vs Negative)
   // ═══════════════════════════════════════════════════════
   const liveStd = standardizeSequence(featureSequence, 14);
   
-  const results = [];
+  const posResults = [];
+  const negResults = [];
+
   for (const ref of referenceIndex) {
     if (!ref.dtw_sequence || ref.dtw_sequence.length === 0) continue;
     const dist = computeDTW(liveStd, ref.dtw_sequence);
-    results.push({ ref, dist });
+    if (ref.fault_type === 'negative_rejection') {
+      negResults.push({ ref, dist });
+    } else {
+      posResults.push({ ref, dist });
+    }
   }
 
-  results.sort((a, b) => a.dist - b.dist);
-  if (results.length === 0) return;
+  posResults.sort((a, b) => a.dist - b.dist);
+  negResults.sort((a, b) => a.dist - b.dist);
 
-  const bestMatch = results[0].ref;
-  const bestDist = results[0].dist;
-  const secondBestDist = results.length > 1 ? results[1].dist : Infinity;
+  if (posResults.length === 0) return;
+
+  const bestPosDist = posResults[0].dist;
+  const bestPosMatch = posResults[0].ref;
+  const bestNegDist = negResults.length > 0 ? negResults[0].dist : Infinity;
+
+  // ═══════════════════════════════════════════════════════
+  // PART 3.5: NEGATIVE CLASS REJECTION
+  // ═══════════════════════════════════════════════════════
+  if (bestNegDist < bestPosDist) {
+    confidenceStreak = 0;
+    emitNormal(0, `rejected_by_negative_class_${bestPosDist.toFixed(2)}vs${bestNegDist.toFixed(2)}`);
+    return;
+  }
+
+  if (bestNegDist < Infinity && (bestPosDist / bestNegDist) > 0.8) {
+    confidenceStreak = 0;
+    emitNormal(0, `ambiguous_negative_margin_${(bestPosDist / bestNegDist).toFixed(2)}`);
+    return;
+  }
+
+  const bestMatch = bestPosMatch;
+  const bestDist = bestPosDist;
+  const secondBestDist = posResults.length > 1 ? posResults[1].dist : Infinity;
 
   // ═══════════════════════════════════════════════════════
   // PART 4: TOP-2 CLASS COLLAPSE MARGIN
   // ═══════════════════════════════════════════════════════
   const separationMargin = secondBestDist - bestDist;
-  if (results.length > 1 && separationMargin < 0.25) {
+  if (posResults.length > 1 && separationMargin < 0.25) {
     confidenceStreak = 0;
     emitNormal(0, `ambiguous_margin_${separationMargin.toFixed(2)}`);
     return;
@@ -600,7 +714,7 @@ async function evaluateSequence() {
     lastAnomaly = bestMatch.label;
     lastAnomalyTime = now;
 
-    if (confidenceStreak >= 2) {
+    if (confidenceStreak >= 3) {
       const dtwScore = Math.max(0.0, 1.0 - (bestDist / maxDtwDistance));
       const relativeMargin = bestDist > 0.001 ? separationMargin / bestDist : separationMargin * 10;
       const marginBonus = Math.min(1.0, relativeMargin / 5.0);
@@ -619,7 +733,7 @@ async function evaluateSequence() {
         payload: {
           status: 'anomaly', 
           anomaly: bestMatch.label,
-          confidence: Math.min(1.0, Math.max(0.75, finalConfidence)),
+          confidence: Math.min(1.0, finalConfidence),
           severity: bestMatch.severity || 'high',
           rms: Math.max(0, maxRMS * 50),
           spectralMeta: {
@@ -655,3 +769,15 @@ function resetSession() {
   frameCounter = 0;
   confidenceStreak = 0;
 }
+
+// ── Testing Exports ─────────────────────────────────────────
+export const __TEST__ = {
+  standardizeSequence,
+  computeDTW,
+  setFeatureSequence: (seq) => { featureSequence.length = 0; featureSequence.push(...seq); },
+  setReferenceIndex: (idx) => { referenceIndex.splice(0, referenceIndex.length, ...idx); },
+  setYamnetRing: (arr) => { yamnetRing = new Float32Array(arr); },
+  evaluateSequence,
+  getConfidenceStreak: () => confidenceStreak,
+  resetSession
+};

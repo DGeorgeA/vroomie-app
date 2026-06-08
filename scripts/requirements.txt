@@ -1,0 +1,5 @@
+librosa==0.10.1
+soundfile==0.12.1
+numpy==1.26.4
+supabase==2.3.4
+requests==2.31.0

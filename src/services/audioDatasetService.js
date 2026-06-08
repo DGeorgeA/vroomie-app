@@ -23,7 +23,7 @@
 
 import { supabase } from '../lib/supabase';
 import { Logger } from '../lib/logger';
-import { DTW_FINGERPRINTS } from '../data/dtwFingerprints';
+import { DTW_FINGERPRINTS } from '../data/dtwFingerprints_v3';
 
 export let referenceIndex = [];
 
