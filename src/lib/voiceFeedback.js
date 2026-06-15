@@ -44,12 +44,14 @@ const TRANSLATIONS = {
     issueDetected:  'समस्या मिली:',
     noAnomaly:      'कोई समस्या नहीं मिली।',
     visitWorkshop:  'कृपया कार वर्कशॉप जाएं।',
+    unableToDetect: 'पता लगाने में असमर्थ। कृपया पुनः प्रयास करें।',
   },
   'ta-IN': {
     scanComplete:   'ஸ்கேன் முடிந்தது.',
     issueDetected:  'பிரச்சனை கண்டுபிடிக்கப்பட்டது:',
     noAnomaly:      'எந்த பிரச்சனையும் இல்லை.',
     visitWorkshop:  'தயவுசெய்து ஒரு வொர்க்ஷாப்பிற்கு வாருங்கள்.',
+    unableToDetect: 'கண்டறிய முடியவில்லை. மீண்டும் முயற்சிக்கவும்.',
   },
 };
 
@@ -58,6 +60,7 @@ const DEFAULT_PHRASES = {
   issueDetected: 'Issue detected:',
   noAnomaly:     'No anomalies found. Your vehicle sounds healthy.',
   visitWorkshop: 'Please visit a workshop and share your Vroomie report.',
+  unableToDetect: 'Unable to detect. Please try again.',
 };
 
 // ─── Voice Cache ──────────────────────────────────────────────────────────────
@@ -163,6 +166,15 @@ export function speakScanResult(anomalies, lang) {
   }
 
   speakText(message, lang);
+}
+
+/**
+ * Speak the rejection / unable to detect message.
+ */
+export function speakUnableToDetect(lang) {
+  if (!window.speechSynthesis) return;
+  const t = TRANSLATIONS[lang] || DEFAULT_PHRASES;
+  speakText(t.unableToDetect, lang);
 }
 
 /**

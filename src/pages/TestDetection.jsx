@@ -23,7 +23,7 @@ import {
   Zap, Volume2, VolumeX, Activity
 } from 'lucide-react';
 import { startExtraction, stopExtraction, getActiveMediaStream, getActiveAudioContext } from '@/lib/audioFeatureExtractor';
-import { referenceIndex, initializeAudioDataset, refreshAudioDataset } from '@/services/audioDatasetService';
+// Testing pages are deprecated for the new semantic engine
 import { Logger } from '@/lib/logger';
 import { toast } from 'sonner';
 
@@ -133,18 +133,19 @@ export default function TestDetection() {
   const countdownRef = useRef(null);
   const isRecordingRef = useRef(false);
 
-  // Load dataset on mount
+  // Initialize dataset on mount
   useEffect(() => {
-    initializeAudioDataset().then(() => {
-      setRefCount(referenceIndex.length);
-    });
+    // initializeAudioDataset().then(() => setRefCount(referenceIndex.length));
   }, []);
 
-  const handleRefresh = async () => {
+  const handleRefreshRefs = async () => {
     setRefreshing(true);
-    await refreshAudioDataset().catch(console.error);
-    setRefCount(referenceIndex.length);
-    setRefreshing(false);
+    try {
+      // await refreshAudioDataset();
+      // setRefCount(referenceIndex.length);
+    } finally {
+      setRefreshing(false);
+    }
     toast.success(`Loaded ${referenceIndex.length} reference embeddings`);
   };
 

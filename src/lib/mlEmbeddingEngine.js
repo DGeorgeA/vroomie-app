@@ -1,24 +1,30 @@
 import * as tf from '@tensorflow/tfjs';
 import { Logger } from './logger';
-
-// ═══════════════════════════════════════════════════════════
-// YAMNet EMBEDDING ENGINE
-// Loads a pre-trained YAMNet model from TF Hub to extract 
-// robust 1024-dimensional sequence embeddings from 16kHz audio.
-// ═══════════════════════════════════════════════════════════
+import { loadOrGenerateFingerprints } from './datasetLoader';
 
 const YAMNET_MODEL_URL = 'https://tfhub.dev/google/tfjs-model/yamnet/tfjs/1';
 
 let yamnetModel = null;
 let isModelLoading = false;
+let yamnetFingerprints = [];
+
+// STRICT Cosine Similarity Threshold (0.0 to 1.0)
+// Higher = fewer false positives. 0.90 is extremely strict.
+const ANOMALY_THRESHOLD = 0.90;
+
+export async function initializeFingerprints() {
+  if (yamnetFingerprints.length === 0) {
+    yamnetFingerprints = await loadOrGenerateFingerprints(getAudioEmbedding);
+  }
+}
 
 /**
  * Initializes and caches the YAMNet model.
  */
 export async function initializeEmbeddingEngine() {
+  await initializeFingerprints(); // Eagerly load fingerprints
   if (yamnetModel) return yamnetModel;
   if (isModelLoading) {
-    // Wait until loaded
     while (isModelLoading) {
       await new Promise(r => setTimeout(r, 100));
     }
@@ -28,15 +34,12 @@ export async function initializeEmbeddingEngine() {
   isModelLoading = true;
   try {
     Logger.info('Loading YAMNet Embedding Model from TF Hub...');
-    // TF Hub YAMNet takes Float32Array waveform directly and outputs [scores, embeddings, spectrogram]
-    // The waveform must be 16kHz mono.
     yamnetModel = await tf.loadGraphModel(YAMNET_MODEL_URL, { fromTFHub: true });
     
     // Warm up the model
     const dummyInput = tf.zeros([16000]); // 1 second of 16kHz
     const [scores, embeddings, spectrogram] = yamnetModel.predict(dummyInput);
     
-    // Cleanup warmup tensors
     scores.dispose();
     embeddings.dispose();
     spectrogram.dispose();
@@ -54,11 +57,8 @@ export async function initializeEmbeddingEngine() {
 
 /**
  * Extracts a sequence embedding from a given audio waveform buffer.
- * YAMNet inherently computes the 96x64 Log-Mel spectrogram internally,
- * so we can pass the raw 16kHz PCM directly to the graph!
- * 
- * @param {Float32Array} pcmData - Raw 16kHz mono audio (ideally ~1 to 2 seconds)
- * @returns {Float32Array} - The mean-pooled 1024-d embedding vector representing the entire clip
+ * @param {Float32Array} pcmData - Raw 16kHz mono audio (1 second)
+ * @returns {Array<number>} - 1024-d embedding vector
  */
 export async function getAudioEmbedding(pcmData) {
   if (!yamnetModel) {
@@ -67,26 +67,15 @@ export async function getAudioEmbedding(pcmData) {
   if (!yamnetModel) return null;
 
   return tf.tidy(() => {
-    // 1. Convert to tensor
     const waveformTensor = tf.tensor1d(pcmData);
-    
-    // 2. Predict (returns [scores, embeddings, spectrogram])
-    // embeddings shape: [N_frames, 1024] where N_frames depends on audio length (approx 2 frames per second)
     const [scores, embeddings, spectrogram] = yamnetModel.predict(waveformTensor);
-    
-    // 3. We want a single embedding vector to represent the whole clip.
-    // Mean pool across the time dimension (axis 0)
     const meanEmbedding = tf.mean(embeddings, 0);
-    
-    // 4. Return as standard Javascript Array/Float32Array for cosine similarity
-    const embeddingArray = meanEmbedding.dataSync();
-    
-    return Array.from(embeddingArray);
+    return Array.from(meanEmbedding.dataSync());
   });
 }
 
 /**
- * Convenience function to measure Cosine Similarity between two embedding arrays.
+ * Measures Cosine Similarity between two embedding arrays.
  */
 export function calculateCosineSimilarity(emb1, emb2) {
   if (!emb1 || !emb2 || emb1.length !== emb2.length) return 0;
@@ -107,4 +96,45 @@ export function calculateCosineSimilarity(emb1, emb2) {
 
 export function isEngineReady() {
   return yamnetModel !== null;
+}
+
+/**
+ * Compares a live 1024-dim embedding against all known references.
+ * Returns the best match payload, or 'normal' if none meet the strict threshold.
+ */
+export function findBestMatch(liveEmbedding) {
+  if (!liveEmbedding || !yamnetFingerprints || yamnetFingerprints.length === 0) {
+    return { status: 'normal', confidence: 0, reason: 'no_references' };
+  }
+
+  let bestScore = -1;
+  let bestMatch = null;
+
+  for (const ref of yamnetFingerprints) {
+    const score = calculateCosineSimilarity(liveEmbedding, ref.yamnet_embedding);
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = ref;
+    }
+  }
+
+  Logger.debug(`[YAMNet Match] Top match: ${bestMatch?.label} (${bestScore.toFixed(3)})`);
+
+  if (bestScore >= ANOMALY_THRESHOLD && bestMatch) {
+    Logger.info(`❗ SEMANTIC MATCH CONFIRMED: ${bestMatch.label} (score=${bestScore.toFixed(3)})`);
+    return {
+      status: 'anomaly',
+      anomaly: bestMatch.label,
+      severity: bestMatch.severity || 'high',
+      confidence: bestScore,
+      rms: 0 // Legacy field needed by UI
+    };
+  }
+
+  return {
+    status: 'normal',
+    anomaly: null,
+    confidence: bestScore,
+    reason: `below_threshold_${bestScore.toFixed(2)}`
+  };
 }

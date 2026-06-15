@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
-import { TARGET_SR, PIPELINE_VERSION } from '../lib/audioMath_v11';
+const TARGET_SR = 16000;
+const PIPELINE_VERSION = 'v11';
 import { Logger } from '../lib/logger';
-import { referenceIndex, initializeAudioDataset, refreshAudioDataset } from '../services/audioDatasetService';
+// Testing pages are deprecated for the new semantic engine
 import { motion, AnimatePresence } from 'framer-motion';
 import { CheckCircle2, XCircle, Play, RefreshCw, BarChart2, ShieldCheck, Bug, Database } from 'lucide-react';
 
@@ -16,17 +17,17 @@ export default function ValidationBench() {
 
   // Initialize dataset on mount (does NOT nuke IDB — uses cache)
   useEffect(() => {
-    initializeAudioDataset().then(() => {
-      setRefCount(referenceIndex.length);
-      Logger.info(`[ValidationBench] Ref library ready: ${referenceIndex.length} refs`);
-    });
+    // initializeAudioDataset().then(() => {
+    //   setRefCount(referenceIndex.length);
+    //   Logger.info(`[ValidationBench] Ref library ready: ${referenceIndex.length} refs`);
+    // });
   }, []);
 
   const handleRefreshRefs = async () => {
     setRefreshing(true);
     try {
-      await refreshAudioDataset();
-      setRefCount(referenceIndex.length);
+      // await refreshAudioDataset();
+      // setRefCount(referenceIndex.length);
     } finally {
       setRefreshing(false);
     }
@@ -69,8 +70,8 @@ export default function ValidationBench() {
           }
 
           // 1. Instantiate the real-time Worker
-          const worker = new Worker(new URL('../workers/AudioV6_Calibrator.worker.js', import.meta.url), { type: 'module' });
-          worker.postMessage({ type: 'setReferenceIndex', payload: referenceIndex });
+          // const worker = new Worker(new URL('../workers/AudioV6_Calibrator.worker.js', import.meta.url), { type: 'module' });
+          // worker.postMessage({ type: 'setReferenceIndex', payload: referenceIndex });
 
           // 2. Chunk audio and stream to worker (simulating AudioWorklet)
           const CHUNK_SIZE = 4096;

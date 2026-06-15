@@ -12,7 +12,6 @@
  *   - Anything < 0.80 strictly returns normal ("No anomalies found").
  */
 
-import { referenceIndex } from '../services/audioDatasetService';
 import { Logger } from './logger';
 
 // ── Fault Nature Library — enriched clinical descriptions (NO cost estimates) ─
@@ -113,38 +112,7 @@ function cosine(a, b) {
   return dot / (Math.sqrt(nA) * Math.sqrt(nB));
 }
 
-// ── Find best match across all references ─────────────────────────────────────
-function findBestMatch(live) {
-  if (!referenceIndex || referenceIndex.length === 0) {
-    return { score: 0, label: null, category: null, severity: 'medium' };
-  }
-
-  let bestScore = 0;
-  let bestRef   = null;
-
-  for (const ref of referenceIndex) {
-    // Support both vector formats:
-    //   embedding_vector — YAMNet 1024-dim (anomaly_embeddings DB table)
-    //   cosine_vec       — V6 worker 743-dim (4kHz–12kHz FFT band, anomaly-patterns bucket JSON)
-    const refVec = ref.embedding_vector || ref.cosine_vec;
-    if (!Array.isArray(refVec) || refVec.length < 50) continue; // accept any reasonable embedding
-    
-    const rawCos = cosine(live, refVec);
-    if (rawCos < FAST_REJECT_COSINE) continue;
-
-    if (rawCos > bestScore) {
-      bestScore = rawCos;
-      bestRef   = ref;
-    }
-  }
-
-  return {
-    score:    bestScore,
-    label:    bestRef?.label    ?? null,
-    category: bestRef?.category ?? null,
-    severity: bestRef?.severity ?? 'medium',
-  };
-}
+// findBestMatch removed as it's now handled by mlEmbeddingEngine
 
 // ── Build clean human-readable label ─────────────────────────────────────────
 export function buildReadableLabel(rawLabel) {
@@ -164,48 +132,7 @@ export function buildReadableLabel(rawLabel) {
     .join(' ');
 }
 
-// ── Main entry: Called every 500ms block ─────────────────────────────────────
-export function matchBuffer(features) {
-  // If we haven't hit the 500ms sliding window trigger yet, skip.
-  if (!features.compositeEmbedding) {
-    return { status: 'buffering', confidence: 0 };
-  }
-
-  // Calculate quick RMS from raw frame for UI and Silence Gating
-  let rms = features.rms;
-  if (rms === undefined && features.rawSignalFrame) {
-    let sq = 0;
-    const sig = features.rawSignalFrame;
-    for (let i = 0; i < sig.length; ++i) sq += sig[i] * sig[i];
-    rms = Math.sqrt(sq / sig.length);
-  }
-  
-  // Backfill for AudioRecorder.jsx UI constraints
-  features.rms = rms || 0;
-  features.spectralCentroid = features.spectralCentroid || 0;
-
-  // Gate 1: Silence
-  if (rms < MIN_LIVE_RMS) {
-    return _noAnomaly(rms, 'silence_gate');
-  }
-
-  // Execute Temporal 80-dim Match
-  const match = findBestMatch(features.compositeEmbedding);
-  
-  // Only log in dev — console.debug is expensive in hot paths (DevTools serialisation)
-  if (typeof __DEV__ !== 'undefined' && __DEV__) {
-    Logger.debug(`[VM] Temporal Match: raw=${match.score.toFixed(3)} label=${match.label ?? 'none'}`);
-  }
-
-  // STRICT RULE: If < 0.82 (v11.5), ALWAYS return No anomalies found
-  if (match.score >= ANOMALY_THRESHOLD && match.label) {
-    lastReportedScore = match.score;
-    Logger.info(`❗ TEMPORAL MATCH CONFIRMED: ${match.label} (score=${match.score.toFixed(3)})`);
-    return _anomaly({ label: match.label, severity: match.severity }, match.score, rms);
-  }
-
-  return _noAnomaly(rms, 'below_strict_threshold');
-}
+// matchBuffer removed as it's now handled by mlEmbeddingEngine
 
 // ── Result builders ───────────────────────────────────────────────────────────
 function _anomaly(match, score, rms) {

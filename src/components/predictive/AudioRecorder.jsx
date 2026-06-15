@@ -4,8 +4,8 @@ import { Mic, Square, Bug, Lock, Sparkles } from "lucide-react";
 import GlassButton from "../ui/GlassButton";
 import { toast } from "sonner";
 import { startExtraction, stopExtraction, getActiveMediaStream, getActiveAudioContext } from "@/lib/audioFeatureExtractor";
-import { buildReadableLabel, resetMatchState } from "@/lib/audioMatchingEngine";
-import { clearContinuousAlert, speakScanResult } from "@/lib/voiceFeedback";
+import { buildReadableLabel, resetMatchState } from "@/lib/audioMatchingEngine"; // Legacy fallback if needed
+import { clearContinuousAlert, speakScanResult, speakUnableToDetect } from "@/lib/voiceFeedback";
 import { Logger } from "@/lib/logger";
 import { getDetectionMode, setDetectionMode } from "@/lib/detectionMode";
 import { useAuth } from "@/contexts/AuthContext";
@@ -69,12 +69,9 @@ export default function AudioRecorder({
           console.warn("Pre-warm mic check failed. Permission will be requested on first click.", err);
         });
     }
-    // Eagerly initialize AudioDataset to ensure it's loaded before click
-    import('../../services/audioDatasetService').then(({ initializeAudioDataset }) => {
-      initializeAudioDataset().catch(console.error);
-    });
+    // Removed audioDatasetService initialization; ML engine loads YAMNet eagerly when extraction starts.
   }, []);
-  
+
   const [debugStats, setDebugStats] = useState(null);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const IS_DEBUG = import.meta.env.DEV;
@@ -339,6 +336,18 @@ export default function AudioRecorder({
         clearContinuousAlert();
         toast.info("Processing audio...");
 
+        // ── FIX: Synchronous TTS in onClick context ──
+        // Modern browsers block speechSynthesis in async callbacks (like onstop/handleAudioUpload)
+        // We trigger it here where the user interaction is still valid.
+        const realAnomalies = sessionAnomaliesRef.current || [];
+        if (isVoiceAlertsEnabled) {
+          if (realAnomalies.length === 0) {
+             speakUnableToDetect(language);
+          } else {
+             speakScanResult(realAnomalies, language);
+          }
+        }
+
         // DEFER HEAVY CLEANUP
         setTimeout(() => {
           if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
@@ -455,11 +464,6 @@ export default function AudioRecorder({
       // onRecordingComplete triggers the realtime refetch
       if (onRecordingComplete) {
         onRecordingComplete(inserted);
-      }
-
-      // ── Step 4: Post-recording voice summary (ONLY place TTS fires) ────────
-      if (isVoiceAlertsEnabled) {
-        speakScanResult(realAnomalies, language);
       }
 
     } catch (error) {
