@@ -172,13 +172,12 @@ export default function AudioRecorder({
       const modeLabel = activeMode === 'ml' ? 'ML Mode' : 'Basic Mode';
       toast.success(`Recording started [${modeLabel}]`);
 
-      // Defer all heavy audio initialization to ensure UI renders instantly
-      setTimeout(() => {
-        _startExtractionAsync(activeMode).catch(error => {
-          // Revert all UI state if async setup failed
-          console.error("🚨 Error in deferred startRecording:", error);
-          isRecordingRef.current = false;
-          setIsRecording(false);
+      // Execute immediately to preserve user gesture token for AudioContext
+      _startExtractionAsync(activeMode).catch(error => {
+        // Revert all UI state if async setup failed
+        console.error("🚨 Error in startRecording:", error);
+        isRecordingRef.current = false;
+        setIsRecording(false);
           if (timerRef.current) clearInterval(timerRef.current);
           if (debugDebounceRef.current) {
             clearTimeout(debugDebounceRef.current);
@@ -193,7 +192,6 @@ export default function AudioRecorder({
             toast.error("Failed to start the audio engine. Ensure your device has a working microphone.");
           }
         });
-      }, 0);
 
     } catch (error) {
       console.error("[Vroomie] startRecording error:", error);
@@ -340,11 +338,17 @@ export default function AudioRecorder({
         // Modern browsers block speechSynthesis in async callbacks (like onstop/handleAudioUpload)
         // We trigger it here where the user interaction is still valid.
         const realAnomalies = sessionAnomaliesRef.current || [];
+        const rejections = sessionRejectionsRef.current || 0;
+        const totalWindows = sessionConfidenceRef.current.length + rejections;
+        const isMostlySilence = totalWindows > 0 && (rejections / totalWindows) > 0.5;
+
         if (isVoiceAlertsEnabled) {
-          if (realAnomalies.length === 0) {
-             speakUnableToDetect(language);
+          if (isMostlySilence) {
+            speakUnableToDetect(language);
+          } else if (realAnomalies.length === 0) {
+            speakScanResult([], language); // "No anomalies found"
           } else {
-             speakScanResult(realAnomalies, language);
+            speakScanResult(realAnomalies, language);
           }
         }
 
@@ -377,10 +381,14 @@ export default function AudioRecorder({
         : 75;
 
       // ── Shazam Approach: Rejection Gate ──
-      // If we found no anomalies, OR if the system actively rejected the audio domain (e.g. TV/Speech)
-      if (realAnomalies.length === 0) {
-        console.warn(`[Vroomie] Audio not matched. Rejections: ${rejections}. Aborting report publish.`);
-        toast.error("Unable to detect. Try again.", { duration: 4000 });
+      // If the system actively rejected the audio domain (e.g. too much silence)
+      // we abort the report. Otherwise, if there are no anomalies, it's a HEALTHY vehicle!
+      const totalWindows = sessionConfidenceRef.current.length + rejections;
+      const isMostlySilence = totalWindows > 0 && (rejections / totalWindows) > 0.5;
+      
+      if (isMostlySilence) {
+        console.warn(`[Vroomie] Audio rejected (Silence). Rejections: ${rejections}/${totalWindows}. Aborting report publish.`);
+        toast.error("Unable to detect vehicle audio. Please try again.", { duration: 4000 });
         if (onRecordingComplete) onRecordingComplete(null);
         return;
       }
