@@ -1,5 +1,4 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
 import { Mic, Square, Bug, Lock, Sparkles } from "lucide-react";
 import GlassButton from "../ui/GlassButton";
 import { toast } from "sonner";
@@ -28,6 +27,7 @@ export default function AudioRecorder({
   const [audioContext, setAudioContext] = useState(null);
   const [analyser, setAnalyser] = useState(null);
   const [recordingTime, setRecordingTime] = useState(0);
+  const recordingTimeRef = useRef(0);
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
   const timerRef = useRef(null);
@@ -76,10 +76,9 @@ export default function AudioRecorder({
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const IS_DEBUG = import.meta.env.DEV;
   const { isPro } = useAuth();
-  const navigate = useNavigate();
-  // Debounce ref for debug stats — prevents re-render on every audio callback
   const debugDebounceRef = useRef(null);
   const pendingDebugRef  = useRef(null);
+  const nativeAudioCtxRef = useRef(null);
 
   // ─── Desktop Keyboard Shortcuts ─────────────────────────
   useEffect(() => {
@@ -140,6 +139,7 @@ export default function AudioRecorder({
 
       isRecordingRef.current = true;   // ← update ref FIRST (used by async callbacks)
       setIsRecording(true);            // ← triggers waveform BURST immediately
+      recordingTimeRef.current = 0;
       setRecordingTime(0);
       setRemainingTime(120);
 
@@ -151,6 +151,7 @@ export default function AudioRecorder({
       timerRef.current = setInterval(() => {
         setRecordingTime((prev) => {
           const newTime = prev + 1;
+          recordingTimeRef.current = newTime;
           if (newTime === 20) {
             toast.info("Sufficient data collected.", {
               description: "You can stop now, or keep running for a deep scan.",
@@ -266,21 +267,23 @@ export default function AudioRecorder({
       // These are non-blocking once startExtraction resolves.
       // ══════════════════════════════════════════════════════════════
       const stream   = getActiveMediaStream();
-      const audioCtx = getActiveAudioContext();
-
       if (!stream) throw new Error("Feature extractor started but no stream available");
 
       streamRef.current = stream;
 
-      // Lightweight analyser for waveform UI (read-only, 1024 fftSize)
-      const waveformAnalyser = audioCtx.createAnalyser();
-      waveformAnalyser.fftSize = 1024;
-      const waveformSource = audioCtx.createMediaStreamSource(stream);
+      // Create a dedicated native-rate AudioContext for high-fidelity waveform visualization
+      const nativeAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      nativeAudioCtxRef.current = nativeAudioCtx;
+      
+      const waveformAnalyser = nativeAudioCtx.createAnalyser();
+      waveformAnalyser.fftSize = 2048; // Higher resolution for native sample rate
+      const waveformSource = nativeAudioCtx.createMediaStreamSource(stream);
       waveformSource.connect(waveformAnalyser);
-      setAudioContext(audioCtx);
+      
+      setAudioContext(nativeAudioCtx);
       setAnalyser(waveformAnalyser); // ← waveform switches from simulated → live data here
       // Propagate live analyser + audio context to parent (AudioWaveform in PredictiveMaintenance)
-      if (onAnalyserReady) onAnalyserReady(audioCtx, waveformAnalyser);
+      if (onAnalyserReady) onAnalyserReady(nativeAudioCtx, waveformAnalyser);
 
       // MediaRecorder for audio blob upload
       const mediaRecorder = new MediaRecorder(stream);
@@ -294,11 +297,8 @@ export default function AudioRecorder({
       mediaRecorder.onstop = async () => {
         try {
           const blob = new Blob(chunksRef.current, { type: "audio/webm" });
-          // Wait for the v5 worker's final 'stop' result to arrive and populate
-          // sessionAnomaliesRef before reading it in handleAudioUpload.
-          // The worker processes synchronously on 'stop' but the postMessage
-          // reply is async — 1200ms covers even slow devices.
-          await new Promise(resolve => setTimeout(resolve, 1200));
+          // Wait 100ms to ensure the ScriptProcessor's last block finishes
+          await new Promise(resolve => setTimeout(resolve, 100));
           await handleAudioUpload(blob);
           if (streamRef.current) {
             streamRef.current.getTracks().forEach(t => t.stop());
@@ -356,6 +356,10 @@ export default function AudioRecorder({
         setTimeout(() => {
           if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
             mediaRecorderRef.current.stop();
+          }
+          if (nativeAudioCtxRef.current) {
+            nativeAudioCtxRef.current.close().catch(console.error);
+            nativeAudioCtxRef.current = null;
           }
           stopExtraction(); // releases AudioWorklet + Worker + stream
         }, 0);
@@ -430,7 +434,7 @@ export default function AudioRecorder({
         // created_at is server-generated — never set by client
         vehicle_id: vehicleId || null,
         audio_file_url: audioFileUrl,
-        duration_seconds: recordingTime,
+        duration_seconds: recordingTimeRef.current,
         status: realAnomalies.length > 0 ? 'flagged' : 'completed',
         confidence_score: parseFloat(avgConfidence.toFixed(2)),
         anomalies_detected: realAnomalies,

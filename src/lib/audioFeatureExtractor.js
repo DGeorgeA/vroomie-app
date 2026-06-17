@@ -7,7 +7,6 @@ let audioContext        = null;
 let mediaStreamSource   = null;
 let mediaStream         = null;
 let scriptProcessor     = null;
-let analyserNode        = null;
 let onFeaturesCallback  = null;
 
 const TARGET_SR = 16000;
@@ -42,11 +41,6 @@ export async function startExtraction(callback) {
     Logger.info(`✅ AudioContext sampleRate=${sr}`);
 
     mediaStreamSource = audioContext.createMediaStreamSource(mediaStream);
-
-    // Lightweight analyser for waveform UI
-    analyserNode = audioContext.createAnalyser();
-    analyserNode.fftSize = 1024;
-    mediaStreamSource.connect(analyserNode);
 
     // Fallback directly to ScriptProcessor for simplicity since we don't need sub-millisecond latency.
     // We just need to capture 1 second of audio (16,000 samples) and process it.
@@ -148,11 +142,6 @@ export function stopExtraction() {
     scriptProcessor.disconnect();
     scriptProcessor.onaudioprocess = null;
     scriptProcessor = null;
-  }
-
-  if (analyserNode) {
-    analyserNode.disconnect();
-    analyserNode = null;
   }
 
   if (mediaStreamSource) {

@@ -71,7 +71,7 @@ export default function PredictiveMaintenance() {
           .from('analyses')
           .select('*')
           .order('created_at', { ascending: false })
-          .limit(1);
+          .limit(50);
 
         if (error) throw error;
         if (isMounted) {
@@ -136,7 +136,7 @@ export default function PredictiveMaintenance() {
         .from('analyses')
         .select('*')
         .order('created_at', { ascending: false })
-        .limit(1);
+        .limit(50);
 
       // LOG VALIDATION: print timestamps on every refetch
       console.group('[Vroomie] Timestamp Validation — Refetch');
@@ -178,12 +178,18 @@ export default function PredictiveMaintenance() {
     setIsRecording(true); // ensure parent state matches AudioRecorder's internal state
   }, []);
 
-  const handleRecordingComplete = () => {
+  const handleRecordingComplete = (result) => {
     setIsRecording(false);
     setAnalyser(null);
     setAudioContext(null);
-    // DB write propagation delay before refetch
-    setTimeout(() => refetchAnalyses(), 1500);
+    
+    if (result && result.id) {
+      setAnalyses(prev => {
+        if (prev.some(r => r.id === result.id)) return prev;
+        return [result, ...prev];
+      });
+      setSelectedAnalysis(result);
+    }
 
     // ── Inactivity-based feedback popup ────────────────────────────────────
     // Behavior: If user does NOTHING for 5 seconds after stopping → show popup.
