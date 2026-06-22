@@ -104,10 +104,20 @@ function drawLive(ctx, width, height, analyser, t) {
     const data   = new Uint8Array(bufLen);
     analyser.getByteTimeDomainData(data);
 
+    // Compute peak deviation to auto-scale quiet signals
+    let maxDev = 0;
+    for (let i = 0; i < bufLen; i++) {
+      const dev = Math.abs(data[i] - 128);
+      if (dev > maxDev) maxDev = dev;
+    }
+    // Auto-gain: amplify quiet signals so the waveform is always visually active
+    // maxDev of 1-2 (near silence) gets boosted heavily; maxDev of 128 (max) stays at 1x
+    const gain = maxDev > 0 ? Math.min(128 / Math.max(maxDev, 4), 8) : 1;
+
     const sliceW = width / bufLen;
     for (let i = 0; i < bufLen; i++) {
-      const v = data[i] / 128.0;
-      const y = (v * height) / 2;
+      const v = ((data[i] - 128) * gain) / 128.0; // center, amplify, normalize
+      const y = (height / 2) + (v * height * 0.4); // 40% of height per side
       if (i === 0) ctx.moveTo(0, y);
       else         ctx.lineTo(i * sliceW, y);
     }

@@ -2,7 +2,7 @@
 import { Logger } from './logger';
 import { supabase } from './supabase'; // if needed, but we can just use fetch
 
-const CACHE_KEY = 'vroomie_yamnet_fingerprints_v2';
+const CACHE_KEY = 'vroomie_yamnet_fingerprints_v4';
 const SUPABASE_BUCKET_URL = 'https://bdldmkhcdtlqxaopxlam.supabase.co/storage/v1/object/public/anomaly-patterns/';
 
 const FILES_TO_DOWNLOAD = [
@@ -68,17 +68,32 @@ export async function loadOrGenerateFingerprints(getAudioEmbeddingFn) {
   Logger.info('Generating YAMNet fingerprints from Supabase bucket...');
   const fingerprints = [];
 
-  // Use OfflineAudioContext to decode WAV files in the browser
-  const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-
   for (const filename of FILES_TO_DOWNLOAD) {
     try {
-      const response = await fetch(`${SUPABASE_BUCKET_URL}${filename}`);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const url = `${SUPABASE_BUCKET_URL}${filename}`;
+      Logger.info(`[Dataset] Fetching: ${url}`);
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status} for ${filename}`);
       const arrayBuffer = await response.arrayBuffer();
+      Logger.info(`[Dataset] Downloaded ${filename}: ${arrayBuffer.byteLength} bytes`);
       
-      const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-      const pcm = audioBuffer.getChannelData(0);
+      // Use a temporary AudioContext ONLY for decoding, then resample to 16kHz deterministically
+      const tempCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const decodedBuffer = await tempCtx.decodeAudioData(arrayBuffer);
+      await tempCtx.close();
+      
+      // Resample to exactly 16kHz using OfflineAudioContext
+      const duration = decodedBuffer.duration;
+      const targetLength = Math.ceil(duration * 16000);
+      const offlineCtx = new OfflineAudioContext(1, targetLength, 16000);
+      const source = offlineCtx.createBufferSource();
+      source.buffer = decodedBuffer;
+      source.connect(offlineCtx.destination);
+      source.start(0);
+      const renderedBuffer = await offlineCtx.startRendering();
+      const pcm = renderedBuffer.getChannelData(0);
+      
+      Logger.info(`[Dataset] Decoded ${filename}: ${pcm.length} samples @ 16kHz (${(pcm.length/16000).toFixed(2)}s)`);
       
       const embedding = await getAudioEmbeddingFn(pcm);
       if (embedding) {
@@ -91,6 +106,9 @@ export async function loadOrGenerateFingerprints(getAudioEmbeddingFn) {
           source_file: filename,
           yamnet_embedding: embedding
         });
+        Logger.info(`[Dataset] ✅ Fingerprint generated for: ${meta.label} (${meta.fault_type}, ${meta.severity})`);
+      } else {
+        Logger.warn(`[Dataset] ⚠️ No embedding returned for ${filename}`);
       }
     } catch (err) {
       Logger.error(`Failed to process ${filename}:`, err);

@@ -277,6 +277,7 @@ export default function AudioRecorder({
       
       const waveformAnalyser = nativeAudioCtx.createAnalyser();
       waveformAnalyser.fftSize = 2048; // Higher resolution for native sample rate
+      waveformAnalyser.smoothingTimeConstant = 0; // ZERO smoothing — instant response to audio changes
       const waveformSource = nativeAudioCtx.createMediaStreamSource(stream);
       waveformSource.connect(waveformAnalyser);
       
@@ -297,15 +298,15 @@ export default function AudioRecorder({
       mediaRecorder.onstop = async () => {
         try {
           const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+          console.log(`[Vroomie] MediaRecorder.onstop fired. Blob size: ${blob.size} bytes, chunks: ${chunksRef.current.length}`);
           // Wait 100ms to ensure the ScriptProcessor's last block finishes
           await new Promise(resolve => setTimeout(resolve, 100));
           await handleAudioUpload(blob);
-          if (streamRef.current) {
-            streamRef.current.getTracks().forEach(t => t.stop());
-            streamRef.current = null;
-          }
         } catch (uploadErr) {
           console.error("Failed to upload audio:", uploadErr);
+        } finally {
+          // Stream cleanup happens AFTER report generation, not before.
+          // stopExtraction() handles mic track stopping separately.
         }
       };
 
@@ -352,16 +353,35 @@ export default function AudioRecorder({
           }
         }
 
-        // DEFER HEAVY CLEANUP
+        // DEFER HEAVY CLEANUP — ORDER MATTERS:
+        // 1. Stop MediaRecorder FIRST so onstop fires and handleAudioUpload runs
+        // 2. Close waveform AudioContext
+        // 3. Stop extraction (kills mic stream) LAST — stream must be alive for MediaRecorder
         setTimeout(() => {
           if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
-            mediaRecorderRef.current.stop();
+            // MediaRecorder.stop() triggers onstop asynchronously.
+            // We must NOT kill the stream until onstop/handleAudioUpload completes.
+            const recorder = mediaRecorderRef.current;
+            const origOnStop = recorder.onstop;
+            recorder.onstop = async (evt) => {
+              // Run the original onstop handler (builds blob → uploads → inserts report)
+              if (origOnStop) await origOnStop.call(recorder, evt);
+              // NOW it's safe to tear down everything
+              if (nativeAudioCtxRef.current) {
+                nativeAudioCtxRef.current.close().catch(console.error);
+                nativeAudioCtxRef.current = null;
+              }
+              stopExtraction(); // releases mic stream + 16kHz AudioContext
+            };
+            recorder.stop();
+          } else {
+            // No active MediaRecorder — just clean up directly
+            if (nativeAudioCtxRef.current) {
+              nativeAudioCtxRef.current.close().catch(console.error);
+              nativeAudioCtxRef.current = null;
+            }
+            stopExtraction();
           }
-          if (nativeAudioCtxRef.current) {
-            nativeAudioCtxRef.current.close().catch(console.error);
-            nativeAudioCtxRef.current = null;
-          }
-          stopExtraction(); // releases AudioWorklet + Worker + stream
         }, 0);
       }
     } catch (error) {
