@@ -8,9 +8,11 @@ let yamnetModel = null;
 let isModelLoading = false;
 let yamnetFingerprints = [];
 
-// STRICT Cosine Similarity Threshold (0.0 to 1.0)
-// Higher = fewer false positives. 0.90 is extremely strict.
-const ANOMALY_THRESHOLD = 0.90;
+// Cosine Similarity Threshold for anomaly detection (0.0 to 1.0)
+// 0.75 balances sensitivity and precision for real-world microphone audio.
+// Real-world audio has environmental noise, reverb, and mic response curves
+// that reduce similarity vs clean WAV references — 0.90 rejects everything.
+const ANOMALY_THRESHOLD = 0.75;
 
 export async function initializeFingerprints() {
   if (yamnetFingerprints.length === 0) {
@@ -110,18 +112,24 @@ export function findBestMatch(liveEmbedding) {
   let bestScore = -1;
   let bestMatch = null;
 
+  // Log ALL reference comparisons for diagnostics
+  const allScores = [];
   for (const ref of yamnetFingerprints) {
     const score = calculateCosineSimilarity(liveEmbedding, ref.yamnet_embedding);
+    allScores.push({ label: ref.label, score: score.toFixed(4) });
     if (score > bestScore) {
       bestScore = score;
       bestMatch = ref;
     }
   }
 
-  Logger.debug(`[YAMNet Match] Top match: ${bestMatch?.label} (${bestScore.toFixed(3)})`);
+  // Log top 3 matches for debugging
+  allScores.sort((a, b) => parseFloat(b.score) - parseFloat(a.score));
+  const top3 = allScores.slice(0, 3).map(s => `${s.label}(${s.score})`).join(', ');
+  Logger.info(`[YAMNet] Top matches: ${top3} | Threshold: ${ANOMALY_THRESHOLD}`);
 
   if (bestScore >= ANOMALY_THRESHOLD && bestMatch) {
-    Logger.info(`❗ SEMANTIC MATCH CONFIRMED: ${bestMatch.label} (score=${bestScore.toFixed(3)})`);
+    Logger.info(`❗ ANOMALY CONFIRMED: ${bestMatch.label} (score=${bestScore.toFixed(3)} >= ${ANOMALY_THRESHOLD})`);
     return {
       status: 'anomaly',
       anomaly: bestMatch.label,
@@ -135,6 +143,6 @@ export function findBestMatch(liveEmbedding) {
     status: 'normal',
     anomaly: null,
     confidence: bestScore,
-    reason: `below_threshold_${bestScore.toFixed(2)}`
+    reason: `below_threshold_${bestScore.toFixed(2)}_vs_${ANOMALY_THRESHOLD}`
   };
 }

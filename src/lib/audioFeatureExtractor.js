@@ -42,8 +42,7 @@ export async function startExtraction(callback) {
 
     mediaStreamSource = audioContext.createMediaStreamSource(mediaStream);
 
-    // Fallback directly to ScriptProcessor for simplicity since we don't need sub-millisecond latency.
-    // We just need to capture 1 second of audio (16,000 samples) and process it.
+    // ScriptProcessor capture — processes 1-second windows for YAMNet classification
     useScriptProcessorMainThreadCapture(sr);
 
     Logger.info(`🎙️ Recording started (SR=${sr})`);
@@ -55,10 +54,12 @@ export async function startExtraction(callback) {
 }
 
 function useScriptProcessorMainThreadCapture(sr) {
-  const windowSamples  = sr * 1; // 1-second window
+  const windowSamples  = sr * 1; // 1-second window (16000 samples at 16kHz)
   const ring       = new Float32Array(windowSamples);
   let writeHead    = 0;
   let totalSamples = 0;
+  let isProcessing = false; // Prevent overlapping async YAMNet calls
+  let lastClassifyTime = 0; // Timestamp of last classification attempt
 
   scriptProcessor = audioContext.createScriptProcessor(SCRIPT_BUFFER_SIZE, 1, 1);
   
@@ -70,29 +71,40 @@ function useScriptProcessorMainThreadCapture(sr) {
     const ch0   = input.getChannelData(0);
     const blockSize = ch0.length;
 
-    let frameRmsSq = 0;
-
-    // Mix mono into ring buffer
+    // Mix mono into ring buffer and accumulate RMS
     for (let i = 0; i < blockSize; i++) {
       let sample = ch0[i];
       if (numCh > 1) sample = (sample + input.getChannelData(1)[i]) / 2;
       ring[writeHead % windowSamples] = sample;
       writeHead++;
-      frameRmsSq += sample * sample;
     }
 
-    const rms = Math.sqrt(frameRmsSq / blockSize);
     totalSamples += blockSize;
 
-    // We only process if we have collected at least 1 second of audio
-    // We can evaluate every block (overlapping windows) once we hit the first second.
-    if (totalSamples >= windowSamples && totalSamples % (SCRIPT_BUFFER_SIZE * 2) === 0) {
-      // Snapshot 1s window in order from ring buffer
+    // ── Classification gate: process every ~1 second, AFTER we have at least 1s of data ──
+    // Use wall-clock timing instead of fragile modulo arithmetic to ensure classification fires reliably
+    const now = performance.now();
+    const hasEnoughData = totalSamples >= windowSamples;
+    const timeSinceLastClassify = now - lastClassifyTime;
+
+    if (hasEnoughData && timeSinceLastClassify >= 900 && !isProcessing) {
+      lastClassifyTime = now;
+      isProcessing = true;
+
+      // Snapshot the full 1-second window in order from ring buffer
       const snapshot = new Float32Array(windowSamples);
       const start = writeHead;
       for (let i = 0; i < windowSamples; i++) {
         snapshot[i] = ring[(start + i) % windowSamples];
       }
+
+      // Compute RMS over the FULL 1-second snapshot (not just the current block)
+      // This prevents intermittent silence rejections when individual blocks are quiet
+      let snapshotRmsSq = 0;
+      for (let i = 0; i < windowSamples; i++) {
+        snapshotRmsSq += snapshot[i] * snapshot[i];
+      }
+      const rms = Math.sqrt(snapshotRmsSq / windowSamples);
 
       // Hard RMS pre-gate to reject silence
       if (rms < 0.01) {
@@ -102,28 +114,44 @@ function useScriptProcessorMainThreadCapture(sr) {
             rms: rms
           });
         }
+        isProcessing = false;
         return;
       }
 
-      // Pass directly to YAMNet
-      const embedding = await getAudioEmbedding(snapshot);
-      if (!embedding) return;
+      try {
+        // Pass the full 1-second snapshot to YAMNet
+        const embedding = await getAudioEmbedding(snapshot);
+        if (!embedding) {
+          isProcessing = false;
+          return;
+        }
 
-      const matchResult = findBestMatch(embedding);
+        const matchResult = findBestMatch(embedding);
 
-      if (onFeaturesCallback) {
-        onFeaturesCallback({
-          compositeEmbedding: embedding,
-          _workerResult: matchResult, // Matches the worker format expected by AudioRecorder.jsx
-          rms: rms
-        });
+        if (onFeaturesCallback) {
+          onFeaturesCallback({
+            compositeEmbedding: embedding,
+            _workerResult: matchResult,
+            rms: rms
+          });
+        }
+      } catch (err) {
+        Logger.error('Classification error:', err);
+      } finally {
+        isProcessing = false;
       }
-    } else {
-      // Just emit buffering state with RMS for the UI
+    } else if (!hasEnoughData) {
+      // Compute block-level RMS for UI feedback while buffering
+      let frameRmsSq = 0;
+      for (let i = 0; i < blockSize; i++) {
+        frameRmsSq += ch0[i] * ch0[i];
+      }
+      const blockRms = Math.sqrt(frameRmsSq / blockSize);
+
       if (onFeaturesCallback) {
         onFeaturesCallback({
           _workerResult: { status: 'buffering' },
-          rms: rms
+          rms: blockRms
         });
       }
     }
