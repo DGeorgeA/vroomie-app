@@ -1,0 +1,1600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Vroomie — Investor Product Note</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+/* ═══════════════════════════════════════════════════════════════════
+   VROOMIE — INVESTOR PRODUCT NOTE
+   Premium Dark Theme with Glassmorphism
+   ═══════════════════════════════════════════════════════════════════ */
+
+:root {
+  --bg-deep: #0c0118;
+  --bg-primary: #1a0533;
+  --bg-secondary: #0a1628;
+  --glass-bg: rgba(255,255,255,0.04);
+  --glass-border: rgba(255,255,255,0.08);
+  --glass-hover: rgba(255,255,255,0.07);
+  --cyan: #06b6d4;
+  --purple: #8b5cf6;
+  --emerald: #10b981;
+  --amber: #f59e0b;
+  --rose: #f43f5e;
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --gradient-brand: linear-gradient(135deg, #8b5cf6, #06b6d4);
+  --gradient-card: linear-gradient(145deg, rgba(139,92,246,0.08), rgba(6,182,212,0.05));
+}
+
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--bg-deep);
+  color: var(--text-primary);
+  line-height: 1.7;
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Animated Gradient Border Keyframes ─────────────────────────── */
+@keyframes gradientShift {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(30px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 30px rgba(139,92,246,0.15); }
+  50%      { box-shadow: 0 0 60px rgba(6,182,212,0.25); }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-6px); }
+}
+
+/* ── Layout ─────────────────────────────────────────────────────── */
+.container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 40px;
+}
+
+/* ── Cover Page ─────────────────────────────────────────────────── */
+.cover-page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  background: linear-gradient(160deg, #1a0533 0%, #0f0a2e 30%, #0a1628 70%, #061220 100%);
+  position: relative;
+  overflow: hidden;
+}
+
+.cover-page::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: radial-gradient(ellipse at 30% 20%, rgba(139,92,246,0.12) 0%, transparent 50%),
+              radial-gradient(ellipse at 70% 80%, rgba(6,182,212,0.08) 0%, transparent 50%),
+              radial-gradient(ellipse at 50% 50%, rgba(16,185,129,0.04) 0%, transparent 40%);
+  animation: float 12s ease-in-out infinite;
+}
+
+.cover-content { position: relative; z-index: 2; animation: fadeInUp 1.2s ease; }
+
+.brand-mark {
+  font-size: 6rem;
+  font-weight: 900;
+  letter-spacing: 0.15em;
+  background: linear-gradient(135deg, #8b5cf6, #06b6d4, #10b981);
+  background-size: 200% 200%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: gradientShift 6s ease-in-out infinite;
+  margin-bottom: 1rem;
+}
+
+.brand-icon {
+  font-size: 4rem;
+  margin-bottom: 1.5rem;
+  display: block;
+}
+
+.tagline {
+  font-size: 1.55rem;
+  font-weight: 300;
+  color: var(--text-secondary);
+  letter-spacing: 0.04em;
+  margin-bottom: 3rem;
+  max-width: 600px;
+}
+
+.cover-badge {
+  display: inline-block;
+  padding: 14px 40px;
+  border: 1px solid rgba(139,92,246,0.3);
+  border-radius: 50px;
+  background: rgba(139,92,246,0.08);
+  color: var(--purple);
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  backdrop-filter: blur(12px);
+  margin-bottom: 1.5rem;
+}
+
+.cover-date {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  margin-top: 1.5rem;
+  letter-spacing: 0.05em;
+}
+
+.cover-confidential {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 0.5rem;
+  opacity: 0.6;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+}
+
+/* ── Sections ───────────────────────────────────────────────────── */
+.section {
+  padding: 100px 0;
+  position: relative;
+}
+
+.section-alt {
+  background: linear-gradient(180deg, rgba(139,92,246,0.02) 0%, transparent 100%);
+}
+
+.section-header {
+  text-align: center;
+  margin-bottom: 60px;
+}
+
+.section-number {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--cyan);
+  margin-bottom: 12px;
+  padding: 6px 16px;
+  border: 1px solid rgba(6,182,212,0.2);
+  border-radius: 20px;
+  background: rgba(6,182,212,0.06);
+}
+
+.section-title {
+  font-size: 2.8rem;
+  font-weight: 800;
+  line-height: 1.2;
+  margin-bottom: 16px;
+  background: linear-gradient(135deg, var(--text-primary), var(--text-secondary));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.section-subtitle {
+  font-size: 1.15rem;
+  color: var(--text-secondary);
+  max-width: 700px;
+  margin: 0 auto;
+  font-weight: 300;
+}
+
+/* ── Glass Cards ────────────────────────────────────────────────── */
+.glass-card {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 20px;
+  padding: 40px;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  transition: all 0.4s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.glass-card:hover {
+  background: var(--glass-hover);
+  border-color: rgba(139,92,246,0.15);
+  transform: translateY(-2px);
+}
+
+.glass-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(139,92,246,0.3), rgba(6,182,212,0.3), transparent);
+}
+
+/* ── Animated Border Card ───────────────────────────────────────── */
+.animated-border-card {
+  position: relative;
+  border-radius: 22px;
+  padding: 3px;
+  background: linear-gradient(135deg, #8b5cf6, #06b6d4, #10b981, #8b5cf6);
+  background-size: 300% 300%;
+  animation: gradientShift 5s ease infinite;
+}
+
+.animated-border-card > .card-inner {
+  background: var(--bg-deep);
+  border-radius: 19px;
+  padding: 44px;
+}
+
+/* ── Stat Callout Boxes ─────────────────────────────────────────── */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 24px;
+  margin: 40px 0;
+}
+
+.stat-box {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  padding: 32px 28px;
+  text-align: center;
+  backdrop-filter: blur(16px);
+  transition: all 0.3s ease;
+  animation: pulse-glow 4s ease-in-out infinite;
+}
+
+.stat-box:hover { transform: translateY(-4px); }
+
+.stat-value {
+  font-size: 3rem;
+  font-weight: 900;
+  line-height: 1;
+  margin-bottom: 8px;
+}
+
+.stat-value.cyan    { color: var(--cyan); }
+.stat-value.purple  { color: var(--purple); }
+.stat-value.emerald { color: var(--emerald); }
+.stat-value.amber   { color: var(--amber); }
+
+.stat-label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* ── Problem Pain Points ────────────────────────────────────────── */
+.pain-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 24px;
+  margin: 40px 0;
+}
+
+.pain-item {
+  background: rgba(244,63,94,0.04);
+  border: 1px solid rgba(244,63,94,0.12);
+  border-radius: 16px;
+  padding: 28px;
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  transition: all 0.3s ease;
+}
+
+.pain-item:hover {
+  background: rgba(244,63,94,0.07);
+  border-color: rgba(244,63,94,0.2);
+  transform: translateX(4px);
+}
+
+.pain-icon {
+  font-size: 1.6rem;
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: rgba(244,63,94,0.1);
+}
+
+.pain-text {
+  font-size: 1rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.pain-text strong { color: var(--text-primary); font-weight: 600; }
+
+/* ── Solution Features ──────────────────────────────────────────── */
+.solution-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 24px;
+  margin: 40px 0;
+}
+
+.solution-item {
+  background: rgba(16,185,129,0.04);
+  border: 1px solid rgba(16,185,129,0.1);
+  border-radius: 16px;
+  padding: 28px;
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  transition: all 0.3s ease;
+}
+
+.solution-item:hover {
+  background: rgba(16,185,129,0.07);
+  border-color: rgba(16,185,129,0.2);
+  transform: translateX(4px);
+}
+
+.solution-icon {
+  font-size: 1.6rem;
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: rgba(16,185,129,0.1);
+}
+
+.solution-text {
+  font-size: 1rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.solution-text strong { color: var(--text-primary); font-weight: 600; }
+
+/* ── Feature Cards ──────────────────────────────────────────────── */
+.features-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 20px;
+  margin: 40px 0;
+}
+
+.feature-card {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  padding: 28px;
+  text-align: center;
+  transition: all 0.3s ease;
+}
+
+.feature-card:hover {
+  background: var(--glass-hover);
+  transform: translateY(-3px);
+  border-color: rgba(139,92,246,0.2);
+}
+
+.feature-icon {
+  font-size: 2.2rem;
+  margin-bottom: 14px;
+}
+
+.feature-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.feature-desc {
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+/* ── Fault Table ────────────────────────────────────────────────── */
+.fault-table-wrapper {
+  overflow-x: auto;
+  border-radius: 16px;
+  border: 1px solid var(--glass-border);
+  margin: 40px 0;
+}
+
+.fault-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+.fault-table thead th {
+  background: rgba(139,92,246,0.08);
+  padding: 16px 20px;
+  text-align: left;
+  font-weight: 700;
+  color: var(--text-primary);
+  text-transform: uppercase;
+  font-size: 0.78rem;
+  letter-spacing: 0.1em;
+  border-bottom: 1px solid var(--glass-border);
+}
+
+.fault-table tbody td {
+  padding: 18px 20px;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  color: var(--text-secondary);
+  vertical-align: top;
+}
+
+.fault-table tbody tr:hover {
+  background: rgba(255,255,255,0.02);
+}
+
+.fault-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.severity-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  border-radius: 20px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.severity-critical {
+  background: rgba(244,63,94,0.12);
+  color: #fb7185;
+  border: 1px solid rgba(244,63,94,0.2);
+}
+
+.severity-high {
+  background: rgba(245,158,11,0.12);
+  color: #fbbf24;
+  border: 1px solid rgba(245,158,11,0.2);
+}
+
+.severity-medium {
+  background: rgba(234,179,8,0.1);
+  color: #facc15;
+  border: 1px solid rgba(234,179,8,0.15);
+}
+
+.severity-low {
+  background: rgba(6,182,212,0.1);
+  color: #22d3ee;
+  border: 1px solid rgba(6,182,212,0.15);
+}
+
+.fault-name {
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+/* ── Comparison Table ───────────────────────────────────────────── */
+.comparison-table-wrapper {
+  overflow-x: auto;
+  border-radius: 16px;
+  border: 1px solid var(--glass-border);
+  margin: 40px 0;
+}
+
+.comparison-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+.comparison-table thead th {
+  background: rgba(6,182,212,0.06);
+  padding: 16px 20px;
+  text-align: left;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--glass-border);
+}
+
+.comparison-table thead th:last-child {
+  color: var(--emerald);
+}
+
+.comparison-table tbody td {
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  color: var(--text-secondary);
+}
+
+.comparison-table tbody tr:hover { background: rgba(255,255,255,0.02); }
+
+.comparison-table tbody td:first-child {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.comparison-table tbody td:last-child {
+  color: var(--emerald);
+  font-weight: 600;
+}
+
+.check { color: var(--emerald); font-weight: 700; }
+.cross { color: var(--rose); font-weight: 700; opacity: 0.6; }
+
+/* ── Business Model Tiers ───────────────────────────────────────── */
+.tier-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 24px;
+  margin: 40px 0;
+}
+
+.tier-card {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 20px;
+  padding: 36px 30px;
+  text-align: center;
+  transition: all 0.4s ease;
+  position: relative;
+}
+
+.tier-card:hover {
+  background: var(--glass-hover);
+  transform: translateY(-4px);
+}
+
+.tier-card.featured {
+  border-color: rgba(139,92,246,0.3);
+  background: rgba(139,92,246,0.06);
+}
+
+.tier-card.featured::before {
+  content: 'MOST POPULAR';
+  position: absolute;
+  top: -12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--gradient-brand);
+  color: white;
+  font-size: 0.68rem;
+  font-weight: 800;
+  padding: 5px 18px;
+  border-radius: 20px;
+  letter-spacing: 0.12em;
+}
+
+.tier-name {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  margin-bottom: 12px;
+}
+
+.tier-price {
+  font-size: 2.6rem;
+  font-weight: 900;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.tier-period {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin-bottom: 20px;
+}
+
+.tier-features {
+  list-style: none;
+  text-align: left;
+}
+
+.tier-features li {
+  padding: 8px 0;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.tier-features li::before {
+  content: '✓';
+  color: var(--emerald);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+/* ── Mermaid ────────────────────────────────────────────────────── */
+.mermaid-wrapper {
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  padding: 36px 28px;
+  margin: 36px 0;
+  overflow-x: auto;
+}
+
+.mermaid-wrapper .mermaid {
+  display: flex;
+  justify-content: center;
+}
+
+.mermaid svg { max-width: 100%; height: auto; }
+
+/* ── Team / Contact ─────────────────────────────────────────────── */
+.team-placeholder {
+  text-align: center;
+  padding: 60px 40px;
+  background: var(--glass-bg);
+  border: 1px dashed rgba(139,92,246,0.2);
+  border-radius: 20px;
+  margin: 40px 0;
+}
+
+.team-placeholder h3 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+}
+
+.team-placeholder p {
+  color: var(--text-muted);
+  font-size: 0.95rem;
+}
+
+/* ── Divider ────────────────────────────────────────────────────── */
+.section-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(139,92,246,0.15), rgba(6,182,212,0.15), transparent);
+  margin: 0;
+}
+
+/* ── Footer ─────────────────────────────────────────────────────── */
+.doc-footer {
+  text-align: center;
+  padding: 50px 40px 80px;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.doc-footer a { color: var(--cyan); text-decoration: none; }
+
+/* ── Export Button ──────────────────────────────────────────────── */
+.export-btn {
+  position: fixed;
+  bottom: 30px;
+  right: 30px;
+  z-index: 9999;
+  background: linear-gradient(135deg, #8b5cf6, #06b6d4);
+  color: white;
+  border: none;
+  padding: 14px 28px;
+  border-radius: 50px;
+  font-family: 'Inter', sans-serif;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 8px 32px rgba(139,92,246,0.35);
+  transition: all 0.3s ease;
+  letter-spacing: 0.04em;
+}
+
+.export-btn:hover {
+  transform: translateY(-2px) scale(1.03);
+  box-shadow: 0 12px 44px rgba(139,92,246,0.5);
+}
+
+/* ── Page Breaks ────────────────────────────────────────────────── */
+.page-break { page-break-before: always; }
+
+/* ═════════════════════════════════════════════════════════════════
+   PRINT / PDF STYLESHEET
+   ═════════════════════════════════════════════════════════════════ */
+@media print {
+  *, *::before, *::after {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #1e293b !important;
+    font-size: 11pt;
+  }
+
+  .export-btn { display: none !important; }
+
+  .cover-page {
+    background: linear-gradient(160deg, #f8fafc, #eef2ff, #f0f9ff) !important;
+    min-height: auto;
+    padding: 120px 40px;
+  }
+
+  .cover-page::before { display: none; }
+
+  .brand-mark {
+    -webkit-text-fill-color: #4f46e5 !important;
+    color: #4f46e5 !important;
+    font-size: 4rem;
+  }
+
+  .tagline { color: #475569 !important; }
+  .cover-badge { color: #6d28d9 !important; border-color: #c4b5fd !important; background: #ede9fe !important; }
+
+  .section { padding: 50px 0 !important; }
+  .section-title {
+    -webkit-text-fill-color: #1e293b !important;
+    color: #1e293b !important;
+    font-size: 1.8rem !important;
+  }
+
+  .section-subtitle { color: #475569 !important; }
+  .section-number { color: #0891b2 !important; border-color: #a5f3fc !important; background: #ecfeff !important; }
+
+  .glass-card, .stat-box, .feature-card, .tier-card, .mermaid-wrapper {
+    background: #f8fafc !important;
+    border-color: #e2e8f0 !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08) !important;
+  }
+
+  .pain-item {
+    background: #fff1f2 !important;
+    border-color: #fecdd3 !important;
+  }
+
+  .solution-item {
+    background: #ecfdf5 !important;
+    border-color: #a7f3d0 !important;
+  }
+
+  .stat-value { font-size: 2rem !important; }
+  .stat-value.cyan { color: #0891b2 !important; }
+  .stat-value.purple { color: #7c3aed !important; }
+  .stat-value.emerald { color: #059669 !important; }
+  .stat-value.amber { color: #d97706 !important; }
+
+  .stat-label, .pain-text, .solution-text, .feature-desc,
+  .fault-table tbody td, .comparison-table tbody td,
+  .tier-features li, .team-placeholder p { color: #475569 !important; }
+
+  .pain-text strong, .solution-text strong, .fault-name,
+  .comparison-table tbody td:first-child, .feature-title { color: #1e293b !important; }
+
+  .fault-table thead th {
+    background: #eef2ff !important;
+    color: #1e293b !important;
+  }
+
+  .comparison-table thead th {
+    background: #ecfeff !important;
+    color: #1e293b !important;
+  }
+
+  .comparison-table thead th:last-child { color: #059669 !important; }
+  .comparison-table tbody td:last-child { color: #059669 !important; }
+
+  .severity-critical { background: #fee2e2 !important; color: #dc2626 !important; border-color: #fca5a5 !important; }
+  .severity-high { background: #fef3c7 !important; color: #d97706 !important; border-color: #fcd34d !important; }
+  .severity-medium { background: #fef9c3 !important; color: #ca8a04 !important; border-color: #fde047 !important; }
+  .severity-low { background: #ecfeff !important; color: #0891b2 !important; border-color: #a5f3fc !important; }
+
+  .team-placeholder {
+    border-color: #c4b5fd !important;
+    background: #faf5ff !important;
+  }
+
+  .team-placeholder h3 { color: #1e293b !important; }
+
+  .animated-border-card { background: none !important; padding: 0 !important; }
+  .animated-border-card > .card-inner {
+    background: #f8fafc !important;
+    border: 1px solid #e2e8f0 !important;
+  }
+
+  .section-divider { background: #e2e8f0 !important; }
+  .doc-footer { color: #94a3b8 !important; }
+
+  .page-break { page-break-before: always; }
+
+  .mermaid-wrapper { page-break-inside: avoid; }
+
+  @page { margin: 0.75in; }
+}
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     EXPORT BUTTON
+     ═══════════════════════════════════════════════════════════════════ -->
+<button class="export-btn" onclick="window.print()">📄 Export as PDF</button>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     1. COVER PAGE
+     ═══════════════════════════════════════════════════════════════════ -->
+<section class="cover-page">
+  <div class="cover-content">
+    <span class="brand-icon">🚗</span>
+    <h1 class="brand-mark">VROOMIE</h1>
+    <p class="tagline">AI-Powered Vehicle Diagnostics in Your Pocket</p>
+    <div class="cover-badge">Investor Product Note — Confidential</div>
+    <p class="cover-date">June 2026</p>
+    <p class="cover-confidential">For qualified investors only — do not distribute</p>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     2. THE PROBLEM
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="section-divider"></div>
+<section class="section page-break">
+  <div class="container">
+    <div class="section-header">
+      <div class="section-number">Section 01</div>
+      <h2 class="section-title">The Problem</h2>
+      <p class="section-subtitle">Vehicle maintenance is fundamentally broken — reactive instead of predictive, costly, and inaccessible to everyday drivers.</p>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-box">
+        <div class="stat-value rose" style="color:#f43f5e;">70%</div>
+        <div class="stat-label">of breakdowns preceded by<br>detectable audio anomalies</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value amber">3–5×</div>
+        <div class="stat-label">cost increase when faults<br>go undetected</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value purple">$100–200</div>
+        <div class="stat-label">mechanic diagnostic fees<br>per visit</div>
+      </div>
+    </div>
+
+    <div class="pain-grid">
+      <div class="pain-item">
+        <div class="pain-icon">⚠️</div>
+        <div class="pain-text"><strong>Reactive, not predictive.</strong> Most vehicle owners don't discover problems until something breaks — often in the worst place at the worst time.</div>
+      </div>
+      <div class="pain-item">
+        <div class="pain-icon">💸</div>
+        <div class="pain-text"><strong>Costs spiral without early detection.</strong> A $200 bearing replacement becomes a $1,500 alternator rebuild when the warning signs are missed.</div>
+      </div>
+      <div class="pain-item">
+        <div class="pain-icon">🔧</div>
+        <div class="pain-text"><strong>Diagnostic gatekeeping.</strong> Professional diagnostics require expensive equipment and specialist knowledge — locking out everyday drivers.</div>
+      </div>
+      <div class="pain-item">
+        <div class="pain-icon">📉</div>
+        <div class="pain-text"><strong>No consumer-grade tools exist.</strong> OBD-II scanners are limited to electrical codes. Mechanical faults — bearings, pistons, belts — produce no codes.</div>
+      </div>
+    </div>
+
+    <div class="mermaid-wrapper">
+      <div class="mermaid">
+pie title Breakdown Costs — Industry Average
+    "Preventable with Early Detection" : 70
+    "Unavoidable Wear and Tear" : 30
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     3. THE SOLUTION
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="section-divider"></div>
+<section class="section section-alt page-break">
+  <div class="container">
+    <div class="section-header">
+      <div class="section-number">Section 02</div>
+      <h2 class="section-title">The Solution</h2>
+      <p class="section-subtitle">Vroomie turns any smartphone into a powerful vehicle diagnostic tool — using AI to detect mechanical faults from engine sound alone.</p>
+    </div>
+
+    <div class="animated-border-card">
+      <div class="card-inner">
+        <div class="solution-grid" style="margin:0;">
+          <div class="solution-item" style="background:rgba(16,185,129,0.04);border:none;">
+            <div class="solution-icon">📱</div>
+            <div class="solution-text"><strong>Your phone is the sensor.</strong> No hardware, no OBD-II dongle, no Bluetooth adapter. Just tap record and hold your phone near the engine.</div>
+          </div>
+          <div class="solution-item" style="background:rgba(16,185,129,0.04);border:none;">
+            <div class="solution-icon">🧠</div>
+            <div class="solution-text"><strong>Google YAMNet AI under the hood.</strong> State-of-the-art audio classification model identifies fault patterns in real-time — entirely on-device.</div>
+          </div>
+          <div class="solution-item" style="background:rgba(16,185,129,0.04);border:none;">
+            <div class="solution-icon">🔍</div>
+            <div class="solution-text"><strong>Detects what mechanics hear.</strong> Bearing failures, piston knock, misfires, intake leaks — all identified with confidence scoring.</div>
+          </div>
+          <div class="solution-item" style="background:rgba(16,185,129,0.04);border:none;">
+            <div class="solution-icon">📋</div>
+            <div class="solution-text"><strong>Actionable diagnostic reports.</strong> Every scan produces a detailed report with fault severity, clinical description, and recommended fixes.</div>
+          </div>
+          <div class="solution-item" style="background:rgba(16,185,129,0.04);border:none;">
+            <div class="solution-icon">🌐</div>
+            <div class="solution-text"><strong>No app store needed.</strong> Vroomie is a Progressive Web App — works on any device, any OS, from a simple URL. Installs instantly.</div>
+          </div>
+          <div class="solution-item" style="background:rgba(16,185,129,0.04);border:none;">
+            <div class="solution-icon">🔒</div>
+            <div class="solution-text"><strong>Privacy-first architecture.</strong> All AI inference runs on-device. No audio ever leaves your phone. No cloud dependency required.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mermaid-wrapper" style="margin-top:40px;">
+      <div class="mermaid">
+flowchart LR
+    A["📱 Phone Mic"] --> B["🧠 AI Engine"]
+    B --> C["⚡ Instant Diagnosis"]
+    C --> D["📋 Action Plan"]
+    style A fill:#8b5cf620,stroke:#8b5cf6,color:#e2e8f0
+    style B fill:#06b6d420,stroke:#06b6d4,color:#e2e8f0
+    style C fill:#10b98120,stroke:#10b981,color:#e2e8f0
+    style D fill:#f59e0b20,stroke:#f59e0b,color:#e2e8f0
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     4. HOW IT WORKS
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="section-divider"></div>
+<section class="section page-break">
+  <div class="container">
+    <div class="section-header">
+      <div class="section-number">Section 03</div>
+      <h2 class="section-title">How It Works</h2>
+      <p class="section-subtitle">From engine sound to diagnosis in under 30 seconds — no expertise required.</p>
+    </div>
+
+    <div class="mermaid-wrapper">
+      <div class="mermaid">
+sequenceDiagram
+    actor User
+    participant App as Vroomie App
+    participant AI as AI Engine
+    participant DB as Fault Library
+
+    User->>App: Opens app, taps Record
+    App->>App: Captures engine sound (10-30s)
+    App->>AI: Sends audio to on-device AI
+    AI->>AI: Extracts 1024-dim embedding
+    AI->>DB: Compares against known fault fingerprints
+    DB-->>AI: Best match + confidence score
+    alt Anomaly Detected
+        AI-->>App: ❗ Fault identified (e.g. Bearing Fault — 92%)
+        App-->>User: Shows severity, description, recommended fix
+    else Engine Healthy
+        AI-->>App: ✅ No anomalies detected
+        App-->>User: All clear — engine sounds normal
+    end
+    App->>App: Generates downloadable PDF report
+      </div>
+    </div>
+
+    <div class="stats-grid" style="margin-top:50px;">
+      <div class="stat-box">
+        <div class="stat-value cyan">&lt;1s</div>
+        <div class="stat-label">Classification latency</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value purple">1024</div>
+        <div class="stat-label">Dimension embedding vector</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value emerald">6</div>
+        <div class="stat-label">Fault types at launch</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value amber">0%</div>
+        <div class="stat-label">Cloud dependency for inference</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     5. TECHNOLOGY MOAT
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="section-divider"></div>
+<section class="section section-alt page-break">
+  <div class="container">
+    <div class="section-header">
+      <div class="section-number">Section 04</div>
+      <h2 class="section-title">Technology Moat</h2>
+      <p class="section-subtitle">A defensible stack combining world-class AI, proprietary data, and frictionless distribution.</p>
+    </div>
+
+    <div class="solution-grid">
+      <div class="glass-card">
+        <div style="font-size:2rem;margin-bottom:14px;">🧠</div>
+        <h3 style="font-size:1.1rem;font-weight:700;margin-bottom:10px;color:var(--cyan);">On-Device Machine Learning</h3>
+        <p style="color:var(--text-secondary);font-size:0.92rem;">All AI inference runs directly on the user's device via TensorFlow.js. No server round-trip, no latency, no privacy concerns. Works fully offline after initial model download.</p>
+      </div>
+      <div class="glass-card">
+        <div style="font-size:2rem;margin-bottom:14px;">🎯</div>
+        <h3 style="font-size:1.1rem;font-weight:700;margin-bottom:10px;color:var(--cyan);">Google YAMNet Integration</h3>
+        <p style="color:var(--text-secondary);font-size:0.92rem;">Built on Google's state-of-the-art audio classification model, pre-trained on millions of audio samples. Extracts 1024-dimensional acoustic embeddings with exceptional accuracy.</p>
+      </div>
+      <div class="glass-card">
+        <div style="font-size:2rem;margin-bottom:14px;">🔐</div>
+        <h3 style="font-size:1.1rem;font-weight:700;margin-bottom:10px;color:var(--cyan);">Proprietary Fault Fingerprints</h3>
+        <p style="color:var(--text-secondary);font-size:0.92rem;">Our curated anomaly fingerprint database uses cosine similarity matching against reference fault signatures. Each new diagnosis improves the model's accuracy — a compounding data moat.</p>
+      </div>
+      <div class="glass-card">
+        <div style="font-size:2rem;margin-bottom:14px;">⚡</div>
+        <h3 style="font-size:1.1rem;font-weight:700;margin-bottom:10px;color:var(--cyan);">Sub-Second Classification</h3>
+        <p style="color:var(--text-secondary);font-size:0.92rem;">Temporal embedding pipeline processes 2-second audio windows with 80-dimensional composite features, delivering results in under one second on mid-range smartphones.</p>
+      </div>
+      <div class="glass-card">
+        <div style="font-size:2rem;margin-bottom:14px;">🌐</div>
+        <h3 style="font-size:1.1rem;font-weight:700;margin-bottom:10px;color:var(--cyan);">PWA Distribution</h3>
+        <p style="color:var(--text-secondary);font-size:0.92rem;">Progressive Web App architecture eliminates app store gatekeeping, reduces distribution friction to near-zero, and enables instant updates across all platforms simultaneously.</p>
+      </div>
+      <div class="glass-card">
+        <div style="font-size:2rem;margin-bottom:14px;">📊</div>
+        <h3 style="font-size:1.1rem;font-weight:700;margin-bottom:10px;color:var(--cyan);">Clinical Fault Narratives</h3>
+        <p style="color:var(--text-secondary);font-size:0.92rem;">Every detected fault is paired with a clinical-grade technical narrative explaining the root cause, risk trajectory, and precise repair steps — building trust and reducing mechanic dependency.</p>
+      </div>
+    </div>
+
+    <div class="mermaid-wrapper" style="margin-top:40px;">
+      <div class="mermaid">
+graph TB
+    subgraph Distribution
+        PWA["Progressive Web App"]
+    end
+    subgraph Application
+        UI["React + Tailwind UI"]
+        VIS["Real-time Waveform Viz"]
+        RPT["Report Generator"]
+    end
+    subgraph AI_Engine["AI Engine"]
+        TF["TensorFlow.js Runtime"]
+        YAM["Google YAMNet Model"]
+        COS["Cosine Similarity Matcher"]
+    end
+    subgraph Data
+        FP["Proprietary Fault Fingerprints"]
+        SB["Supabase Cloud Sync"]
+        IDB["IndexedDB Local Cache"]
+    end
+    PWA --> UI
+    UI --> VIS
+    UI --> RPT
+    UI --> TF
+    TF --> YAM
+    YAM --> COS
+    COS --> FP
+    FP --> IDB
+    RPT --> SB
+    style PWA fill:#8b5cf620,stroke:#8b5cf6,color:#e2e8f0
+    style YAM fill:#06b6d420,stroke:#06b6d4,color:#e2e8f0
+    style FP fill:#10b98120,stroke:#10b981,color:#e2e8f0
+    style SB fill:#f59e0b20,stroke:#f59e0b,color:#e2e8f0
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     6. PRODUCT FEATURES
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="section-divider"></div>
+<section class="section page-break">
+  <div class="container">
+    <div class="section-header">
+      <div class="section-number">Section 05</div>
+      <h2 class="section-title">Product Features</h2>
+      <p class="section-subtitle">A comprehensive diagnostic suite that delivers professional-grade insights through a consumer-friendly experience.</p>
+    </div>
+
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon">📈</div>
+        <div class="feature-title">Real-Time Audio Waveform</div>
+        <div class="feature-desc">Live visualization of engine audio with frequency analysis and amplitude monitoring during recording.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🤖</div>
+        <div class="feature-title">AI Fault Detection</div>
+        <div class="feature-desc">Six precision-tuned fault classifiers at launch, with an expandable architecture designed for continuous growth.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🔊</div>
+        <div class="feature-title">Voice Alerts</div>
+        <div class="feature-desc">Text-to-speech announcements of detected faults, enabling hands-free operation while working under the hood.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">📋</div>
+        <div class="feature-title">Clinical Diagnostic Reports</div>
+        <div class="feature-desc">Downloadable PDF reports with fault nature, severity assessment, root cause analysis, and recommended repair steps.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">☁️</div>
+        <div class="feature-title">Cloud-Synced History</div>
+        <div class="feature-desc">Full diagnostic history synced via Supabase — access past scans from any device, track fault progression over time.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">📡</div>
+        <div class="feature-title">Offline Capable</div>
+        <div class="feature-desc">Service worker caching ensures full functionality without internet. Diagnose anywhere — rural roads, garages, parking lots.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">⭐</div>
+        <div class="feature-title">Pro Tier with Advanced ML</div>
+        <div class="feature-desc">Premium subscribers unlock the full YAMNet neural network for deeper analysis and expanded fault type coverage.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🌍</div>
+        <div class="feature-title">Multi-Language Support</div>
+        <div class="feature-desc">Interface and diagnostic reports available in multiple languages, enabling global market penetration from day one.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     7. SUPPORTED FAULT TYPES
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="section-divider"></div>
+<section class="section section-alt page-break">
+  <div class="container">
+    <div class="section-header">
+      <div class="section-number">Section 06</div>
+      <h2 class="section-title">Supported Fault Types</h2>
+      <p class="section-subtitle">Six precision-engineered fault classifiers at launch — each backed by clinical-grade acoustic fingerprints and expert-written diagnostic narratives.</p>
+    </div>
+
+    <div class="fault-table-wrapper">
+      <table class="fault-table">
+        <thead>
+          <tr>
+            <th style="width:22%;">Fault Type</th>
+            <th style="width:12%;">Severity</th>
+            <th>Clinical Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><div class="fault-name">Alternator Bearing Fault</div></td>
+            <td><span class="severity-badge severity-critical">🔴 Critical</span></td>
+            <td>The alternator's internal bearing race is failing, generating a sustained high-frequency whine (4–8 kHz). Causes increasing electrical load instability, progressively draining the battery and risking complete loss of vehicle charging while driving.</td>
+          </tr>
+          <tr>
+            <td><div class="fault-name">Bearing Alternator Degradation</div></td>
+            <td><span class="severity-badge severity-high">🟠 High</span></td>
+            <td>Severe alternator bearing degradation with metal-on-metal contact within the bearing races. Unaddressed, this leads to total alternator seizure and a stranded vehicle.</td>
+          </tr>
+          <tr>
+            <td><div class="fault-name">Intake Leak</div></td>
+            <td><span class="severity-badge severity-low">🟡 Low</span></td>
+            <td>A vacuum or air leak in the intake manifold introduces unmetered air into the combustion mixture, causing a lean fuel condition, misfires under load, and rough idling. Prolonged lean running risks piston and valve damage.</td>
+          </tr>
+          <tr>
+            <td><div class="fault-name">Engine Misfire</div></td>
+            <td><span class="severity-badge severity-medium">🟡 Medium</span></td>
+            <td>One or more cylinders are failing to complete the combustion cycle reliably. Unburnt fuel enters the exhaust stream, damaging the catalytic converter over time.</td>
+          </tr>
+          <tr>
+            <td><div class="fault-name">Motor Starter Issue</div></td>
+            <td><span class="severity-badge severity-high">🟠 High</span></td>
+            <td>An electrical transient consistent with starter motor engagement or relay chatter has been detected. May indicate a weak battery, corroded terminals, or a failing starter solenoid.</td>
+          </tr>
+          <tr>
+            <td><div class="fault-name">Piston Knock</div></td>
+            <td><span class="severity-badge severity-high">🟠 High</span></td>
+            <td>Deep low-frequency knocking consistent with piston slap or big-end bearing wear, indicating significant internal engine wear. Engine rebuild may be required if clearances exceed specification.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="glass-card" style="text-align:center;margin-top:30px;">
+      <p style="color:var(--text-secondary);font-size:1rem;">
+        <span style="color:var(--cyan);font-weight:700;">6 fault types at launch</span> — expanding to <span style="color:var(--emerald);font-weight:700;">20+ by Q4 2026</span> including timing chain, serpentine belt, power steering, water pump, rocker arm, and valve train anomalies.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     8. MARKET OPPORTUNITY
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="section-divider"></div>
+<section class="section page-break">
+  <div class="container">
+    <div class="section-header">
+      <div class="section-number">Section 07</div>
+      <h2 class="section-title">Market Opportunity</h2>
+      <p class="section-subtitle">A massive, underserved market at the intersection of automotive aftermarket and predictive AI.</p>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-box">
+        <div class="stat-value cyan">$500B+</div>
+        <div class="stat-label">Global automotive<br>aftermarket (2025)</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value purple">$15B→$40B</div>
+        <div class="stat-label">Predictive maintenance<br>market growth by 2030</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value emerald">1.4B</div>
+        <div class="stat-label">Cars on the road<br>worldwide</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value amber">167%</div>
+        <div class="stat-label">Predictive maintenance<br>CAGR 2025–2030</div>
+      </div>
+    </div>
+
+    <div class="mermaid-wrapper">
+      <div class="mermaid">
+pie title Addressable Market Segments
+    "DIY Car Owners" : 45
+    "Fleet Operators" : 25
+    "Independent Mechanics" : 20
+    "Insurance and Warranty" : 10
+      </div>
+    </div>
+
+    <div class="solution-grid" style="margin-top:40px;">
+      <div class="glass-card">
+        <h3 style="color:var(--cyan);font-weight:700;font-size:1.1rem;margin-bottom:12px;">🚗 DIY Car Owners</h3>
+        <p style="color:var(--text-secondary);font-size:0.92rem;">Millions of car owners who want early warning of mechanical issues without the cost and inconvenience of a mechanic visit. The largest, most viral-friendly segment.</p>
+      </div>
+      <div class="glass-card">
+        <h3 style="color:var(--cyan);font-weight:700;font-size:1.1rem;margin-bottom:12px;">🚛 Fleet Operators</h3>
+        <p style="color:var(--text-secondary);font-size:0.92rem;">Logistics companies, ride-share fleets, and rental agencies with hundreds or thousands of vehicles. Predictive maintenance directly reduces downtime and Total Cost of Ownership.</p>
+      </div>
+      <div class="glass-card">
+        <h3 style="color:var(--cyan);font-weight:700;font-size:1.1rem;margin-bottom:12px;">🔧 Independent Mechanics</h3>
+        <p style="color:var(--text-secondary);font-size:0.92rem;">Small shops and mobile mechanics who lack expensive diagnostic equipment. Vroomie provides instant triage capability and professional-grade reporting to build customer trust.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     9. BUSINESS MODEL
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="section-divider"></div>
+<section class="section section-alt page-break">
+  <div class="container">
+    <div class="section-header">
+      <div class="section-number">Section 08</div>
+      <h2 class="section-title">Business Model</h2>
+      <p class="section-subtitle">A proven freemium model designed for viral growth with clear upgrade paths and enterprise expansion.</p>
+    </div>
+
+    <div class="tier-grid">
+      <div class="tier-card">
+        <div class="tier-name">Free</div>
+        <div class="tier-price">$0</div>
+        <div class="tier-period">forever</div>
+        <ul class="tier-features">
+          <li>Basic signal analysis</li>
+          <li>Real-time waveform visualization</li>
+          <li>Limited scan history</li>
+          <li>Community support</li>
+        </ul>
+      </div>
+      <div class="tier-card featured">
+        <div class="tier-name">Pro</div>
+        <div class="tier-price">$9.99</div>
+        <div class="tier-period">per month — or $79.99/year</div>
+        <ul class="tier-features">
+          <li>AI-powered fault detection</li>
+          <li>All 6+ fault classifiers</li>
+          <li>Clinical diagnostic reports (PDF)</li>
+          <li>Voice alerts and TTS</li>
+          <li>Unlimited scan history</li>
+          <li>Cloud sync across devices</li>
+          <li>Priority support</li>
+        </ul>
+      </div>
+      <div class="tier-card">
+        <div class="tier-name">Enterprise</div>
+        <div class="tier-price">Custom</div>
+        <div class="tier-period">annual contract</div>
+        <ul class="tier-features">
+          <li>Fleet management dashboard</li>
+          <li>REST API access</li>
+          <li>Bulk vehicle monitoring</li>
+          <li>Custom fault classifiers</li>
+          <li>White-label options</li>
+          <li>Dedicated support and SLA</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="mermaid-wrapper" style="margin-top:40px;">
+      <div class="mermaid">
+graph LR
+    F["Free Users<br/>Viral Growth Engine"] -->|"Convert 5-8%"| P["Pro Subscribers<br/>$9.99/mo Revenue"]
+    P -->|"Upsell"| E["Enterprise<br/>Custom Contracts"]
+    E -->|"Data Flywheel"| AI["AI Improvement<br/>More Fault Types"]
+    AI -->|"Better Product"| F
+    style F fill:#8b5cf620,stroke:#8b5cf6,color:#e2e8f0
+    style P fill:#06b6d420,stroke:#06b6d4,color:#e2e8f0
+    style E fill:#10b98120,stroke:#10b981,color:#e2e8f0
+    style AI fill:#f59e0b20,stroke:#f59e0b,color:#e2e8f0
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     10. COMPETITIVE ADVANTAGE
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="section-divider"></div>
+<section class="section page-break">
+  <div class="container">
+    <div class="section-header">
+      <div class="section-number">Section 09</div>
+      <h2 class="section-title">Competitive Advantage</h2>
+      <p class="section-subtitle">Vroomie occupies a unique position — combining the accessibility of a smartphone app with the diagnostic depth of professional equipment.</p>
+    </div>
+
+    <div class="comparison-table-wrapper">
+      <table class="comparison-table">
+        <thead>
+          <tr>
+            <th>Dimension</th>
+            <th>OBD-II Scanners</th>
+            <th>Mechanic Visit</th>
+            <th>Other Apps</th>
+            <th>Dealership</th>
+            <th>Vroomie ✨</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Hardware Required</td>
+            <td>$30–$300 dongle</td>
+            <td>N/A</td>
+            <td>Varies</td>
+            <td>Proprietary tools</td>
+            <td><span class="check">Phone mic only ✓</span></td>
+          </tr>
+          <tr>
+            <td>Detects Mechanical Faults</td>
+            <td><span class="cross">✗ Electrical codes only</span></td>
+            <td><span class="check">✓ Expert ear</span></td>
+            <td><span class="cross">✗ Basic</span></td>
+            <td><span class="check">✓</span></td>
+            <td><span class="check">✓ AI-powered ✓</span></td>
+          </tr>
+          <tr>
+            <td>Cost per Diagnosis</td>
+            <td>$0 (after purchase)</td>
+            <td>$100–$200</td>
+            <td>Free–$5</td>
+            <td>$150–$300</td>
+            <td><span class="check">Free–$9.99/mo ✓</span></td>
+          </tr>
+          <tr>
+            <td>Time to Result</td>
+            <td>Minutes</td>
+            <td>Hours to days</td>
+            <td>Minutes</td>
+            <td>Hours to days</td>
+            <td><span class="check">Under 30 seconds ✓</span></td>
+          </tr>
+          <tr>
+            <td>Works Offline</td>
+            <td><span class="check">✓</span></td>
+            <td>N/A</td>
+            <td><span class="cross">✗ Most need cloud</span></td>
+            <td>N/A</td>
+            <td><span class="check">✓ Fully offline ✓</span></td>
+          </tr>
+          <tr>
+            <td>Privacy</td>
+            <td>Varies</td>
+            <td>N/A</td>
+            <td><span class="cross">✗ Cloud upload</span></td>
+            <td>Dealer retains data</td>
+            <td><span class="check">On-device only ✓</span></td>
+          </tr>
+          <tr>
+            <td>Clinical Fault Reports</td>
+            <td><span class="cross">✗ Error codes</span></td>
+            <td>Verbal only</td>
+            <td><span class="cross">✗</span></td>
+            <td>Dealership format</td>
+            <td><span class="check">PDF with fix steps ✓</span></td>
+          </tr>
+          <tr>
+            <td>Vehicle Compatibility</td>
+            <td>Post-1996 (OBD-II)</td>
+            <td>Any</td>
+            <td>Limited</td>
+            <td>Brand-specific</td>
+            <td><span class="check">Any vehicle with engine ✓</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     11. PRODUCT ROADMAP
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="section-divider"></div>
+<section class="section section-alt page-break">
+  <div class="container">
+    <div class="section-header">
+      <div class="section-number">Section 10</div>
+      <h2 class="section-title">Product Roadmap</h2>
+      <p class="section-subtitle">A phased execution plan from launch to platform — each milestone expanding capability and market reach.</p>
+    </div>
+
+    <div class="mermaid-wrapper">
+      <div class="mermaid">
+gantt
+    title Vroomie Product Roadmap 2026–2027
+    dateFormat YYYY-MM-DD
+    axisFormat %b %Y
+
+    section Launch
+    PWA Launch with 6 Fault Types        :done, 2026-07-01, 2026-09-30
+    section Expansion
+    Expand to 20+ Fault Types            :active, 2026-10-01, 2026-12-31
+    Native Android and iOS Apps          :2026-10-01, 2026-12-31
+    section Platform
+    Fleet Management Dashboard           :2027-01-01, 2027-03-31
+    OBD-II Hybrid Diagnostics            :2027-04-01, 2027-06-30
+    section Ecosystem
+    Insurance Partnership API            :2027-07-01, 2027-09-30
+    Predictive Maintenance Scheduling    :2027-10-01, 2027-12-31
+      </div>
+    </div>
+
+    <div class="stats-grid" style="margin-top:50px;">
+      <div class="stat-box" style="text-align:left;padding-left:28px;">
+        <div style="color:var(--cyan);font-weight:800;font-size:1.1rem;margin-bottom:8px;">Q3 2026 — Launch</div>
+        <p style="color:var(--text-secondary);font-size:0.9rem;line-height:1.6;">PWA launch with 6 fault types, Pro subscription, cloud sync, and PDF reports. First-mover advantage in audio-based vehicle diagnostics.</p>
+      </div>
+      <div class="stat-box" style="text-align:left;padding-left:28px;">
+        <div style="color:var(--purple);font-weight:800;font-size:1.1rem;margin-bottom:8px;">Q4 2026 — Expansion</div>
+        <p style="color:var(--text-secondary);font-size:0.9rem;line-height:1.6;">Expand fault library to 20+ types. Launch native Android and iOS apps for broader market penetration and app store distribution.</p>
+      </div>
+      <div class="stat-box" style="text-align:left;padding-left:28px;">
+        <div style="color:var(--emerald);font-weight:800;font-size:1.1rem;margin-bottom:8px;">H1 2027 — Platform</div>
+        <p style="color:var(--text-secondary);font-size:0.9rem;line-height:1.6;">Fleet management dashboard for enterprise customers. OBD-II integration enables hybrid diagnostics combining audio AI with electrical data.</p>
+      </div>
+      <div class="stat-box" style="text-align:left;padding-left:28px;">
+        <div style="color:var(--amber);font-weight:800;font-size:1.1rem;margin-bottom:8px;">H2 2027 — Ecosystem</div>
+        <p style="color:var(--text-secondary);font-size:0.9rem;line-height:1.6;">Insurance partnership API for risk-adjusted premiums. Predictive maintenance scheduling based on historical scan data and fault progression patterns.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     12. TEAM & CONTACT
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="section-divider"></div>
+<section class="section page-break">
+  <div class="container">
+    <div class="section-header">
+      <div class="section-number">Section 11</div>
+      <h2 class="section-title">Team & Contact</h2>
+      <p class="section-subtitle">The people building the future of vehicle diagnostics.</p>
+    </div>
+
+    <div class="team-placeholder">
+      <div style="font-size:3rem;margin-bottom:20px;">👥</div>
+      <h3>Team Profiles — Coming Soon</h3>
+      <p style="margin-top:12px;">Founding team bios, advisors, and contact information will be added here.</p>
+      <p style="margin-top:24px;color:var(--text-secondary);">
+        For investor inquiries, please reach out at:<br>
+        <span style="color:var(--cyan);font-weight:600;font-size:1.1rem;">investors@vroomie.in</span>
+      </p>
+    </div>
+
+    <div class="animated-border-card" style="margin-top:40px;">
+      <div class="card-inner" style="text-align:center;">
+        <h3 style="font-size:1.8rem;font-weight:800;margin-bottom:12px;background:linear-gradient(135deg,#8b5cf6,#06b6d4);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">Ready to Drive the Future?</h3>
+        <p style="color:var(--text-secondary);font-size:1.05rem;max-width:600px;margin:0 auto 20px;">
+          Vroomie is transforming how 1.4 billion vehicles are maintained — replacing guesswork with AI-powered precision, directly from the device already in every driver's pocket.
+        </p>
+        <p style="color:var(--text-muted);font-size:0.88rem;">
+          🌐 <a href="https://vroomie.in" style="color:var(--cyan);text-decoration:none;font-weight:600;">vroomie.in</a>
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     FOOTER
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="section-divider"></div>
+<footer class="doc-footer">
+  <p>© 2026 Vroomie. All rights reserved. &nbsp;|&nbsp; <a href="https://vroomie.in">vroomie.in</a></p>
+  <p style="margin-top:8px;font-size:0.72rem;opacity:0.5;">
+    This document contains confidential and proprietary information. Distribution without written consent is prohibited.
+  </p>
+</footer>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     MERMAID INITIALIZATION
+     ═══════════════════════════════════════════════════════════════════ -->
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    themeVariables: {
+      primaryColor: '#8b5cf620',
+      primaryTextColor: '#e2e8f0',
+      primaryBorderColor: '#8b5cf6',
+      lineColor: '#64748b',
+      secondaryColor: '#06b6d420',
+      tertiaryColor: '#10b98120',
+      fontSize: '14px',
+      fontFamily: 'Inter, sans-serif'
+    },
+    flowchart: { htmlLabels: true, curve: 'basis' },
+    sequence: { mirrorActors: false, actorFontSize: '14px', noteFontSize: '12px' },
+    gantt: { fontSize: 12, barHeight: 24, barGap: 6, topPadding: 40 },
+    pie: { textPosition: 0.75 }
+  });
+</script>
+
+</body>
+</html>

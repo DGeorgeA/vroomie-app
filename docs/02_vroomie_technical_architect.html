@@ -1,0 +1,1941 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Vroomie — Technical Architecture Review</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  /* ═══════════════════════════════════════════════════════════════
+     VROOMIE — TECHNICAL ARCHITECT EDITION
+     Deep Navy/Slate + Amber/Gold Accent Theme
+     ═══════════════════════════════════════════════════════════════ */
+
+  :root {
+    --bg-primary: #0b1120;
+    --bg-secondary: #0f1729;
+    --bg-tertiary: #131d33;
+    --bg-card: #111827;
+    --bg-card-hover: #1a2540;
+    --border: #1e2d4a;
+    --border-accent: #f59e0b33;
+    --text-primary: #f1f5f9;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+    --accent: #f59e0b;
+    --accent-dark: #d97706;
+    --accent-glow: #f59e0b40;
+    --amber-50: #fffbeb;
+    --amber-100: #fef3c7;
+    --amber-200: #fde68a;
+    --amber-300: #fcd34d;
+    --amber-400: #fbbf24;
+    --amber-500: #f59e0b;
+    --amber-600: #d97706;
+    --amber-700: #b45309;
+    --red-400: #f87171;
+    --red-500: #ef4444;
+    --red-bg: #450a0a20;
+    --green-400: #4ade80;
+    --green-500: #22c55e;
+    --green-bg: #052e1620;
+    --blue-400: #60a5fa;
+    --blue-500: #3b82f6;
+    --blue-bg: #0c1a3620;
+    --cyan-400: #22d3ee;
+    --purple-400: #a78bfa;
+    --orange-400: #fb923c;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    line-height: 1.7;
+    font-size: 15px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  .container {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 0 40px;
+  }
+
+  /* ── Cover Page ────────────────────────────────── */
+  .cover-page {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+    background:
+      radial-gradient(ellipse 80% 50% at 50% -20%, #f59e0b12 0%, transparent 60%),
+      radial-gradient(ellipse 60% 40% at 80% 80%, #d9770610 0%, transparent 50%),
+      linear-gradient(180deg, #0b1120 0%, #0f1729 100%);
+  }
+
+  .cover-page::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23f59e0b' fill-opacity='0.03'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+    opacity: 0.6;
+  }
+
+  .cover-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: linear-gradient(135deg, #f59e0b15, #d9770620);
+    border: 1px solid var(--border-accent);
+    border-radius: 100px;
+    padding: 8px 24px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 48px;
+    position: relative;
+    z-index: 1;
+    backdrop-filter: blur(20px);
+  }
+
+  .cover-badge .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 12px var(--accent-glow);
+  }
+
+  .cover-title {
+    font-size: 64px;
+    font-weight: 900;
+    letter-spacing: -2px;
+    line-height: 1.05;
+    margin-bottom: 20px;
+    position: relative;
+    z-index: 1;
+    background: linear-gradient(135deg, #ffffff 0%, #fde68a 40%, #f59e0b 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .cover-subtitle {
+    font-size: 22px;
+    font-weight: 300;
+    color: var(--text-secondary);
+    margin-bottom: 56px;
+    position: relative;
+    z-index: 1;
+    letter-spacing: 0.5px;
+  }
+
+  .cover-meta-grid {
+    display: grid;
+    grid-template-columns: repeat(4, auto);
+    gap: 36px;
+    position: relative;
+    z-index: 1;
+    margin-bottom: 64px;
+  }
+
+  .cover-meta-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .cover-meta-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 2.5px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .cover-meta-value {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .cover-confidential {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    background: #ef444415;
+    border: 1px solid #ef444430;
+    border-radius: 8px;
+    padding: 12px 28px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 2.5px;
+    text-transform: uppercase;
+    color: var(--red-400);
+  }
+
+  .cover-confidential::before {
+    content: '🔒';
+    font-size: 14px;
+  }
+
+  /* ── Section Headers ───────────────────────────── */
+  .section {
+    padding: 80px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .section-number {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px; height: 40px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-dark));
+    color: #0b1120;
+    font-weight: 800;
+    font-size: 16px;
+    margin-bottom: 16px;
+    box-shadow: 0 4px 20px var(--accent-glow);
+  }
+
+  .section-title {
+    font-size: 36px;
+    font-weight: 800;
+    letter-spacing: -1px;
+    margin-bottom: 8px;
+    background: linear-gradient(135deg, var(--text-primary), var(--amber-300));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .section-desc {
+    font-size: 16px;
+    color: var(--text-secondary);
+    margin-bottom: 40px;
+    max-width: 700px;
+    line-height: 1.8;
+  }
+
+  /* ── ADR Cards ─────────────────────────────────── */
+  .adr-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .adr-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 28px 32px;
+    transition: all 0.3s;
+  }
+
+  .adr-card:hover {
+    border-color: var(--accent);
+    box-shadow: 0 0 30px var(--accent-glow);
+    transform: translateY(-1px);
+  }
+
+  .adr-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+
+  .adr-id {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 72px;
+    padding: 4px 14px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, #f59e0b20, #d9770615);
+    border: 1px solid var(--border-accent);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 1px;
+  }
+
+  .adr-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .adr-body {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 20px;
+    margin-top: 16px;
+  }
+
+  .adr-col h4 {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+  }
+
+  .adr-col p {
+    font-size: 13.5px;
+    color: var(--text-secondary);
+    line-height: 1.7;
+  }
+
+  .adr-col.decision p {
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .adr-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 6px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+  }
+
+  .adr-status.accepted {
+    background: #22c55e15;
+    color: var(--green-400);
+    border: 1px solid #22c55e30;
+  }
+
+  .adr-status.deprecated {
+    background: #f5920b15;
+    color: var(--orange-400);
+    border: 1px solid #f5920b30;
+  }
+
+  /* ── Diagram Containers ────────────────────────── */
+  .diagram-container {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 32px;
+    margin: 24px 0;
+    overflow-x: auto;
+  }
+
+  .diagram-container .diagram-title {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .diagram-container .diagram-title::before {
+    content: '';
+    width: 3px;
+    height: 16px;
+    background: var(--accent);
+    border-radius: 2px;
+  }
+
+  .mermaid {
+    display: flex;
+    justify-content: center;
+  }
+
+  /* ── Data Tables ───────────────────────────────── */
+  .data-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 24px 0;
+    font-size: 14px;
+  }
+
+  .data-table thead th {
+    text-align: left;
+    padding: 14px 20px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: var(--bg-tertiary);
+    border-bottom: 2px solid var(--accent);
+  }
+
+  .data-table thead th:first-child { border-radius: 12px 0 0 0; }
+  .data-table thead th:last-child { border-radius: 0 12px 0 0; }
+
+  .data-table tbody td {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-secondary);
+    vertical-align: top;
+  }
+
+  .data-table tbody tr:hover {
+    background: var(--bg-card-hover);
+  }
+
+  .data-table tbody tr:last-child td:first-child { border-radius: 0 0 0 12px; }
+  .data-table tbody tr:last-child td:last-child { border-radius: 0 0 12px 0; }
+
+  .data-table .metric-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 600;
+    color: var(--accent);
+    font-size: 14px;
+  }
+
+  /* ── Code Blocks ───────────────────────────────── */
+  code, .code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    background: #0b112080;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 2px 8px;
+    color: var(--amber-300);
+  }
+
+  pre {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    overflow-x: auto;
+    margin: 16px 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    line-height: 1.8;
+    color: var(--text-secondary);
+  }
+
+  /* ── Alert Boxes ───────────────────────────────── */
+  .alert {
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin: 20px 0;
+    border-left: 4px solid;
+    font-size: 14px;
+    line-height: 1.7;
+  }
+
+  .alert-warning {
+    background: #f59e0b08;
+    border-color: var(--accent);
+    color: var(--amber-200);
+  }
+
+  .alert-danger {
+    background: #ef444408;
+    border-color: var(--red-500);
+    color: #fca5a5;
+  }
+
+  .alert-info {
+    background: #3b82f608;
+    border-color: var(--blue-500);
+    color: #93c5fd;
+  }
+
+  .alert-success {
+    background: #22c55e08;
+    border-color: var(--green-500);
+    color: #86efac;
+  }
+
+  .alert strong {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 12px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+  }
+
+  /* ── Severity Badges ───────────────────────────── */
+  .severity {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 10px;
+    border-radius: 6px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  .severity-critical { background: #ef444420; color: var(--red-400); border: 1px solid #ef444440; }
+  .severity-high { background: #fb923c20; color: var(--orange-400); border: 1px solid #fb923c40; }
+  .severity-medium { background: #fbbf2420; color: var(--amber-400); border: 1px solid #fbbf2440; }
+  .severity-low { background: #22c55e20; color: var(--green-400); border: 1px solid #22c55e40; }
+
+  /* ── Concurrency Section ───────────────────────── */
+  .concurrency-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin: 24px 0;
+  }
+
+  .concurrency-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 24px;
+  }
+
+  .concurrency-card h4 {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .concurrency-card h4 .thread-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+  }
+
+  .concurrency-card ul {
+    list-style: none;
+    padding: 0;
+  }
+
+  .concurrency-card li {
+    font-size: 13px;
+    color: var(--text-secondary);
+    padding: 6px 0;
+    border-bottom: 1px solid #1e2d4a40;
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .concurrency-card li::before {
+    content: '→';
+    color: var(--accent);
+    font-weight: 700;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+
+  /* ── Debt Items ────────────────────────────────── */
+  .debt-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin: 24px 0;
+  }
+
+  .debt-item {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px 24px;
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+  }
+
+  .debt-item .debt-icon {
+    flex-shrink: 0;
+    width: 36px; height: 36px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+  }
+
+  .debt-item .debt-content h4 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+  }
+
+  .debt-item .debt-content p {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.7;
+  }
+
+  /* ── Scalability Assessment ────────────────────── */
+  .scale-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin: 24px 0;
+  }
+
+  .scale-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 24px;
+    text-align: center;
+  }
+
+  .scale-card .scale-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+  }
+
+  .scale-card .scale-value {
+    font-size: 20px;
+    font-weight: 800;
+    color: var(--accent);
+    margin-bottom: 8px;
+  }
+
+  .scale-card .scale-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+  }
+
+  /* ── Export Button ──────────────────────────────── */
+  .export-btn {
+    position: fixed;
+    bottom: 32px;
+    right: 32px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-dark));
+    color: #0b1120;
+    border: none;
+    border-radius: 14px;
+    padding: 14px 28px;
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    box-shadow: 0 8px 30px var(--accent-glow), 0 0 0 1px var(--accent);
+    z-index: 1000;
+    transition: all 0.3s;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .export-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 12px 40px #f59e0b50;
+  }
+
+  .export-btn svg {
+    width: 16px; height: 16px;
+  }
+
+  /* ── Page Break ────────────────────────────────── */
+  .page-break {
+    page-break-before: always;
+  }
+
+  /* ═══ PRINT STYLESHEET ═══════════════════════════ */
+  @media print {
+    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+
+    body {
+      background: #ffffff !important;
+      color: #1a1a1a !important;
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .container { max-width: 100%; padding: 0 24px; }
+
+    .export-btn { display: none !important; }
+
+    .cover-page {
+      min-height: auto;
+      padding: 80px 0;
+      background: #ffffff !important;
+    }
+
+    .cover-page::before { display: none; }
+
+    .cover-title {
+      font-size: 36px;
+      background: none !important;
+      -webkit-text-fill-color: #1a1a1a !important;
+      color: #1a1a1a !important;
+    }
+
+    .cover-subtitle { color: #555 !important; font-size: 16px; }
+    .cover-badge { background: #f5f5f5 !important; border-color: #ddd !important; color: #b45309 !important; }
+    .cover-confidential { background: #fef2f2 !important; border-color: #fca5a5 !important; }
+    .cover-meta-value { color: #1a1a1a !important; }
+
+    .section {
+      padding: 32px 0;
+      border-bottom: 1px solid #e5e7eb;
+    }
+
+    .section-number {
+      background: #f59e0b !important;
+      color: white !important;
+    }
+
+    .section-title {
+      font-size: 22px;
+      background: none !important;
+      -webkit-text-fill-color: #1a1a1a !important;
+    }
+
+    .section-desc { color: #555 !important; font-size: 12px; }
+
+    .adr-card, .diagram-container, .concurrency-card, .debt-item, .scale-card {
+      background: #fafafa !important;
+      border-color: #e5e7eb !important;
+      box-shadow: none !important;
+    }
+
+    .adr-card:hover { transform: none; }
+
+    .data-table thead th {
+      background: #f5f5f5 !important;
+      color: #b45309 !important;
+      border-bottom-color: #d97706 !important;
+    }
+
+    .data-table tbody td {
+      border-bottom-color: #e5e7eb !important;
+      color: #374151 !important;
+    }
+
+    .data-table .metric-value { color: #b45309 !important; }
+
+    .alert {
+      background: #f9fafb !important;
+      color: #374151 !important;
+    }
+
+    pre, code {
+      background: #f5f5f5 !important;
+      border-color: #e5e7eb !important;
+      color: #374151 !important;
+    }
+
+    .mermaid svg { max-width: 100% !important; }
+
+    .page-break { page-break-before: always; }
+
+    @page {
+      margin: 1.5cm;
+      size: A4;
+    }
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════
+     SECTION 0: COVER PAGE
+     ═══════════════════════════════════════════════════════════ -->
+<div class="cover-page">
+  <div class="cover-badge">
+    <span class="dot"></span>
+    Technical Architect Edition
+  </div>
+
+  <h1 class="cover-title">Vroomie</h1>
+  <p class="cover-subtitle">Technical Architecture Review</p>
+
+  <div class="cover-meta-grid">
+    <div class="cover-meta-item">
+      <span class="cover-meta-label">Version</span>
+      <span class="cover-meta-value">2.0.0</span>
+    </div>
+    <div class="cover-meta-item">
+      <span class="cover-meta-label">Date</span>
+      <span class="cover-meta-value">June 2026</span>
+    </div>
+    <div class="cover-meta-item">
+      <span class="cover-meta-label">Audience</span>
+      <span class="cover-meta-value">Architects & Leads</span>
+    </div>
+    <div class="cover-meta-item">
+      <span class="cover-meta-label">Classification</span>
+      <span class="cover-meta-value">Internal</span>
+    </div>
+  </div>
+
+  <div class="cover-confidential">
+    Confidential — For Technical Architects & Engineering Leadership Only
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     SECTION 1: ARCHITECTURE DECISION RECORDS
+     ═══════════════════════════════════════════════════════════ -->
+<div class="section page-break">
+  <div class="container">
+    <div class="section-number">1</div>
+    <h2 class="section-title">Architecture Decision Records</h2>
+    <p class="section-desc">
+      Every significant technology choice is documented here with the context that drove the decision,
+      the alternatives evaluated, and the consequences accepted. These are living records — status will evolve as the platform matures.
+    </p>
+
+    <div class="adr-grid">
+      <!-- ADR-001 -->
+      <div class="adr-card">
+        <div class="adr-header">
+          <span class="adr-id">ADR-001</span>
+          <span class="adr-title">YAMNet over Custom CNN for Audio Classification</span>
+          <span class="adr-status accepted">✓ Accepted</span>
+        </div>
+        <div class="adr-body">
+          <div class="adr-col decision">
+            <h4>Decision</h4>
+            <p>Use Google's pre-trained YAMNet model via TensorFlow.js (<code>tf.loadGraphModel</code> from TF Hub) for all audio classification.</p>
+          </div>
+          <div class="adr-col">
+            <h4>Context & Rationale</h4>
+            <p>YAMNet provides 1024-dimensional embeddings from AudioSet — 521 classes, pre-trained on 2M+ YouTube clips. It runs fully in-browser via TF.js GraphModel (~1.8MB), requires zero training infrastructure, and delivers production-quality embeddings from day one. A custom CNN would need labelled automotive data, GPU training cycles, and model hosting — too expensive for MVP.</p>
+          </div>
+          <div class="adr-col">
+            <h4>Consequences</h4>
+            <p>Locked to YAMNet's representation space — automotive sounds not in AudioSet may have weaker separation. Model URL is hardcoded (<code>tfhub.dev/google/tfjs-model/yamnet/tfjs/1</code>). No control over embedding quality for edge cases. Migration path: custom fine-tuned model in Phase 3.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- ADR-002 -->
+      <div class="adr-card">
+        <div class="adr-header">
+          <span class="adr-id">ADR-002</span>
+          <span class="adr-title">ScriptProcessorNode over AudioWorklet for Capture</span>
+          <span class="adr-status deprecated">⚠ Deprecated</span>
+        </div>
+        <div class="adr-body">
+          <div class="adr-col decision">
+            <h4>Decision</h4>
+            <p>Use <code>ScriptProcessorNode</code> with 4096-sample buffer for real-time audio capture into a 16000-sample ring buffer (1-second windows).</p>
+          </div>
+          <div class="adr-col">
+            <h4>Context & Rationale</h4>
+            <p>ScriptProcessorNode is simpler: synchronous callback, no Worker/SharedArrayBuffer complexity, and sufficient for 1-second classification windows at 16kHz. AudioWorklet requires cross-origin isolation headers (<code>COOP</code>/<code>COEP</code>), a separate JS file, and message-passing — significant complexity for marginal gain when classification runs at ~1 Hz anyway.</p>
+          </div>
+          <div class="adr-col">
+            <h4>Consequences</h4>
+            <p>ScriptProcessorNode is deprecated per W3C spec. Audio processing runs on main thread, competing with React rendering. Chrome console shows deprecation warning. Priority migration target — see ADR-002 in roadmap (Phase 1).</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- ADR-003 -->
+      <div class="adr-card">
+        <div class="adr-header">
+          <span class="adr-id">ADR-003</span>
+          <span class="adr-title">OfflineAudioContext for WAV Decoding & Resampling</span>
+          <span class="adr-status accepted">✓ Accepted</span>
+        </div>
+        <div class="adr-body">
+          <div class="adr-col decision">
+            <h4>Decision</h4>
+            <p>Decode reference WAV files using a temporary <code>AudioContext.decodeAudioData()</code>, then resample to exactly 16kHz via <code>OfflineAudioContext</code>.</p>
+          </div>
+          <div class="adr-col">
+            <h4>Context & Rationale</h4>
+            <p>YAMNet expects exactly 16kHz mono input. Reference WAVs may be recorded at 44.1kHz or 48kHz. OfflineAudioContext provides deterministic resampling — the browser's built-in SRC algorithm runs offline (not real-time), producing identical output across runs. Manual resampling (linear interpolation) introduces aliasing artefacts.</p>
+          </div>
+          <div class="adr-col">
+            <h4>Consequences</h4>
+            <p>Creates a temporary AudioContext per WAV file during fingerprint generation (6 files). Each context is properly closed after use. Adds ~200ms per file decode. Cross-browser SRC quality varies slightly but is acceptable for embedding comparison.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- ADR-004 -->
+      <div class="adr-card">
+        <div class="adr-header">
+          <span class="adr-id">ADR-004</span>
+          <span class="adr-title">Cosine Similarity over Dynamic Time Warping</span>
+          <span class="adr-status accepted">✓ Accepted</span>
+        </div>
+        <div class="adr-body">
+          <div class="adr-col decision">
+            <h4>Decision</h4>
+            <p>Use cosine similarity (threshold ≥ 0.75) to match live 1024-d embeddings against reference fingerprints. Reject DTW, Euclidean distance, and learned metrics.</p>
+          </div>
+          <div class="adr-col">
+            <h4>Context & Rationale</h4>
+            <p>Cosine similarity is O(n) for fixed-dimension vectors — computes in &lt;0.1ms for 1024 floats. DTW is O(n²) and designed for variable-length sequences, not fixed embeddings. YAMNet's mean-pooled embeddings are unit-normalised in practice, making cosine the natural metric. Threshold of 0.75 accounts for real-world mic noise, reverb, and frequency response curves.</p>
+          </div>
+          <div class="adr-col">
+            <h4>Consequences</h4>
+            <p>Single-threshold binary decision — no learned decision boundary. Sensitivity fixed at 0.75 (some hardening at 0.82 in audioMatchingEngine for strict mode). False negatives on distant mic positions; false positives on ambient engine-like sounds. Mitigation: session accumulation requires consistent detection across multiple windows.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- ADR-005 -->
+      <div class="adr-card">
+        <div class="adr-header">
+          <span class="adr-id">ADR-005</span>
+          <span class="adr-title">localStorage Cache over IndexedDB for Fingerprints</span>
+          <span class="adr-status accepted">✓ Accepted</span>
+        </div>
+        <div class="adr-body">
+          <div class="adr-col decision">
+            <h4>Decision</h4>
+            <p>Cache generated YAMNet fingerprints in <code>localStorage</code> under key <code>vroomie_yamnet_fingerprints_v6</code>. Regenerate from Supabase WAVs on cache miss.</p>
+          </div>
+          <div class="adr-col">
+            <h4>Context & Rationale</h4>
+            <p>6 fingerprints × 1024 floats × 8 bytes/float ≈ 48KB + JSON metadata ≈ ~120KB total. Well within localStorage's 5–10MB limit. API is synchronous and simple (<code>getItem</code>/<code>setItem</code>). IndexedDB adds async complexity, cursor management, and transaction semantics — overkill for a flat array. <code>idb</code> package exists in deps but is unused for this path.</p>
+          </div>
+          <div class="adr-col">
+            <h4>Consequences</h4>
+            <p>No TTL — stale fingerprints persist until cache key version bumps (<code>v6</code>). No integrity validation — corrupted JSON silently re-parses. Device-bound — no cross-device sync. If localStorage is full, <code>setItem</code> throws and fingerprints regenerate each session (acceptable degradation).</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- ADR-006 -->
+      <div class="adr-card">
+        <div class="adr-header">
+          <span class="adr-id">ADR-006</span>
+          <span class="adr-title">Supabase over Firebase for Backend Platform</span>
+          <span class="adr-status accepted">✓ Accepted</span>
+        </div>
+        <div class="adr-body">
+          <div class="adr-col decision">
+            <h4>Decision</h4>
+            <p>Use Supabase (PostgreSQL, Storage, Auth, RLS) as the sole backend platform. No Firebase, no custom API servers.</p>
+          </div>
+          <div class="adr-col">
+            <h4>Context & Rationale</h4>
+            <p>Supabase provides PostgreSQL (relational queries, JOINs, migrations), S3-compatible Storage (WAV/WebM hosting), GoTrue Auth, and Row-Level Security — all accessible via <code>@supabase/supabase-js</code> client SDK. Firebase's NoSQL (Firestore) makes relational queries awkward. Supabase's open-source model avoids vendor lock-in. PostgreSQL enables future analytics without ETL.</p>
+          </div>
+          <div class="adr-col">
+            <h4>Consequences</h4>
+            <p>Single point of dependency — Supabase outage = no persistence. Anon key exposed in client bundle (public, read-only bucket access only — writes protected by RLS). Connection string is environment-specific. Supabase free tier limits: 500MB DB, 1GB storage, 50K auth users.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- ADR-007 -->
+      <div class="adr-card">
+        <div class="adr-header">
+          <span class="adr-id">ADR-007</span>
+          <span class="adr-title">Dual AudioContext Architecture</span>
+          <span class="adr-status accepted">✓ Accepted</span>
+        </div>
+        <div class="adr-body">
+          <div class="adr-col decision">
+            <h4>Decision</h4>
+            <p>Run two concurrent AudioContexts: one at 16kHz (for ML inference via ScriptProcessor) and one at the device's native sample rate (for waveform visualisation via AnalyserNode).</p>
+          </div>
+          <div class="adr-col">
+            <h4>Context & Rationale</h4>
+            <p>YAMNet requires 16kHz input. Forcing the waveform visualiser to 16kHz produces jagged, low-fidelity canvas rendering. A native-rate context (typically 44.1kHz or 48kHz) provides smooth, high-resolution waveform data via <code>analyser.getByteTimeDomainData()</code> with <code>fftSize=2048</code>. Both contexts share the same MediaStream (mic) without interference.</p>
+          </div>
+          <div class="adr-col">
+            <h4>Consequences</h4>
+            <p>Two AudioContext instances on a single mic stream — some browsers limit to 6 concurrent contexts. Teardown sequence is critical: native context must close before extraction stops, which must happen after MediaRecorder's <code>onstop</code> fires. Memory overhead: ~2× audio graph allocation.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     SECTION 2: SYSTEM CONTEXT DIAGRAM (C4 Level 1)
+     ═══════════════════════════════════════════════════════════ -->
+<div class="section page-break">
+  <div class="container">
+    <div class="section-number">2</div>
+    <h2 class="section-title">System Context Diagram</h2>
+    <p class="section-desc">
+      C4 Level 1 — Shows Vroomie's position in its ecosystem, the external actors, and the systems it interacts with.
+    </p>
+
+    <div class="diagram-container">
+      <div class="diagram-title">C4 Level 1 — System Context</div>
+      <div class="mermaid">
+graph TB
+    subgraph Users["fa:fa-users Users"]
+        MU["Mobile User<br/>(iOS/Android Browser)"]
+        DU["Desktop User<br/>(Chrome/Edge)"]
+    end
+
+    VP["Vroomie PWA<br/>React SPA + TF.js<br/>Client-Side ML Inference"]
+
+    subgraph External["External Systems"]
+        SB["Supabase Backend<br/>PostgreSQL + Storage + Auth"]
+        TH["TF Hub CDN<br/>YAMNet Model Weights"]
+        GH["GitHub Pages<br/>Static Hosting (dist/)"]
+    end
+
+    MU -->|"HTTPS / Mic Audio"| VP
+    DU -->|"HTTPS / Mic Audio"| VP
+    VP -->|"REST/Realtime<br/>supabase-js SDK"| SB
+    VP -->|"HTTPS GET<br/>Model Download (~1.8MB)"| TH
+    GH -->|"Serves SPA Bundle<br/>+ Service Worker"| VP
+
+    style VP fill:#f59e0b,stroke:#d97706,color:#0b1120,stroke-width:2px
+    style SB fill:#3b82f6,stroke:#2563eb,color:#ffffff,stroke-width:1px
+    style TH fill:#8b5cf6,stroke:#7c3aed,color:#ffffff,stroke-width:1px
+    style GH fill:#22c55e,stroke:#16a34a,color:#ffffff,stroke-width:1px
+    style MU fill:#1e293b,stroke:#475569,color:#f1f5f9,stroke-width:1px
+    style DU fill:#1e293b,stroke:#475569,color:#f1f5f9,stroke-width:1px
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     SECTION 3: CONTAINER DIAGRAM (C4 Level 2)
+     ═══════════════════════════════════════════════════════════ -->
+<div class="section page-break">
+  <div class="container">
+    <div class="section-number">3</div>
+    <h2 class="section-title">Container Diagram</h2>
+    <p class="section-desc">
+      C4 Level 2 — The major containers (deployable units) that make up the Vroomie system, and how they communicate.
+    </p>
+
+    <div class="diagram-container">
+      <div class="diagram-title">C4 Level 2 — Containers</div>
+      <div class="mermaid">
+graph TB
+    subgraph Browser["Browser Runtime"]
+        SPA["React SPA<br/>(Vite + React 18)"]
+        APE["Audio Processing Engine<br/>(ScriptProcessorNode + Ring Buffer)"]
+        MLE["ML Classification Engine<br/>(TF.js + YAMNet GraphModel)"]
+        SW["Service Worker<br/>(Workbox + Cache Strategies)"]
+        LS["localStorage<br/>(Fingerprint Cache ~120KB)"]
+    end
+
+    subgraph Supabase["Supabase Cloud"]
+        PG["PostgreSQL<br/>(analyses table + RLS)"]
+        ST["Supabase Storage<br/>(audio-analyses, anomaly-patterns)"]
+        AU["GoTrue Auth<br/>(Anonymous + Pro tiers)"]
+    end
+
+    SPA -->|"startExtraction()"| APE
+    APE -->|"1s PCM Float32"| MLE
+    MLE -->|"match result"| SPA
+    MLE -->|"read/write fingerprints"| LS
+    SPA -->|"insert analyses"| PG
+    SPA -->|"upload WebM blobs"| ST
+    SPA -->|"auth state"| AU
+    MLE -->|"fetch WAV references"| ST
+    SW -->|"cache models + assets"| SPA
+
+    style SPA fill:#f59e0b,stroke:#d97706,color:#0b1120,stroke-width:2px
+    style APE fill:#fb923c,stroke:#ea580c,color:#0b1120,stroke-width:1px
+    style MLE fill:#fbbf24,stroke:#d97706,color:#0b1120,stroke-width:1px
+    style SW fill:#94a3b8,stroke:#64748b,color:#0b1120,stroke-width:1px
+    style LS fill:#64748b,stroke:#475569,color:#f1f5f9,stroke-width:1px
+    style PG fill:#3b82f6,stroke:#2563eb,color:#ffffff,stroke-width:1px
+    style ST fill:#60a5fa,stroke:#3b82f6,color:#0b1120,stroke-width:1px
+    style AU fill:#818cf8,stroke:#6366f1,color:#ffffff,stroke-width:1px
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     SECTION 4: COMPONENT DIAGRAM (C4 Level 3)
+     ═══════════════════════════════════════════════════════════ -->
+<div class="section page-break">
+  <div class="container">
+    <div class="section-number">4</div>
+    <h2 class="section-title">Component Diagram</h2>
+    <p class="section-desc">
+      C4 Level 3 — All modules and their interfaces within the browser runtime, showing the function-level API contracts between components.
+    </p>
+
+    <div class="diagram-container">
+      <div class="diagram-title">C4 Level 3 — Components & Interfaces</div>
+      <div class="mermaid">
+graph LR
+    subgraph UI["UI Layer (React)"]
+        AR["AudioRecorder.jsx<br/>startRecording() / stopRecording()"]
+        AW["AudioWaveform.jsx<br/>Canvas RAF loop + state machine"]
+    end
+
+    subgraph Core["Core Audio Pipeline"]
+        AFE["audioFeatureExtractor.js<br/>startExtraction(cb) / stopExtraction()"]
+        MEE["mlEmbeddingEngine.js<br/>initializeEmbeddingEngine()<br/>getAudioEmbedding(pcm)<br/>findBestMatch(emb)"]
+        DL["datasetLoader.js<br/>loadOrGenerateFingerprints(fn)"]
+        AME["audioMatchingEngine.js<br/>FAULT_NATURE_LIBRARY<br/>getFaultNarrative(label)<br/>buildReadableLabel(raw)"]
+    end
+
+    subgraph Infra["Infrastructure"]
+        SB["supabase.js<br/>createClient()"]
+        LG["logger.js<br/>Logger.info/warn/error"]
+        SS["settingsStore.js<br/>(Zustand persisted)"]
+    end
+
+    AR -->|"startExtraction(onFeatures)"| AFE
+    AR -->|"getActiveMediaStream()"| AFE
+    AR -->|"buildReadableLabel()"| AME
+    AR -->|"supabase.insert()"| SB
+    AR -->|"onAnalyserReady(ctx, analyser)"| AW
+    AFE -->|"initializeEmbeddingEngine()"| MEE
+    AFE -->|"getAudioEmbedding(snapshot)"| MEE
+    AFE -->|"findBestMatch(embedding)"| MEE
+    MEE -->|"loadOrGenerateFingerprints(fn)"| DL
+    DL -->|"fetch WAV files"| SB
+    DL -->|"getAudioEmbedding(pcm)"| MEE
+    AR -->|"reads voiceAlertsEnabled"| SS
+
+    style AR fill:#f59e0b,stroke:#d97706,color:#0b1120,stroke-width:2px
+    style AW fill:#fbbf24,stroke:#d97706,color:#0b1120,stroke-width:1px
+    style AFE fill:#fb923c,stroke:#ea580c,color:#0b1120,stroke-width:1px
+    style MEE fill:#f97316,stroke:#ea580c,color:#0b1120,stroke-width:1px
+    style DL fill:#fdba74,stroke:#f97316,color:#0b1120,stroke-width:1px
+    style AME fill:#fed7aa,stroke:#fb923c,color:#0b1120,stroke-width:1px
+    style SB fill:#3b82f6,stroke:#2563eb,color:#ffffff,stroke-width:1px
+    style LG fill:#64748b,stroke:#475569,color:#f1f5f9,stroke-width:1px
+    style SS fill:#64748b,stroke:#475569,color:#f1f5f9,stroke-width:1px
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     SECTION 5: DATA FLOW ARCHITECTURE
+     ═══════════════════════════════════════════════════════════ -->
+<div class="section page-break">
+  <div class="container">
+    <div class="section-number">5</div>
+    <h2 class="section-title">Data Flow Architecture</h2>
+    <p class="section-desc">
+      The complete data transformation pipeline from microphone input to Supabase persistence, showing the exact data format at every stage boundary.
+    </p>
+
+    <div class="diagram-container">
+      <div class="diagram-title">End-to-End Data Transformation Pipeline</div>
+      <div class="mermaid">
+flowchart TB
+    A["🎤 Microphone<br/>getUserMedia()"] -->|"MediaStream"| B["MediaStreamSource<br/>(AudioContext @ 16kHz)"]
+    B -->|"PCM Float32<br/>native rate"| C["ScriptProcessorNode<br/>(bufferSize=4096)"]
+    C -->|"4096 samples/block<br/>mono Float32"| D["Ring Buffer<br/>(Float32Array[16000])"]
+    D -->|"1s snapshot<br/>16000 samples"| E{"RMS Gate<br/>rms >= 0.01?"}
+    E -->|"No (silence)"| F["Return status: normal<br/>reason: rejected_silence"]
+    E -->|"Yes"| G["YAMNet TF.js<br/>model.predict(tensor1d)"]
+    G -->|"[scores, embeddings, spectrogram]"| H["tf.mean(embeddings, 0)<br/>Mean-pool across frames"]
+    H -->|"1024-d Float32 Array"| I["Cosine Similarity<br/>vs 6 reference fingerprints"]
+    I -->|"bestScore >= 0.75"| J["ANOMALY DETECTED<br/>label + severity + confidence"]
+    I -->|"bestScore < 0.75"| K["NORMAL<br/>below_threshold"]
+    J --> L["Session Accumulator<br/>sessionAnomaliesRef[]"]
+    K --> L
+    L -->|"on stopRecording()"| M["Report Generator<br/>handleAudioUpload()"]
+    M -->|"dbPayload JSON"| N["supabase.from('analyses')<br/>.insert()"]
+    M -->|"audio Blob (WebM)"| O["supabase.storage<br/>.upload()"]
+
+    style A fill:#f59e0b,stroke:#d97706,color:#0b1120
+    style G fill:#fbbf24,stroke:#d97706,color:#0b1120
+    style E fill:#fb923c,stroke:#ea580c,color:#0b1120
+    style N fill:#3b82f6,stroke:#2563eb,color:#ffffff
+    style O fill:#60a5fa,stroke:#3b82f6,color:#0b1120
+      </div>
+    </div>
+
+    <div class="alert alert-info">
+      <strong>📐 Key Invariants</strong>
+      The ring buffer always holds exactly <code>sampleRate × 1</code> samples (16,000 at 16kHz).
+      Classification fires every ~900ms (wall-clock gated) with a mutex (<code>isProcessing</code>) to prevent overlapping YAMNet inference calls.
+      The snapshot is extracted in-order from <code>writeHead</code> modulo <code>windowSamples</code>.
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     SECTION 6: CONCURRENCY MODEL
+     ═══════════════════════════════════════════════════════════ -->
+<div class="section page-break">
+  <div class="container">
+    <div class="section-number">6</div>
+    <h2 class="section-title">Concurrency Model</h2>
+    <p class="section-desc">
+      Vroomie runs entirely on the main thread today. Understanding the concurrency boundaries is critical for predicting latency under load and planning the Web Worker migration.
+    </p>
+
+    <div class="concurrency-grid">
+      <div class="concurrency-card">
+        <h4><span class="thread-dot" style="background: var(--accent);"></span> Main Thread (Synchronous)</h4>
+        <ul>
+          <li>React component rendering (AudioRecorder, AudioWaveform, full UI tree)</li>
+          <li><code>ScriptProcessorNode.onaudioprocess</code> callback — copies samples into ring buffer</li>
+          <li>YAMNet <code>model.predict()</code> — TF.js inference (~50–150ms blocking)</li>
+          <li>Cosine similarity computation against all 6 reference fingerprints</li>
+          <li>Session anomaly accumulation and state updates</li>
+        </ul>
+      </div>
+
+      <div class="concurrency-card">
+        <h4><span class="thread-dot" style="background: var(--cyan-400);"></span> requestAnimationFrame Loop</h4>
+        <ul>
+          <li>AudioWaveform canvas rendering — single RAF loop, never re-mounts</li>
+          <li>State machine: <code>idle</code> → <code>burst</code> → <code>live</code> → <code>stopping</code> → <code>idle</code></li>
+          <li>Idle state throttled to ~20fps via <code>setTimeout(50ms)</code></li>
+          <li>Live/burst states run at full 60fps for smooth visualisation</li>
+          <li>All animation state stored in refs — zero React re-renders from animation</li>
+        </ul>
+      </div>
+
+      <div class="concurrency-card">
+        <h4><span class="thread-dot" style="background: var(--green-400);"></span> Async Boundaries (Promises)</h4>
+        <ul>
+          <li><code>tf.loadGraphModel()</code> — model download and parsing (~2–5s, network-dependent)</li>
+          <li><code>fetch()</code> for WAV reference files from Supabase Storage</li>
+          <li><code>OfflineAudioContext.startRendering()</code> — offline WAV decode/resample</li>
+          <li><code>supabase.insert()</code> and <code>supabase.storage.upload()</code> — report persistence</li>
+          <li><code>navigator.mediaDevices.getUserMedia()</code> — mic permission prompt</li>
+        </ul>
+      </div>
+
+      <div class="concurrency-card">
+        <h4><span class="thread-dot" style="background: var(--red-400);"></span> Mutex & Event Ordering</h4>
+        <ul>
+          <li><code>isProcessing</code> flag — prevents overlapping YAMNet calls in <code>onaudioprocess</code></li>
+          <li><code>isExtracting</code> module flag — guards re-entrant <code>startExtraction()</code></li>
+          <li><code>isRecordingRef</code> — React ref mirrors state for stable async closure reads</li>
+          <li><strong>Critical sequence:</strong> <code>MediaRecorder.stop()</code> → <code>onstop</code> → <code>handleAudioUpload()</code> → <code>stopExtraction()</code></li>
+          <li>If stream dies before <code>onstop</code> fires, MediaRecorder blob is empty — teardown order is strict</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="diagram-container">
+      <div class="diagram-title">Event Ordering — Stop Recording Sequence</div>
+      <div class="mermaid">
+sequenceDiagram
+    participant User
+    participant AR as AudioRecorder
+    participant MR as MediaRecorder
+    participant AFE as audioFeatureExtractor
+    participant SB as Supabase
+
+    User->>AR: stopRecording()
+    AR->>AR: isRecordingRef = false
+    AR->>AR: clearInterval(timer)
+    AR->>AR: speakScanResult() (sync TTS)
+    AR->>MR: recorder.stop()
+    Note over MR: Fires asynchronously
+    MR->>AR: onstop event
+    AR->>AR: Build Blob from chunks
+    AR->>SB: storage.upload(blob)
+    AR->>AR: Build analysis payload
+    AR->>SB: from('analyses').insert()
+    AR->>AR: nativeAudioCtx.close()
+    AR->>AFE: stopExtraction()
+    AFE->>AFE: Disconnect ScriptProcessor
+    AFE->>AFE: Close 16kHz AudioContext
+    AFE->>AFE: Stop MediaStream tracks
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     SECTION 7: PERFORMANCE CHARACTERISTICS
+     ═══════════════════════════════════════════════════════════ -->
+<div class="section page-break">
+  <div class="container">
+    <div class="section-number">7</div>
+    <h2 class="section-title">Performance Characteristics</h2>
+    <p class="section-desc">
+      Measured and estimated performance metrics for the client-side ML inference pipeline, audio processing, and UI rendering.
+    </p>
+
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Metric</th>
+          <th>Value</th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>YAMNet inference latency</td>
+          <td class="metric-value">~50–150ms</td>
+          <td>Per 1-second window. CPU-bound on main thread. WebGL backend preferred; falls back to WASM.</td>
+        </tr>
+        <tr>
+          <td>Model download size</td>
+          <td class="metric-value">~1.8MB</td>
+          <td>TF.js GraphModel from TF Hub. Cached by Service Worker (CacheFirst strategy, 1-year TTL).</td>
+        </tr>
+        <tr>
+          <td>Model warm-up</td>
+          <td class="metric-value">~200–500ms</td>
+          <td>Dummy inference on <code>tf.zeros([16000])</code> after load. Primes WebGL shader compilation.</td>
+        </tr>
+        <tr>
+          <td>Fingerprint cache size</td>
+          <td class="metric-value">~120KB</td>
+          <td>6 fingerprints × 1024 floats + JSON metadata, stored in localStorage.</td>
+        </tr>
+        <tr>
+          <td>Memory footprint (runtime)</td>
+          <td class="metric-value">~25–35MB</td>
+          <td>YAMNet model tensors (~15MB) + audio buffers (~2MB) + React tree + WebGL context.</td>
+        </tr>
+        <tr>
+          <td>Classification throughput</td>
+          <td class="metric-value">~1 inference/sec</td>
+          <td>Wall-clock gated at 900ms minimum interval. Mutex prevents overlapping calls.</td>
+        </tr>
+        <tr>
+          <td>Cosine similarity (6 refs)</td>
+          <td class="metric-value">&lt;0.1ms</td>
+          <td>6 × 1024-element dot products. Negligible compared to inference cost.</td>
+        </tr>
+        <tr>
+          <td>Waveform render FPS</td>
+          <td class="metric-value">60fps (live)</td>
+          <td>Native-rate AudioContext + AnalyserNode. Throttled to 20fps when idle.</td>
+        </tr>
+        <tr>
+          <td>ScriptProcessor buffer size</td>
+          <td class="metric-value">4096 samples</td>
+          <td>~256ms at 16kHz. ~4 callbacks fill the 16000-sample ring buffer.</td>
+        </tr>
+        <tr>
+          <td>First classification delay</td>
+          <td class="metric-value">~3–8s</td>
+          <td>Model load + warm-up + 1s audio accumulation. Cached model: ~1.5–2s.</td>
+        </tr>
+        <tr>
+          <td>Vite build output</td>
+          <td class="metric-value">~3.2MB</td>
+          <td>TF.js chunk: ~3MB (lazy). Core SPA: ~200KB. Code-split via <code>manualChunks</code>.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="alert alert-warning">
+      <strong>⚡ Performance Risk</strong>
+      YAMNet inference runs on the main thread. During the ~50–150ms inference window, React rendering and ScriptProcessor callbacks are blocked. Users may perceive micro-jank on low-end devices. The Phase 2 Web Worker migration (see §13) eliminates this entirely.
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     SECTION 8: SECURITY MODEL
+     ═══════════════════════════════════════════════════════════ -->
+<div class="section page-break">
+  <div class="container">
+    <div class="section-number">8</div>
+    <h2 class="section-title">Security Model</h2>
+    <p class="section-desc">
+      Vroomie's security posture covers client-side data handling, Supabase access controls, and the boundaries of the threat model for a client-side ML application.
+    </p>
+
+    <div class="diagram-container">
+      <div class="diagram-title">Security Boundary Diagram</div>
+      <div class="mermaid">
+graph TB
+    subgraph Client["Client Browser (Trusted Boundary)"]
+        MIC["Microphone Input<br/>(No PII in audio)"]
+        LS["localStorage<br/>(Device-bound fingerprints)"]
+        TF["TF.js Inference<br/>(All ML runs locally)"]
+        AK["Supabase Anon Key<br/>(Public, read-only bucket)"]
+    end
+
+    subgraph Supabase["Supabase (Server Boundary)"]
+        RLS["Row-Level Security<br/>(Policies per table)"]
+        BK["Storage Buckets<br/>(anomaly-patterns: public read<br/>audio-analyses: authenticated write)"]
+        AU["GoTrue Auth<br/>(JWT tokens, session mgmt)"]
+    end
+
+    subgraph Threats["Threat Vectors"]
+        T1["Key Extraction<br/>(Anon key in JS bundle)"]
+        T2["XSS/CSRF<br/>(Standard web vectors)"]
+        T3["Audio Eavesdropping<br/>(Mic access while recording)"]
+    end
+
+    MIC --> TF
+    TF --> LS
+    AK -->|"Read-only"| BK
+    AU -->|"JWT"| RLS
+    T1 -.->|"Mitigated: read-only scope"| AK
+    T2 -.->|"Mitigated: CSP + SameSite cookies"| Client
+    T3 -.->|"Mitigated: No server upload of raw PCM"| MIC
+
+    style Client fill:#0f1729,stroke:#f59e0b,color:#f1f5f9,stroke-width:2px
+    style Supabase fill:#131d33,stroke:#3b82f6,color:#f1f5f9,stroke-width:1px
+    style Threats fill:#1a0a0a,stroke:#ef4444,color:#fca5a5,stroke-width:1px
+    style RLS fill:#22c55e,stroke:#16a34a,color:#ffffff,stroke-width:1px
+      </div>
+    </div>
+
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Control</th>
+          <th>Implementation</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Supabase Anon Key</td>
+          <td>Embedded in client bundle. Scoped to public bucket reads and RLS-protected table writes only.</td>
+          <td><span class="severity severity-low">Active</span></td>
+        </tr>
+        <tr>
+          <td>Row-Level Security</td>
+          <td>PostgreSQL policies enforce per-user data isolation. Users can only read/write their own analyses.</td>
+          <td><span class="severity severity-low">Active</span></td>
+        </tr>
+        <tr>
+          <td>No PII in Audio</td>
+          <td>Audio is engine/mechanical sound only. WebM blob uploaded for playback — not processed server-side.</td>
+          <td><span class="severity severity-low">By Design</span></td>
+        </tr>
+        <tr>
+          <td>localStorage Isolation</td>
+          <td>Fingerprint cache is device-bound, same-origin protected. Contains no secrets — only model outputs.</td>
+          <td><span class="severity severity-low">Active</span></td>
+        </tr>
+        <tr>
+          <td>COOP/COEP Headers</td>
+          <td>Configured in <code>vite.config.js</code> for dev server. Required for future AudioWorklet + SharedArrayBuffer.</td>
+          <td><span class="severity severity-medium">Dev Only</span></td>
+        </tr>
+        <tr>
+          <td>Service Worker Caching</td>
+          <td>Workbox CacheFirst for TF Hub models, Supabase patterns. No sensitive data cached.</td>
+          <td><span class="severity severity-low">Active</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     SECTION 9: FAILURE MODES & RESILIENCE
+     ═══════════════════════════════════════════════════════════ -->
+<div class="section page-break">
+  <div class="container">
+    <div class="section-number">9</div>
+    <h2 class="section-title">Failure Modes & Resilience</h2>
+    <p class="section-desc">
+      Comprehensive failure mode analysis with the system's actual degradation behaviour, derived from source code inspection of error handling paths.
+    </p>
+
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Failure Mode</th>
+          <th>Probability</th>
+          <th>Impact</th>
+          <th>System Behaviour</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>YAMNet model fails to load<br/>(network error, TF Hub down)</td>
+          <td><span class="severity severity-low">Low</span></td>
+          <td><span class="severity severity-critical">Critical</span></td>
+          <td><code>yamnetModel</code> stays <code>null</code>. <code>getAudioEmbedding()</code> returns <code>null</code>. All windows classified as "normal". No error shown to user — silent false-negative.</td>
+        </tr>
+        <tr>
+          <td>WAV reference files inaccessible<br/>(Supabase bucket 403/404)</td>
+          <td><span class="severity severity-low">Low</span></td>
+          <td><span class="severity severity-high">High</span></td>
+          <td><code>yamnetFingerprints[]</code> stays empty. <code>findBestMatch()</code> returns <code>{ status: 'normal', reason: 'no_references' }</code>. No anomalies ever detected.</td>
+        </tr>
+        <tr>
+          <td>localStorage full<br/>(quota exceeded)</td>
+          <td><span class="severity severity-medium">Medium</span></td>
+          <td><span class="severity severity-low">Low</span></td>
+          <td><code>setItem()</code> throws — caught and logged. Fingerprints regenerated from network on each session. ~3–5s extra startup time.</td>
+        </tr>
+        <tr>
+          <td>Microphone permission denied</td>
+          <td><span class="severity severity-medium">Medium</span></td>
+          <td><span class="severity severity-critical">Critical</span></td>
+          <td><code>getUserMedia()</code> throws <code>NotAllowedError</code>. UI shows "Microphone Required" card with Reload button. <code>micPermissionDenied</code> state set.</td>
+        </tr>
+        <tr>
+          <td>Supabase API down<br/>(insert/upload fails)</td>
+          <td><span class="severity severity-low">Low</span></td>
+          <td><span class="severity severity-medium">Medium</span></td>
+          <td>Insert error caught. Toast: "Recording saved locally only". Report passed to parent via <code>onRecordingComplete</code> with <code>local-UUID</code> — UI still shows results.</td>
+        </tr>
+        <tr>
+          <td>Network fully offline<br/>(first-time user)</td>
+          <td><span class="severity severity-medium">Medium</span></td>
+          <td><span class="severity severity-critical">Critical</span></td>
+          <td>PWA cached shell loads from Service Worker. But no TF.js model, no WAV files — classification impossible. Returning user with cached model/fingerprints can still operate.</td>
+        </tr>
+        <tr>
+          <td>MediaRecorder.onstop race<br/>(stream dies before blob)</td>
+          <td><span class="severity severity-low">Low</span></td>
+          <td><span class="severity severity-medium">Medium</span></td>
+          <td>Teardown sequence enforced: <code>recorder.stop()</code> → <code>onstop</code> → <code>handleAudioUpload</code> → <code>stopExtraction</code>. 100ms delay added before upload to allow ScriptProcessor's final block.</td>
+        </tr>
+        <tr>
+          <td>TF.js tensor memory leak</td>
+          <td><span class="severity severity-medium">Medium</span></td>
+          <td><span class="severity severity-medium">Medium</span></td>
+          <td><code>tf.tidy()</code> wraps all inference calls. Model warm-up explicitly disposes dummy tensors. Long sessions (&gt;30min) may still accumulate if exceptions bypass tidy.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="alert alert-danger">
+      <strong>🚨 Single Point of Failure</strong>
+      If the YAMNet model fails to load AND there are no cached fingerprints, the entire classification pipeline becomes a no-op. The UI will still record and upload audio, but every window returns "normal" — a silent failure mode. Consider adding explicit "Model unavailable" UI state.
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     SECTION 10: TECHNICAL DEBT & KNOWN LIMITATIONS
+     ═══════════════════════════════════════════════════════════ -->
+<div class="section page-break">
+  <div class="container">
+    <div class="section-number">10</div>
+    <h2 class="section-title">Technical Debt & Known Limitations</h2>
+    <p class="section-desc">
+      Honest assessment of architectural debt, deprecated APIs, and known gaps that technical architects should factor into adoption and planning decisions.
+    </p>
+
+    <div class="debt-list">
+      <div class="debt-item">
+        <div class="debt-icon" style="background: #ef444420;">⚠️</div>
+        <div class="debt-content">
+          <h4>ScriptProcessorNode is Deprecated <span class="severity severity-critical">Critical</span></h4>
+          <p>The W3C Web Audio spec deprecated <code>ScriptProcessorNode</code> in favour of <code>AudioWorkletNode</code>. Chrome logs console warnings. Current implementation works but may be removed in future browser versions. Migration requires a separate <code>.js</code> worklet file, <code>SharedArrayBuffer</code>, and cross-origin isolation headers. <strong>Ref:</strong> <code>audioFeatureExtractor.js:64</code></p>
+        </div>
+      </div>
+
+      <div class="debt-item">
+        <div class="debt-icon" style="background: #fb923c20;">🧵</div>
+        <div class="debt-content">
+          <h4>Single-Threaded ML Inference <span class="severity severity-high">High</span></h4>
+          <p>YAMNet <code>model.predict()</code> runs on the main thread, blocking React rendering and audio callbacks for 50–150ms per inference. Should be offloaded to a dedicated Web Worker with <code>tf.setBackend('cpu')</code> or <code>'wasm'</code> for deterministic, non-blocking execution. <strong>Ref:</strong> <code>mlEmbeddingEngine.js:69-74</code></p>
+        </div>
+      </div>
+
+      <div class="debt-item">
+        <div class="debt-icon" style="background: #fbbf2420;">🧪</div>
+        <div class="debt-content">
+          <h4>No Automated Testing for Audio Pipeline <span class="severity severity-high">High</span></h4>
+          <p>Zero test coverage for <code>audioFeatureExtractor</code>, <code>mlEmbeddingEngine</code>, <code>datasetLoader</code>, and <code>audioMatchingEngine</code>. Vitest is installed but no audio pipeline tests exist. Ring buffer logic, RMS gating, cosine similarity, and fingerprint serialisation are all untested. Web Audio API requires mocking (<code>OfflineAudioContext</code>, <code>AnalyserNode</code>).</p>
+        </div>
+      </div>
+
+      <div class="debt-item">
+        <div class="debt-icon" style="background: #f59e0b20;">📊</div>
+        <div class="debt-content">
+          <h4>Only 6 Reference Patterns <span class="severity severity-medium">Medium</span></h4>
+          <p>The fingerprint library contains 6 WAV files covering alternator bearing, intake leak, misfire, motor starter, and piston faults. Production accuracy requires significantly more reference patterns per fault type, covering different RPMs, mic positions, engine sizes, and ambient conditions. <strong>Ref:</strong> <code>datasetLoader.js:8-15</code></p>
+        </div>
+      </div>
+
+      <div class="debt-item">
+        <div class="debt-icon" style="background: #f59e0b20;">🔗</div>
+        <div class="debt-content">
+          <h4>No Model Versioning <span class="severity severity-medium">Medium</span></h4>
+          <p>YAMNet model URL is hardcoded as <code>https://tfhub.dev/google/tfjs-model/yamnet/tfjs/1</code>. No version pinning, no A/B testing of models, no rollback mechanism. If TF Hub changes the model weights at this URL, all clients get the new model silently. <strong>Ref:</strong> <code>mlEmbeddingEngine.js:5</code></p>
+        </div>
+      </div>
+
+      <div class="debt-item">
+        <div class="debt-icon" style="background: #64748b20;">💾</div>
+        <div class="debt-content">
+          <h4>localStorage Cache Has No TTL or Integrity Check <span class="severity severity-low">Low</span></h4>
+          <p>Fingerprints cached under key <code>vroomie_yamnet_fingerprints_v6</code> persist indefinitely. No hash validation — corrupted JSON silently re-parses. Version is bumped manually in source code. No mechanism to force cache invalidation remotely. <strong>Ref:</strong> <code>datasetLoader.js:5</code></p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     SECTION 11: SCALABILITY ASSESSMENT
+     ═══════════════════════════════════════════════════════════ -->
+<div class="section page-break">
+  <div class="container">
+    <div class="section-number">11</div>
+    <h2 class="section-title">Scalability Assessment</h2>
+    <p class="section-desc">
+      How each axis of scale affects the Vroomie architecture, considering its client-side ML nature and Supabase backend.
+    </p>
+
+    <div class="scale-grid">
+      <div class="scale-card">
+        <div class="scale-label">Horizontal Scale</div>
+        <div class="scale-value">N/A</div>
+        <div class="scale-desc">Client-side ML — each device runs its own inference. No server compute to scale. User count is unlimited at the compute layer.</div>
+      </div>
+      <div class="scale-card">
+        <div class="scale-label">Vertical Scale</div>
+        <div class="scale-value">CPU/GPU Bound</div>
+        <div class="scale-desc">Limited by device CPU for TF.js WASM backend, or GPU for WebGL. Low-end phones: ~300ms inference. Flagships: ~50ms.</div>
+      </div>
+      <div class="scale-card">
+        <div class="scale-label">Storage Scale</div>
+        <div class="scale-value">Independent</div>
+        <div class="scale-desc">Supabase PostgreSQL and Storage scale independently of client count. 500MB free tier; paid tiers to 100GB+.</div>
+      </div>
+      <div class="scale-card">
+        <div class="scale-label">Model Scale</div>
+        <div class="scale-value">Replaceable</div>
+        <div class="scale-desc">YAMNet can be swapped for larger/smaller models. Larger models increase download + inference latency proportionally.</div>
+      </div>
+      <div class="scale-card">
+        <div class="scale-label">Reference Patterns</div>
+        <div class="scale-value">O(n)</div>
+        <div class="scale-desc">Adding more WAV references is O(n) in storage download and startup fingerprint generation. Cosine matching is O(n) per window.</div>
+      </div>
+      <div class="scale-card">
+        <div class="scale-label">Concurrent Sessions</div>
+        <div class="scale-value">1 per device</div>
+        <div class="scale-desc">Single mic stream, single extraction pipeline. No multi-session support. One AudioContext pair per recording session.</div>
+      </div>
+    </div>
+
+    <div class="alert alert-info">
+      <strong>📈 Scaling Inflection Point</strong>
+      At ~50 reference patterns, fingerprint generation time (~200ms × n) will exceed 10 seconds. At this point, pre-computed fingerprints should be served as a JSON API from Supabase instead of generated client-side from WAV files.
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     SECTION 12: MIGRATION ROADMAP
+     ═══════════════════════════════════════════════════════════ -->
+<div class="section page-break">
+  <div class="container">
+    <div class="section-number">12</div>
+    <h2 class="section-title">Migration Roadmap</h2>
+    <p class="section-desc">
+      Phased plan for resolving technical debt and evolving the architecture from its current MVP state to production-grade capability.
+    </p>
+
+    <div class="diagram-container">
+      <div class="diagram-title">Phased Migration Gantt Chart</div>
+      <div class="mermaid">
+gantt
+    title Vroomie Architecture Migration Roadmap
+    dateFormat  YYYY-MM
+    axisFormat  %b %Y
+    todayMarker on
+
+    section Phase 1
+    AudioWorklet Migration           :p1, 2026-07, 2026-09
+    COOP/COEP Production Headers     :p1b, 2026-07, 2026-08
+    SharedArrayBuffer Ring Buffer    :p1c, 2026-08, 2026-09
+
+    section Phase 2
+    Web Worker for ML Inference      :p2, 2026-09, 2026-11
+    TF.js WASM Backend in Worker     :p2b, 2026-09, 2026-10
+    OffscreenCanvas for Waveform     :p2c, 2026-10, 2026-11
+
+    section Phase 3
+    Custom Trained Model             :p3, 2026-11, 2027-02
+    Automotive Dataset Collection    :p3b, 2026-11, 2027-01
+    Transfer Learning from YAMNet    :p3c, 2027-01, 2027-02
+
+    section Phase 4
+    Server-Side Inference Option     :p4, 2027-02, 2027-04
+    Supabase Edge Function + ONNX    :p4b, 2027-02, 2027-03
+    Hybrid Client/Server Pipeline    :p4c, 2027-03, 2027-04
+
+    section Phase 5
+    Multi-Vehicle Profile Support    :p5, 2027-04, 2027-06
+    Vehicle-Specific Baselines       :p5b, 2027-04, 2027-05
+    Fleet Management Dashboard       :p5c, 2027-05, 2027-06
+      </div>
+    </div>
+
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Phase</th>
+          <th>Objective</th>
+          <th>Key Deliverables</th>
+          <th>Risk</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="severity severity-medium">Phase 1</span></td>
+          <td>AudioWorklet Migration</td>
+          <td>Replace <code>ScriptProcessorNode</code> with <code>AudioWorkletNode</code>. Move ring buffer to worklet. Add COOP/COEP headers to production hosting.</td>
+          <td>Cross-origin isolation may break third-party scripts. Safari AudioWorklet support varies.</td>
+        </tr>
+        <tr>
+          <td><span class="severity severity-medium">Phase 2</span></td>
+          <td>Web Worker for ML Inference</td>
+          <td>Offload <code>model.predict()</code> to a dedicated Worker. Use <code>postMessage</code> to transfer 1s snapshots. Eliminate main-thread blocking.</td>
+          <td>TF.js WebGL backend requires <code>OffscreenCanvas</code> — not supported in all browsers. WASM fallback is slower.</td>
+        </tr>
+        <tr>
+          <td><span class="severity severity-high">Phase 3</span></td>
+          <td>Custom Trained Model</td>
+          <td>Collect labelled automotive audio dataset. Fine-tune or train a custom classifier. Replace YAMNet for higher accuracy on automotive faults.</td>
+          <td>Data collection is expensive. Model quality depends on dataset diversity. May still use YAMNet as feature extractor.</td>
+        </tr>
+        <tr>
+          <td><span class="severity severity-high">Phase 4</span></td>
+          <td>Server-Side Inference</td>
+          <td>Supabase Edge Function with ONNX Runtime for server-side classification. Hybrid: client for real-time, server for batch analysis.</td>
+          <td>Latency increase for real-time. Server cost scales with usage. Privacy: audio sent to server.</td>
+        </tr>
+        <tr>
+          <td><span class="severity severity-low">Phase 5</span></td>
+          <td>Multi-Vehicle Profiles</td>
+          <td>Per-vehicle baseline embeddings. Fleet dashboard for multi-vehicle management. Anomaly trending over time.</td>
+          <td>Baseline drift as vehicles age. Need re-calibration mechanism. UI complexity increase.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     SECTION 13: DEPENDENCY GRAPH
+     ═══════════════════════════════════════════════════════════ -->
+<div class="section page-break">
+  <div class="container">
+    <div class="section-number">13</div>
+    <h2 class="section-title">Dependency Graph</h2>
+    <p class="section-desc">
+      Critical npm dependency tree showing the major packages, their roles in the system, and the build toolchain that produces the deployable artifact.
+    </p>
+
+    <div class="diagram-container">
+      <div class="diagram-title">Critical Dependency Tree</div>
+      <div class="mermaid">
+graph TB
+    VP["Vroomie PWA<br/>package.json"]
+
+    subgraph ML["ML & Audio"]
+        TF["@tensorflow/tfjs<br/>v4.22.0<br/>~3MB chunk"]
+    end
+
+    subgraph Backend["Backend SDK"]
+        SB["@supabase/supabase-js<br/>v2.93.3"]
+    end
+
+    subgraph UI["UI Framework"]
+        RC["react v18.2.0"]
+        RD["react-dom v18.2.0"]
+        RR["react-router-dom v7.2.0"]
+        FM["framer-motion v12.4.7"]
+        LR["lucide-react v0.475.0"]
+        RX["@radix-ui/* (18 packages)"]
+    end
+
+    subgraph State["State & Data"]
+        ZS["zustand v4.5.2"]
+        TQ["@tanstack/react-query v5.90.9"]
+        SN["sonner v2.0.1"]
+    end
+
+    subgraph Build["Build Toolchain"]
+        VT["vite v6.1.0"]
+        VR["@vitejs/plugin-react v4.3.4"]
+        PW["vite-plugin-pwa v1.2.0"]
+        TW["tailwindcss v3.4.18"]
+    end
+
+    subgraph Export["PDF & Charts"]
+        JP["jspdf v4.2.1"]
+        AT["jspdf-autotable v5.0.7"]
+        RCH["recharts v2.15.1"]
+    end
+
+    VP --> TF
+    VP --> SB
+    VP --> RC
+    VP --> RD
+    VP --> RR
+    VP --> FM
+    VP --> LR
+    VP --> RX
+    VP --> ZS
+    VP --> TQ
+    VP --> SN
+    VP --> VT
+    VP --> VR
+    VP --> PW
+    VP --> TW
+    VP --> JP
+    VP --> AT
+    VP --> RCH
+
+    style VP fill:#f59e0b,stroke:#d97706,color:#0b1120,stroke-width:2px
+    style TF fill:#ff6b6b,stroke:#ee5a5a,color:#ffffff,stroke-width:2px
+    style SB fill:#3b82f6,stroke:#2563eb,color:#ffffff,stroke-width:1px
+    style RC fill:#61dafb,stroke:#4fc3f7,color:#0b1120,stroke-width:1px
+    style RD fill:#61dafb,stroke:#4fc3f7,color:#0b1120,stroke-width:1px
+    style VT fill:#646cff,stroke:#535bf2,color:#ffffff,stroke-width:1px
+      </div>
+    </div>
+
+    <div class="alert alert-warning">
+      <strong>📦 Bundle Impact</strong>
+      <code>@tensorflow/tfjs</code> is the single largest dependency at ~3MB. It is code-split via Vite's <code>manualChunks</code> into a dedicated <code>tfjs</code> chunk, loaded lazily only when ML mode is activated. Radix UI's 18 packages are grouped into a single <code>radix</code> chunk. Recharts and D3 are bundled into a <code>charts</code> chunk.
+    </div>
+
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Chunk Name</th>
+          <th>Packages</th>
+          <th>Estimated Size</th>
+          <th>Loading Strategy</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="metric-value">tfjs</td>
+          <td><code>@tensorflow/tfjs</code></td>
+          <td>~3MB</td>
+          <td>Lazy — loaded when ML inference begins</td>
+        </tr>
+        <tr>
+          <td class="metric-value">supabase</td>
+          <td><code>@supabase/supabase-js</code></td>
+          <td>~120KB</td>
+          <td>Eager — needed for auth on page load</td>
+        </tr>
+        <tr>
+          <td class="metric-value">radix</td>
+          <td><code>@radix-ui/*</code> (18 packages)</td>
+          <td>~80KB</td>
+          <td>Eager — UI primitives used across pages</td>
+        </tr>
+        <tr>
+          <td class="metric-value">framer-motion</td>
+          <td><code>framer-motion</code></td>
+          <td>~120KB</td>
+          <td>Eager — animation library used globally</td>
+        </tr>
+        <tr>
+          <td class="metric-value">charts</td>
+          <td><code>recharts</code>, <code>d3-*</code></td>
+          <td>~200KB</td>
+          <td>Lazy — loaded on dashboard/history views</td>
+        </tr>
+        <tr>
+          <td class="metric-value">pdf</td>
+          <td><code>jspdf</code>, <code>jspdf-autotable</code></td>
+          <td>~280KB</td>
+          <td>Lazy — loaded on report export</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     FOOTER
+     ═══════════════════════════════════════════════════════════ -->
+<div class="section" style="border-bottom: none; padding: 60px 0;">
+  <div class="container" style="text-align: center;">
+    <div style="display: inline-flex; align-items: center; gap: 8px; margin-bottom: 16px;">
+      <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent-glow);"></div>
+      <span style="font-size: 11px; font-weight: 700; letter-spacing: 3px; text-transform: uppercase; color: var(--accent);">End of Document</span>
+    </div>
+    <p style="font-size: 13px; color: var(--text-muted); max-width: 500px; margin: 0 auto; line-height: 1.8;">
+      Vroomie Technical Architecture Review — Version 2.0.0<br />
+      For Technical Architects & Engineering Leadership<br />
+      <span style="color: var(--text-muted);">Confidential — June 2026</span>
+    </p>
+  </div>
+</div>
+
+<!-- Export Button -->
+<button class="export-btn" onclick="window.print()">
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+    <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+  </svg>
+  Export as PDF
+</button>
+
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    themeVariables: {
+      primaryColor: '#f59e0b',
+      primaryTextColor: '#0b1120',
+      primaryBorderColor: '#d97706',
+      lineColor: '#64748b',
+      secondaryColor: '#1e293b',
+      tertiaryColor: '#131d33',
+      fontFamily: 'Inter, sans-serif',
+      fontSize: '13px',
+      noteBkgColor: '#1e293b',
+      noteTextColor: '#f1f5f9',
+      noteBorderColor: '#475569'
+    },
+    flowchart: {
+      useMaxWidth: true,
+      htmlLabels: true,
+      curve: 'basis'
+    },
+    sequence: {
+      useMaxWidth: true,
+      actorFontFamily: 'Inter, sans-serif',
+      noteFontFamily: 'Inter, sans-serif',
+      messageFontFamily: 'Inter, sans-serif'
+    },
+    gantt: {
+      useMaxWidth: true,
+      titleTopMargin: 25,
+      barHeight: 24,
+      barGap: 6,
+      topPadding: 50,
+      leftPadding: 100,
+      gridLineStartPadding: 35,
+      fontSize: 12,
+      sectionFontSize: 13,
+      numberSectionStyles: 5
+    }
+  });
+</script>
+</body>
+</html>

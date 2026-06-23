@@ -1,0 +1,1454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Vroomie — System Architecture (Detailed Edition)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+/* ═══════════════════════════════════════════════════════════
+   VROOMIE — SYSTEM ARCHITECTURE STYLESHEET
+   Premium dark-theme technical document
+   ═══════════════════════════════════════════════════════════ */
+
+:root {
+  --bg-primary: #0a0a1a;
+  --bg-secondary: #1a0a2e;
+  --bg-card: rgba(15, 15, 35, 0.7);
+  --bg-card-hover: rgba(20, 20, 50, 0.8);
+  --border-glass: rgba(255, 255, 255, 0.06);
+  --border-accent: rgba(6, 182, 212, 0.25);
+  --cyan: #06b6d4;
+  --cyan-dim: rgba(6, 182, 212, 0.15);
+  --purple: #8b5cf6;
+  --purple-dim: rgba(139, 92, 246, 0.12);
+  --yellow: #fcd34d;
+  --green: #10b981;
+  --red: #ef4444;
+  --orange: #f97316;
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --mono: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: linear-gradient(165deg, var(--bg-primary) 0%, var(--bg-secondary) 50%, #0d0520 100%);
+  color: var(--text-primary);
+  line-height: 1.7;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ─── Layout ──────────────────────────────────────────── */
+.container {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 2rem 6rem;
+}
+
+/* ─── Cover Page ──────────────────────────────────────── */
+.cover {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+}
+.cover::before {
+  content: '';
+  position: absolute;
+  width: 600px; height: 600px;
+  background: radial-gradient(circle, rgba(6,182,212,0.08) 0%, transparent 70%);
+  top: 10%; left: 50%; transform: translateX(-50%);
+  pointer-events: none;
+}
+.cover::after {
+  content: '';
+  position: absolute;
+  width: 400px; height: 400px;
+  background: radial-gradient(circle, rgba(139,92,246,0.06) 0%, transparent 70%);
+  bottom: 15%; right: 10%;
+  pointer-events: none;
+}
+.cover-logo {
+  width: 120px; height: 120px;
+  border-radius: 28px;
+  background: linear-gradient(135deg, var(--cyan) 0%, var(--purple) 100%);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 3rem; font-weight: 900; color: #fff;
+  margin-bottom: 2.5rem;
+  box-shadow: 0 0 60px rgba(6,182,212,0.25), 0 0 120px rgba(139,92,246,0.15);
+  position: relative; z-index: 1;
+}
+.cover h1 {
+  font-size: 3.5rem;
+  font-weight: 900;
+  letter-spacing: -0.03em;
+  background: linear-gradient(135deg, #fff 0%, var(--cyan) 50%, var(--purple) 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 0.5rem;
+  position: relative; z-index: 1;
+}
+.cover .subtitle {
+  font-size: 1.35rem;
+  color: var(--text-secondary);
+  font-weight: 400;
+  margin-bottom: 2.5rem;
+  position: relative; z-index: 1;
+}
+.cover-meta {
+  display: flex; gap: 2rem; flex-wrap: wrap; justify-content: center;
+  position: relative; z-index: 1;
+}
+.cover-meta span {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  padding: 0.4rem 1rem;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border-glass);
+  border-radius: 8px;
+}
+.cover-meta span strong { color: var(--cyan); }
+.cover-confidential {
+  margin-top: 3rem;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  border-top: 1px solid var(--border-glass);
+  padding-top: 1.5rem;
+  position: relative; z-index: 1;
+}
+
+/* ─── Section ─────────────────────────────────────────── */
+.section {
+  margin-top: 4rem;
+}
+.section-number {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--cyan);
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  margin-bottom: 0.5rem;
+}
+h2 {
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin-bottom: 1.5rem;
+  background: linear-gradient(90deg, #fff 0%, var(--text-secondary) 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+h3 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 2rem 0 1rem;
+}
+h4 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--cyan);
+  margin: 1.5rem 0 0.75rem;
+}
+p, li { color: var(--text-secondary); font-size: 0.95rem; }
+p { margin-bottom: 1rem; }
+
+/* ─── Glass Card ──────────────────────────────────────── */
+.glass {
+  background: var(--bg-card);
+  border: 1px solid var(--border-glass);
+  border-radius: 16px;
+  padding: 2rem;
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  margin-bottom: 2rem;
+  transition: border-color 0.3s;
+}
+.glass:hover { border-color: var(--border-accent); }
+.glass-highlight {
+  background: linear-gradient(135deg, rgba(6,182,212,0.06) 0%, rgba(139,92,246,0.04) 100%);
+  border-color: var(--border-accent);
+}
+
+/* ─── Tables ──────────────────────────────────────────── */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.5rem 0;
+  font-size: 0.88rem;
+}
+thead th {
+  background: rgba(6,182,212,0.08);
+  color: var(--cyan);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.75rem;
+  padding: 0.85rem 1rem;
+  text-align: left;
+  border-bottom: 2px solid rgba(6,182,212,0.15);
+}
+tbody td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border-glass);
+  color: var(--text-secondary);
+  vertical-align: top;
+}
+tbody tr:hover td { background: rgba(255,255,255,0.015); }
+td code, th code {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  background: rgba(6,182,212,0.1);
+  color: var(--cyan);
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+}
+
+/* ─── Code blocks ─────────────────────────────────────── */
+code {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  background: rgba(255,255,255,0.04);
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  color: var(--cyan);
+}
+pre {
+  background: rgba(0,0,0,0.4);
+  border: 1px solid var(--border-glass);
+  border-radius: 12px;
+  padding: 1.5rem;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  line-height: 1.6;
+  margin: 1rem 0;
+  color: var(--text-secondary);
+}
+
+/* ─── Mermaid ─────────────────────────────────────────── */
+.mermaid-wrapper {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border-glass);
+  border-radius: 14px;
+  padding: 1.5rem;
+  margin: 1.5rem 0;
+  overflow-x: auto;
+}
+.mermaid { text-align: center; }
+
+/* ─── Alerts ──────────────────────────────────────────── */
+.alert {
+  padding: 1rem 1.25rem;
+  border-radius: 10px;
+  margin: 1.25rem 0;
+  font-size: 0.9rem;
+  border-left: 4px solid;
+}
+.alert-info {
+  background: rgba(6,182,212,0.06);
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
+.alert-warn {
+  background: rgba(249,115,22,0.06);
+  border-color: var(--orange);
+  color: var(--orange);
+}
+.alert-critical {
+  background: rgba(239,68,68,0.06);
+  border-color: var(--red);
+  color: var(--red);
+}
+.alert-success {
+  background: rgba(16,185,129,0.06);
+  border-color: var(--green);
+  color: var(--green);
+}
+
+/* ─── Severity Badge ──────────────────────────────────── */
+.badge {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.2rem 0.55rem;
+  border-radius: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.badge-critical { background: rgba(239,68,68,0.15); color: var(--red); }
+.badge-high     { background: rgba(249,115,22,0.15); color: var(--orange); }
+.badge-medium   { background: rgba(252,211,77,0.15); color: var(--yellow); }
+.badge-low      { background: rgba(16,185,129,0.15); color: var(--green); }
+
+/* ─── TOC ─────────────────────────────────────────────── */
+.toc {
+  list-style: none;
+  counter-reset: toc-counter;
+}
+.toc li {
+  counter-increment: toc-counter;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--border-glass);
+}
+.toc li::before {
+  content: counter(toc-counter, decimal-leading-zero);
+  font-family: var(--mono);
+  color: var(--cyan);
+  font-weight: 600;
+  margin-right: 1rem;
+  font-size: 0.85rem;
+}
+.toc a {
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 0.2s;
+}
+.toc a:hover { color: var(--cyan); }
+
+/* ─── Formula ─────────────────────────────────────────── */
+.formula {
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 1.1rem;
+  color: var(--yellow);
+  padding: 1.5rem;
+  background: rgba(252,211,77,0.04);
+  border: 1px solid rgba(252,211,77,0.1);
+  border-radius: 12px;
+  margin: 1.5rem 0;
+}
+
+/* ─── Export Button ───────────────────────────────────── */
+.export-btn {
+  position: fixed;
+  bottom: 2rem; right: 2rem;
+  background: linear-gradient(135deg, var(--cyan), var(--purple));
+  color: #fff;
+  border: none;
+  padding: 0.75rem 1.5rem;
+  border-radius: 50px;
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  z-index: 9999;
+  box-shadow: 0 4px 24px rgba(6,182,212,0.3), 0 0 60px rgba(139,92,246,0.15);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+.export-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 32px rgba(6,182,212,0.4), 0 0 80px rgba(139,92,246,0.2);
+}
+
+/* ─── Page Break ──────────────────────────────────────── */
+.page-break { page-break-before: always; }
+
+/* ─── Divider ─────────────────────────────────────────── */
+.divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border-accent), transparent);
+  margin: 3rem 0;
+}
+
+/* ─── Columns ─────────────────────────────────────────── */
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+@media (max-width: 768px) { .two-col { grid-template-columns: 1fr; } }
+
+/* ═══════════════════════════════════════════════════════════
+   PRINT STYLESHEET
+   ═══════════════════════════════════════════════════════════ */
+@media print {
+  body {
+    background: #fff !important;
+    color: #1a1a2e !important;
+    font-size: 10pt;
+    line-height: 1.5;
+  }
+  .export-btn { display: none !important; }
+  .container { max-width: 100%; padding: 0 1cm; }
+  .cover { min-height: auto; padding: 3cm 0 2cm; }
+  .cover-logo { box-shadow: none; }
+  .cover h1 { -webkit-text-fill-color: #1a1a2e; background: none; color: #1a1a2e; }
+  .cover .subtitle { color: #555; }
+  .glass {
+    background: #f8f9fa !important;
+    border: 1px solid #ddd !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    box-shadow: none !important;
+    break-inside: avoid;
+  }
+  h2 {
+    -webkit-text-fill-color: #1a1a2e;
+    background: none; color: #1a1a2e;
+    border-bottom: 2px solid #06b6d4;
+    padding-bottom: 0.3rem;
+  }
+  h3, h4 { color: #1a1a2e !important; }
+  p, li, td { color: #333 !important; }
+  thead th { background: #e8f7fa !important; color: #0891b2 !important; }
+  tbody td { border-color: #e5e7eb !important; }
+  code { background: #f0f9ff !important; color: #0891b2 !important; }
+  .mermaid-wrapper { background: #fafafa !important; border-color: #ddd !important; }
+  .alert { break-inside: avoid; }
+  .alert-info  { background: #f0f9ff !important; }
+  .alert-warn  { background: #fff7ed !important; }
+  .alert-critical { background: #fef2f2 !important; }
+  .section-number { color: #0891b2 !important; }
+  .cover-meta span { background: #f1f5f9 !important; border-color: #e2e8f0 !important; }
+  .cover-meta span strong { color: #0891b2 !important; }
+  .page-break { page-break-before: always; }
+  a { color: #0891b2 !important; text-decoration: none; }
+}
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════
+     FLOATING EXPORT BUTTON
+     ═══════════════════════════════════════════════════════════ -->
+<button class="export-btn" onclick="window.print()">📄 Export as PDF</button>
+
+<!-- ═══════════════════════════════════════════════════════════
+     1. COVER PAGE
+     ═══════════════════════════════════════════════════════════ -->
+<div class="cover">
+  <div class="cover-logo">V</div>
+  <h1>Vroomie</h1>
+  <div class="subtitle">System Architecture — Detailed Edition</div>
+  <div class="cover-meta">
+    <span><strong>Version</strong> 2.0.0</span>
+    <span><strong>Date</strong> 2026-06-23</span>
+    <span><strong>Classification</strong> Internal Engineering</span>
+    <span><strong>Author</strong> Vroomie Engineering</span>
+  </div>
+  <div class="cover-confidential">
+    ⚠ Confidential — This document contains proprietary technical architecture details.<br/>
+    Distribution restricted to Vroomie engineering team and authorised stakeholders only.
+  </div>
+</div>
+
+<div class="container">
+
+<!-- ═══════════════════════════════════════════════════════════
+     2. TABLE OF CONTENTS
+     ═══════════════════════════════════════════════════════════ -->
+<div class="page-break"></div>
+<div class="section" id="toc">
+  <div class="section-number">Navigation</div>
+  <h2>Table of Contents</h2>
+  <div class="glass">
+    <ol class="toc">
+      <li><a href="#executive-summary">Executive Summary</a></li>
+      <li><a href="#system-overview">System Overview & Tech Stack</a></li>
+      <li><a href="#high-level-arch">High-Level Architecture</a></li>
+      <li><a href="#component-arch">Component Architecture (UML)</a></li>
+      <li><a href="#audio-pipeline">Audio Processing Pipeline</a></li>
+      <li><a href="#waveform-pipeline">Waveform Visualization Pipeline</a></li>
+      <li><a href="#classification-engine">Classification Engine Deep Dive</a></li>
+      <li><a href="#data-model">Data Model / ERD</a></li>
+      <li><a href="#dual-audio-context">Dual AudioContext Architecture</a></li>
+      <li><a href="#state-management">State Management</a></li>
+      <li><a href="#fault-library">Fault Type Reference Library</a></li>
+      <li><a href="#thresholds">Key Thresholds & Configuration</a></li>
+      <li><a href="#pwa-deployment">PWA & Deployment</a></li>
+    </ol>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     3. EXECUTIVE SUMMARY
+     ═══════════════════════════════════════════════════════════ -->
+<div class="page-break"></div>
+<div class="section" id="executive-summary">
+  <div class="section-number">Section 01</div>
+  <h2>Executive Summary</h2>
+  <div class="glass glass-highlight">
+    <h3>What is Vroomie?</h3>
+    <p>
+      <strong>Vroomie</strong> is an AI-powered vehicle health diagnostics platform that transforms any smartphone into a professional-grade engine sound analyser. By leveraging the device microphone and on-device machine learning (TensorFlow.js YAMNet), Vroomie performs real-time acoustic anomaly detection — identifying faults such as alternator bearing failure, piston knock, intake leaks, and starter motor issues — without requiring any OBD-II hardware or workshop equipment.
+    </p>
+    <h3>Who Is It For?</h3>
+    <p>
+      Vehicle owners, fleet managers, independent mechanics, and roadside assistance operators who need instant, zero-hardware engine diagnostics. The PWA runs on any modern browser — iOS Safari, Android Chrome, or desktop — with no app store download required.
+    </p>
+    <h3>Key Differentiators</h3>
+    <div class="two-col" style="margin-top: 1rem;">
+      <div>
+        <h4>🧠 On-Device ML</h4>
+        <p>YAMNet audio classification runs entirely in the browser via TensorFlow.js. Zero server-side inference. Zero latency. Full offline capability after initial model download.</p>
+      </div>
+      <div>
+        <h4>🎙️ Acoustic Fingerprinting</h4>
+        <p>Reference fault patterns are pre-embedded as 1024-dimensional YAMNet vectors and matched via cosine similarity — similar to Shazam's audio fingerprinting approach.</p>
+      </div>
+      <div>
+        <h4>⚡ Real-Time Pipeline</h4>
+        <p>Dual AudioContext architecture separates ML inference (16 kHz) from waveform visualisation (native rate), ensuring smooth 60fps rendering alongside continuous classification.</p>
+      </div>
+      <div>
+        <h4>📱 Progressive Web App</h4>
+        <p>Installable PWA with service worker pre-caching, offline analysis, and push notification readiness. Deployed via GitHub Pages with CDN-backed static delivery.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     4. SYSTEM OVERVIEW
+     ═══════════════════════════════════════════════════════════ -->
+<div class="page-break"></div>
+<div class="section" id="system-overview">
+  <div class="section-number">Section 02</div>
+  <h2>System Overview & Tech Stack</h2>
+  <div class="glass">
+    <table>
+      <thead>
+        <tr><th>Layer</th><th>Technology</th><th>Version</th><th>Role</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>UI Framework</td><td><code>React</code></td><td>18.2</td><td>Component-based SPA with hooks & functional components</td></tr>
+        <tr><td>Build Tool</td><td><code>Vite</code></td><td>6.1</td><td>ESM-native dev server, optimised production bundles</td></tr>
+        <tr><td>ML Runtime</td><td><code>@tensorflow/tfjs</code></td><td>4.22</td><td>YAMNet graph model execution in-browser (WebGL/WASM)</td></tr>
+        <tr><td>Audio Model</td><td><code>YAMNet (TF Hub)</code></td><td>1.0</td><td>521-class audio event classifier, 1024-d embeddings</td></tr>
+        <tr><td>Backend / BaaS</td><td><code>Supabase</code></td><td>2.93</td><td>PostgreSQL, Auth, Realtime, Storage buckets</td></tr>
+        <tr><td>Audio Capture</td><td><code>Web Audio API</code></td><td>—</td><td>MediaStream, AudioContext, ScriptProcessorNode, AnalyserNode</td></tr>
+        <tr><td>State Mgmt</td><td><code>Zustand</code></td><td>4.5</td><td>Lightweight global store with localStorage persistence</td></tr>
+        <tr><td>Routing</td><td><code>react-router-dom</code></td><td>7.2</td><td>Client-side SPA routing</td></tr>
+        <tr><td>Styling</td><td><code>Tailwind CSS</code></td><td>3.4</td><td>Utility-first styling with custom glass-morphism utilities</td></tr>
+        <tr><td>Animations</td><td><code>Framer Motion</code></td><td>12.4</td><td>Layout animations, gesture support, AnimatePresence</td></tr>
+        <tr><td>Charts</td><td><code>Recharts</code></td><td>2.15</td><td>Analysis confidence trend visualisation</td></tr>
+        <tr><td>TTS</td><td><code>Web Speech API</code></td><td>—</td><td>Post-scan voice feedback in 10+ languages</td></tr>
+        <tr><td>PDF Export</td><td><code>jsPDF + AutoTable</code></td><td>4.2 / 5.0</td><td>Client-side analysis report generation</td></tr>
+        <tr><td>PWA</td><td><code>vite-plugin-pwa</code></td><td>1.2</td><td>Service worker generation, precaching manifest</td></tr>
+        <tr><td>Deployment</td><td><code>GitHub Pages</code></td><td>—</td><td>Static hosting via <code>gh-pages</code> CLI</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="alert alert-info">
+    <strong>Deployment Model:</strong> Fully static SPA — no server processes. All computation (ML inference, audio processing, report generation) runs in the browser. Supabase provides managed PostgreSQL, auth, and object storage as the only external service.
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     5. HIGH-LEVEL ARCHITECTURE
+     ═══════════════════════════════════════════════════════════ -->
+<div class="page-break"></div>
+<div class="section" id="high-level-arch">
+  <div class="section-number">Section 03</div>
+  <h2>High-Level Architecture</h2>
+  <div class="glass">
+    <div class="mermaid-wrapper">
+      <div class="mermaid">
+graph TB
+    User["👤 User / Vehicle Owner"]
+
+    subgraph Browser["Browser Runtime"]
+        ReactApp["⚛️ React 18 SPA<br/>Vite 6 + Tailwind CSS"]
+        AudioPipeline["🎤 Audio Pipeline<br/>Web Audio API<br/>16kHz Capture + Waveform"]
+        MLEngine["🧠 ML Engine<br/>TensorFlow.js<br/>YAMNet 1024-d Embeddings"]
+        MatchEngine["🎯 Matching Engine<br/>Cosine Similarity<br/>Fault Fingerprint Library"]
+        StateLayer["📦 State Layer<br/>Zustand + React Context<br/>localStorage Cache"]
+        TTSEngine["🔊 TTS Engine<br/>Web Speech API<br/>Multilingual Feedback"]
+    end
+
+    subgraph Supabase["☁️ Supabase Cloud"]
+        DB["🗄️ PostgreSQL<br/>analyses table"]
+        Storage["📁 Storage Buckets<br/>anomaly-patterns<br/>audio-analyses"]
+        Auth["🔐 Auth<br/>Supabase Auth"]
+        Realtime["⚡ Realtime<br/>Postgres Changes"]
+    end
+
+    subgraph TFHub["🌐 TF Hub CDN"]
+        YAMNet["YAMNet Model<br/>tfjs-model/yamnet/tfjs/1"]
+    end
+
+    User -->|"Taps Start"| ReactApp
+    ReactApp -->|"getUserMedia"| AudioPipeline
+    AudioPipeline -->|"1s PCM snapshots"| MLEngine
+    MLEngine -->|"1024-d embedding"| MatchEngine
+    MatchEngine -->|"anomaly / normal"| ReactApp
+    ReactApp -->|"Upload WebM + Insert"| Supabase
+    ReactApp -->|"Post-scan voice"| TTSEngine
+    MLEngine -.->|"Load model"| YAMNet
+    MLEngine -.->|"Fetch WAV refs"| Storage
+    ReactApp -->|"Read/Write"| StateLayer
+    DB -.->|"Realtime push"| ReactApp
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     6. COMPONENT ARCHITECTURE (UML)
+     ═══════════════════════════════════════════════════════════ -->
+<div class="page-break"></div>
+<div class="section" id="component-arch">
+  <div class="section-number">Section 04</div>
+  <h2>Component Architecture (UML)</h2>
+  <div class="glass">
+    <p>Every module in the Vroomie system and its inter-module dependencies, derived directly from import statements and function call chains in the source code.</p>
+    <div class="mermaid-wrapper">
+      <div class="mermaid">
+graph TB
+    PM["📄 PredictiveMaintenance.jsx<br/><i>Page orchestrator</i>"]
+    AR["🎙️ AudioRecorder.jsx<br/><i>Recording lifecycle</i>"]
+    AW["📊 AudioWaveform.jsx<br/><i>Canvas state machine</i>"]
+    AD["📋 AnalysisDetails.jsx<br/><i>Report detail modal</i>"]
+    AH["📜 AnalysisHistory.jsx<br/><i>Session list</i>"]
+
+    AFE["🔧 audioFeatureExtractor.js<br/><i>Mic capture + ring buffer</i>"]
+    MLE["🧠 mlEmbeddingEngine.js<br/><i>YAMNet model + matching</i>"]
+    DL["📦 datasetLoader.js<br/><i>Fingerprint generation + cache</i>"]
+    AME["🏷️ audioMatchingEngine.js<br/><i>Fault library + labels</i>"]
+    VF["🔊 voiceFeedback.js<br/><i>TTS post-scan</i>"]
+    SS["⚙️ settingsStore.js<br/><i>Zustand global state</i>"]
+    SB["☁️ supabase.js<br/><i>Client config</i>"]
+    AC["🔐 AuthContext<br/><i>React Context</i>"]
+
+    PM -->|"renders"| AR
+    PM -->|"renders"| AW
+    PM -->|"renders"| AD
+    PM -->|"renders"| AH
+    PM -->|"queries"| SB
+
+    AR -->|"startExtraction / stopExtraction"| AFE
+    AR -->|"buildReadableLabel"| AME
+    AR -->|"speakScanResult / clearAlert"| VF
+    AR -->|"upload + insert"| SB
+    AR -->|"reads settings"| SS
+    AR -->|"reads isPro"| AC
+    AR -->|"onAnalyserReady"| PM
+
+    AFE -->|"initializeEmbeddingEngine"| MLE
+    AFE -->|"getAudioEmbedding"| MLE
+    AFE -->|"findBestMatch"| MLE
+
+    MLE -->|"loadYamnetModel: tf.loadGraphModel"| MLE
+    MLE -->|"loadOrGenerateFingerprints"| DL
+
+    DL -->|"getAudioEmbeddingFn callback"| MLE
+    DL -->|"fetch WAV files"| SB
+
+    SS -->|"applyThresholdOverride"| AME
+    SS -->|"setDetectionMode"| AFE
+
+    PM -->|"analyser prop"| AW
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     7. AUDIO PROCESSING PIPELINE
+     ═══════════════════════════════════════════════════════════ -->
+<div class="page-break"></div>
+<div class="section" id="audio-pipeline">
+  <div class="section-number">Section 05</div>
+  <h2>Audio Processing Pipeline</h2>
+  <p>The complete lifecycle of a single recording session, from button tap to analysis report — accurate to the actual code flow.</p>
+
+  <div class="glass">
+    <div class="mermaid-wrapper">
+      <div class="mermaid">
+sequenceDiagram
+    actor User
+    participant AR as AudioRecorder
+    participant AFE as audioFeatureExtractor
+    participant MLE as mlEmbeddingEngine
+    participant DL as datasetLoader
+    participant YN as YAMNet Model
+    participant SB as Supabase
+
+    Note over User,AR: === PHASE 1: START RECORDING ===
+    User->>AR: Clicks Start Recording
+    AR->>AR: Reset session refs (anomalies, confidence, rejections)
+    AR->>AR: isRecordingRef = true, setIsRecording(true)
+    AR->>AR: Start 1s interval timer (120s max)
+    AR->>AR: onRecordingStart() → parent notified
+
+    Note over AR,MLE: === PHASE 2: ASYNC INIT ===
+    AR->>AFE: startExtraction(callback)
+    AFE->>MLE: initializeEmbeddingEngine()
+    MLE->>YN: loadYamnetModel() → tf.loadGraphModel(YAMNET_URL)
+    YN-->>MLE: Model loaded
+    MLE->>MLE: Warm up with tf.zeros([16000])
+    MLE->>DL: loadOrGenerateFingerprints(getAudioEmbedding)
+    DL->>DL: Check localStorage cache (v6)
+    alt Cache miss
+        loop For each of 6 WAV files
+            DL->>SB: fetch(anomaly-patterns/file.wav)
+            SB-->>DL: ArrayBuffer
+            DL->>DL: AudioContext.decodeAudioData()
+            DL->>DL: OfflineAudioContext resample → 16kHz
+            DL->>MLE: getAudioEmbedding(pcm16k)
+            MLE->>YN: yamnet.predict(tensor1d) → embeddings
+            YN-->>MLE: 1024-d mean embedding
+            MLE-->>DL: embedding array
+        end
+        DL->>DL: localStorage.setItem(cache)
+    end
+    DL-->>MLE: fingerprints[]
+    MLE-->>AFE: Engine ready
+
+    AFE->>AFE: getUserMedia(audio: raw)
+    AFE->>AFE: AudioContext(sampleRate=16000)
+    AFE->>AFE: ScriptProcessorNode(4096, 1, 1)
+    AFE-->>AR: Stream active
+
+    AR->>AR: Create native AudioContext (44.1/48kHz)
+    AR->>AR: Create AnalyserNode(fft=2048, smooth=0)
+    AR->>AR: Wire MediaRecorder(stream)
+    AR->>AR: MediaRecorder.start(1000ms chunks)
+
+    Note over AFE,MLE: === PHASE 3: CONTINUOUS CLASSIFICATION ===
+    loop Every ~900ms (wall-clock gated)
+        AFE->>AFE: Ring buffer snapshot (16000 samples)
+        AFE->>AFE: RMS over full 1s window
+        alt RMS < 0.01
+            AFE-->>AR: callback({status: normal, reason: rejected_silence})
+            AR->>AR: sessionRejectionsRef++
+        else RMS >= 0.01
+            AFE->>MLE: getAudioEmbedding(snapshot)
+            MLE->>YN: yamnet.predict(waveform)
+            YN-->>MLE: embeddings tensor
+            MLE->>MLE: tf.mean(embeddings, 0) → 1024-d
+            MLE-->>AFE: embedding[]
+            AFE->>MLE: findBestMatch(embedding)
+            MLE->>MLE: cosine similarity vs 6 refs
+            alt score >= 0.75
+                MLE-->>AFE: {status: anomaly, label, severity, confidence}
+                AFE-->>AR: callback(result)
+                AR->>AR: Accumulate in sessionAnomaliesRef
+            else score < 0.75
+                MLE-->>AFE: {status: normal, confidence}
+                AFE-->>AR: callback(result)
+            end
+        end
+    end
+
+    Note over User,SB: === PHASE 4: STOP + UPLOAD ===
+    User->>AR: Clicks Stop
+    AR->>AR: isRecordingRef = false
+    AR->>AR: clearContinuousAlert()
+    AR->>AR: TTS: speakScanResult (sync user gesture)
+    AR->>AR: setTimeout → MediaRecorder.stop()
+    AR->>AR: onstop → Blob(chunks, audio/webm)
+
+    AR->>AR: Silence rejection ratio check (>50%?)
+    alt Mostly silence
+        AR-->>User: Toast: Unable to detect
+    else Valid audio
+        AR->>SB: storage.upload(audio-analyses/recording.webm)
+        SB-->>AR: publicUrl
+        AR->>SB: INSERT INTO analyses (payload)
+        SB-->>AR: inserted row
+        AR->>AR: onRecordingComplete(result)
+        AR->>AR: Navigate to AnalysisDetails
+    end
+
+    AR->>AFE: stopExtraction()
+    AFE->>AFE: Disconnect ScriptProcessor
+    AFE->>AFE: Close AudioContext(16kHz)
+    AFE->>AFE: Stop MediaStream tracks
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     8. WAVEFORM VISUALIZATION PIPELINE
+     ═══════════════════════════════════════════════════════════ -->
+<div class="page-break"></div>
+<div class="section" id="waveform-pipeline">
+  <div class="section-number">Section 06</div>
+  <h2>Waveform Visualization Pipeline</h2>
+  <div class="glass">
+    <h3>State Machine</h3>
+    <p>AudioWaveform.jsx operates as a finite state machine with four states, decoupled from microphone readiness. All state is stored in refs — zero React re-renders from animation.</p>
+
+    <div class="mermaid-wrapper">
+      <div class="mermaid">
+sequenceDiagram
+    participant PM as PredictiveMaintenance
+    participant AW as AudioWaveform
+    participant Canvas as Canvas (2D Context)
+
+    Note over AW: STATE: idle (ECG @ 20fps)
+    AW->>Canvas: drawIdleECG() — cardiac trace
+    AW->>AW: Throttle via setTimeout(50ms)
+
+    PM->>AW: isRecording = true
+
+    Note over AW: STATE: burst (0–3000ms)
+    AW->>AW: waveStateRef = burst
+    AW->>AW: stateStartRef = performance.now()
+    loop 60fps RAF for 3 seconds
+        AW->>Canvas: drawBurst(elapsed)<br/>Multi-frequency simulation<br/>Decaying amplitude + spike impulses
+    end
+
+    Note over AW: Transition at 3000ms
+    AW->>AW: waveStateRef = live
+
+    Note over AW: STATE: live (3s+)
+    loop 60fps RAF
+        AW->>Canvas: drawLive(analyser, t)
+        Canvas->>Canvas: analyser.getByteTimeDomainData(1024)
+        Canvas->>Canvas: Compute peak deviation (maxDev)
+        Canvas->>Canvas: Auto-gain = min(128/max(maxDev,4), 8)
+        Canvas->>Canvas: Render amplified waveform
+    end
+
+    PM->>AW: isRecording = false
+
+    Note over AW: STATE: stopping
+    AW->>AW: waveStateRef = stopping
+    loop 0–300ms: Spike phase
+        AW->>Canvas: drawStopping() — bell curve peak
+    end
+    loop 300–1000ms: Decay phase
+        AW->>Canvas: drawStopping() — exp(-4t) decay
+    end
+
+    Note over AW: STATE: idle (returns to ECG)
+    AW->>AW: waveStateRef = idle
+    AW->>Canvas: drawIdleECG() @ 20fps throttle
+      </div>
+    </div>
+
+    <h3>Rendering Details</h3>
+    <table>
+      <thead>
+        <tr><th>Property</th><th>Value</th><th>Rationale</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Separate AudioContext</td><td>Native rate (44.1/48kHz)</td><td>High-fidelity waveform, independent of 16kHz ML context</td></tr>
+        <tr><td><code>fftSize</code></td><td>2048</td><td>1024 frequency bins, sufficient resolution for waveform display</td></tr>
+        <tr><td><code>smoothingTimeConstant</code></td><td>0.0</td><td>Zero smoothing — instant visual response to audio changes</td></tr>
+        <tr><td>Auto-gain range</td><td>1x – 8x</td><td>Quiet signals amplified so waveform is always visually active</td></tr>
+        <tr><td>Burst duration</td><td>3000ms</td><td>Masks mic init latency with aggressive animated startup</td></tr>
+        <tr><td>Stop spike</td><td>0–300ms</td><td>Visual punctuation when recording ends</td></tr>
+        <tr><td>Stop decay</td><td>300–1000ms</td><td>Exponential falloff: <code>exp(-4t)</code></td></tr>
+        <tr><td>Idle frame rate</td><td>~20fps (50ms throttle)</td><td>Saves CPU when not recording</td></tr>
+        <tr><td>Active frame rate</td><td>60fps (requestAnimationFrame)</td><td>Smooth real-time rendering during burst/live/stopping</td></tr>
+        <tr><td>HiDPI support</td><td><code>devicePixelRatio</code> scaling</td><td>Crisp rendering on Retina/high-DPI displays</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     9. CLASSIFICATION ENGINE DEEP DIVE
+     ═══════════════════════════════════════════════════════════ -->
+<div class="page-break"></div>
+<div class="section" id="classification-engine">
+  <div class="section-number">Section 07</div>
+  <h2>Classification Engine Deep Dive</h2>
+
+  <div class="glass">
+    <h3>YAMNet Model Details</h3>
+    <table>
+      <thead>
+        <tr><th>Property</th><th>Value</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Model URL</td><td><code>https://tfhub.dev/google/tfjs-model/yamnet/tfjs/1</code></td></tr>
+        <tr><td>Architecture</td><td>MobileNet v1 depthwise-separable CNN</td></tr>
+        <tr><td>Input</td><td>16 kHz mono PCM waveform (<code>Float32Array</code>)</td></tr>
+        <tr><td>Outputs</td><td>3 tensors: <code>[scores, embeddings, spectrogram]</code></td></tr>
+        <tr><td>Embedding dimension</td><td>1024 per 0.96s frame</td></tr>
+        <tr><td>Pooling strategy</td><td><code>tf.mean(embeddings, axis=0)</code> — temporal mean pooling</td></tr>
+        <tr><td>Final embedding</td><td>Single 1024-d vector per 1-second window</td></tr>
+        <tr><td>Warm-up</td><td><code>tf.zeros([16000])</code> — 1s silence to JIT-compile WebGL kernels</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="glass">
+    <h3>Initialization Order</h3>
+    <p>The initialization sequence is critical — fingerprint generation depends on a loaded model.</p>
+    <div class="mermaid-wrapper">
+      <div class="mermaid">
+graph LR
+    A["initializeEmbeddingEngine()"] --> B["loadYamnetModel()"]
+    B --> C["tf.loadGraphModel(URL)"]
+    C --> D["Warm up: predict(zeros)"]
+    D --> E["loadOrGenerateFingerprints()"]
+    E --> F{"localStorage cache?"}
+    F -->|"Hit"| G["Return cached fingerprints"]
+    F -->|"Miss"| H["For each WAV file"]
+    H --> I["fetch() from Supabase bucket"]
+    I --> J["AudioContext.decodeAudioData()"]
+    J --> K["OfflineAudioContext resample → 16kHz"]
+    K --> L["getAudioEmbedding(pcm)"]
+    L --> M["yamnet.predict() → mean embedding"]
+    M --> N["Push to fingerprints[]"]
+    N --> H
+    H -->|"All done"| O["Cache to localStorage"]
+    O --> P["Engine Ready ✅"]
+      </div>
+    </div>
+  </div>
+
+  <div class="glass">
+    <h3>Cosine Similarity</h3>
+    <p>The core distance metric for comparing live audio embeddings against reference fingerprints:</p>
+    <div class="formula">
+      cos(A, B) = (A · B) / (‖A‖ × ‖B‖) = Σ(Aᵢ × Bᵢ) / (√Σ(Aᵢ²) × √Σ(Bᵢ²))
+    </div>
+    <p>Implemented as a tight loop over 1024 dimensions in <code>calculateCosineSimilarity()</code>. No external library dependency.</p>
+
+    <h3>Threshold Rationale</h3>
+    <div class="two-col">
+      <div class="alert alert-success">
+        <strong>Production Threshold: 0.75</strong><br/>
+        Real-world smartphone microphones introduce environmental noise, room reverb, and non-uniform frequency response. A threshold of 0.75 balances sensitivity (catching real faults) with precision (avoiding false positives from ambient noise).
+      </div>
+      <div class="alert alert-critical">
+        <strong>Why Not 0.90?</strong><br/>
+        Testing showed 0.90 rejects virtually all real-world recordings. Clean WAV references score ~0.95+ against themselves, but live mic audio consistently tops out at 0.78–0.85 against the same references due to acoustic channel differences.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     10. DATA MODEL / ERD
+     ═══════════════════════════════════════════════════════════ -->
+<div class="page-break"></div>
+<div class="section" id="data-model">
+  <div class="section-number">Section 08</div>
+  <h2>Data Model / ERD</h2>
+
+  <div class="glass">
+    <div class="mermaid-wrapper">
+      <div class="mermaid">
+erDiagram
+    analyses {
+        uuid id PK
+        text vehicle_id
+        text audio_file_url
+        integer duration_seconds
+        text status "completed | flagged"
+        float confidence_score
+        jsonb anomalies_detected "Array of anomaly objects"
+        text detection_mode "basic | ml"
+        text detection_source "YAMNet + DTW Fusion | Signal Analysis"
+        float ml_confidence
+        float signal_similarity
+        text final_decision "ANOMALY DETECTED | NO ANOMALY"
+        jsonb analysis_result "overall_health + detected_patterns"
+        timestamptz created_at "Server-generated DEFAULT now()"
+    }
+
+    anomaly_patterns_bucket {
+        text filename PK
+        text content_type "audio/wav"
+        integer size_bytes
+    }
+
+    audio_analyses_bucket {
+        text filepath PK
+        text content_type "audio/webm"
+        integer size_bytes
+    }
+
+    localstorage_cache {
+        text key "vroomie_yamnet_fingerprints_v6"
+        jsonb value "Array of fingerprint objects"
+    }
+
+    analyses ||--o{ audio_analyses_bucket : "audio_file_url references"
+    anomaly_patterns_bucket ||--o{ localstorage_cache : "generates fingerprints"
+      </div>
+    </div>
+  </div>
+
+  <div class="glass">
+    <h3>Reference WAV Files (anomaly-patterns bucket)</h3>
+    <table>
+      <thead>
+        <tr><th>#</th><th>Filename</th><th>Derived Fault Type</th><th>Severity</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>1</td><td><code>alternator_bearing_fault_critical.wav</code></td><td><code>alternator_bearing_fault</code></td><td><span class="badge badge-critical">critical</span></td></tr>
+        <tr><td>2</td><td><code>BearingAlternator.wav</code></td><td><code>alternator_bearing_fault</code></td><td><span class="badge badge-high">high</span></td></tr>
+        <tr><td>3</td><td><code>intake_leak_low.wav</code></td><td><code>intake_leak</code></td><td><span class="badge badge-low">low</span></td></tr>
+        <tr><td>4</td><td><code>misfire_detected_medium.wav</code></td><td><code>misfire_detected</code></td><td><span class="badge badge-medium">medium</span></td></tr>
+        <tr><td>5</td><td><code>MotorStarter.wav</code></td><td><code>motor_starter</code></td><td><span class="badge badge-high">high</span></td></tr>
+        <tr><td>6</td><td><code>Piston.wav</code></td><td><code>piston_knock</code></td><td><span class="badge badge-high">high</span></td></tr>
+      </tbody>
+    </table>
+
+    <h3>Fingerprint Cache Structure (<code>localStorage</code>)</h3>
+    <pre>[
+  {
+    "id": "alternator_bearing_fault_critical.wav",
+    "label": "alternator bearing fault critical",
+    "fault_type": "alternator_bearing_fault",
+    "severity": "critical",
+    "source_file": "alternator_bearing_fault_critical.wav",
+    "yamnet_embedding": [0.0234, -0.1082, ..., 0.0571]  // 1024 floats
+  },
+  ...
+]</pre>
+  </div>
+
+  <div class="glass">
+    <h3><code>analysis_result</code> JSONB Structure</h3>
+    <pre>{
+  "overall_health": "healthy | warning | critical",
+  "confidence_score": 82.5,
+  "detected_patterns": ["alternator bearing fault", "misfire detected"]
+  // — or for healthy vehicles:
+  // "detected_patterns": ["smooth_idle", "consistent_rpm"]
+}</pre>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     11. DUAL AUDIOCONTEXT ARCHITECTURE
+     ═══════════════════════════════════════════════════════════ -->
+<div class="page-break"></div>
+<div class="section" id="dual-audio-context">
+  <div class="section-number">Section 09</div>
+  <h2>Dual AudioContext Architecture</h2>
+  <div class="glass">
+    <p>A single <code>getUserMedia</code> MediaStream is shared between two completely independent AudioContext instances. This separation is critical: YAMNet requires exactly 16 kHz input, while the waveform display benefits from the device's native sample rate (typically 44.1 or 48 kHz).</p>
+
+    <div class="mermaid-wrapper">
+      <div class="mermaid">
+graph TB
+    MIC["🎤 navigator.mediaDevices.getUserMedia()"]
+    MS["MediaStream<br/>(shared, single mic track)"]
+
+    MIC --> MS
+
+    subgraph ML_CTX["🧠 ML AudioContext (16 kHz)"]
+        MSS1["MediaStreamSource"]
+        SP["ScriptProcessorNode<br/>bufferSize: 4096"]
+        RB["Ring Buffer<br/>16000 samples (1 sec)"]
+        YAMNET["YAMNet Inference<br/>1024-d embedding"]
+        MATCH["findBestMatch()<br/>cosine similarity"]
+    end
+
+    subgraph VIZ_CTX["📊 Waveform AudioContext (Native Rate)"]
+        MSS2["MediaStreamSource"]
+        AN["AnalyserNode<br/>fftSize: 2048<br/>smoothing: 0"]
+        CANVAS["Canvas 2D Render<br/>60fps RAF loop<br/>Auto-gain 1–8x"]
+    end
+
+    MS --> MSS1
+    MS --> MSS2
+
+    MSS1 --> SP
+    SP --> RB
+    RB -->|"every ~900ms"| YAMNET
+    YAMNET --> MATCH
+
+    MSS2 --> AN
+    AN -->|"getByteTimeDomainData"| CANVAS
+
+    style ML_CTX fill:#0a1628,stroke:#06b6d4,stroke-width:2px
+    style VIZ_CTX fill:#1a0a28,stroke:#8b5cf6,stroke-width:2px
+      </div>
+    </div>
+
+    <div class="alert alert-info">
+      <strong>Why two AudioContexts?</strong> The Web Audio API does not allow a single AudioContext to operate at two different sample rates simultaneously. The ML context must resample to 16 kHz for YAMNet compatibility, while the waveform context must remain at native rate for accurate time-domain display. Both are created from the same MediaStream, which the browser multiplexes internally.
+    </div>
+
+    <h3>Lifecycle Ordering</h3>
+    <table>
+      <thead><tr><th>Step</th><th>Action</th><th>Owner</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td><code>startExtraction()</code> creates 16 kHz AudioContext + ScriptProcessor</td><td><code>audioFeatureExtractor.js</code></td></tr>
+        <tr><td>2</td><td><code>getActiveMediaStream()</code> returns shared stream</td><td><code>audioFeatureExtractor.js</code></td></tr>
+        <tr><td>3</td><td>AudioRecorder creates native-rate AudioContext + AnalyserNode</td><td><code>AudioRecorder.jsx</code></td></tr>
+        <tr><td>4</td><td>Both contexts process simultaneously during recording</td><td>Browser engine</td></tr>
+        <tr><td>5</td><td>On stop: MediaRecorder.stop() → onstop → handleAudioUpload()</td><td><code>AudioRecorder.jsx</code></td></tr>
+        <tr><td>6</td><td>Close native AudioContext</td><td><code>AudioRecorder.jsx</code></td></tr>
+        <tr><td>7</td><td><code>stopExtraction()</code> closes 16 kHz context + stops MediaStream tracks</td><td><code>audioFeatureExtractor.js</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     12. STATE MANAGEMENT
+     ═══════════════════════════════════════════════════════════ -->
+<div class="page-break"></div>
+<div class="section" id="state-management">
+  <div class="section-number">Section 10</div>
+  <h2>State Management</h2>
+
+  <div class="glass">
+    <h3>Zustand Settings Store (<code>settingsStore.js</code>)</h3>
+    <p>Single source of truth for all user preferences. Persists to <code>localStorage</code> immediately and syncs to Supabase <code>user_preferences</code> table when authenticated.</p>
+    <table>
+      <thead><tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>language</code></td><td>string</td><td><code>'en-US'</code></td><td>BCP-47 locale for TTS and UI</td></tr>
+        <tr><td><code>voiceAlertsEnabled</code></td><td>boolean</td><td><code>true</code></td><td>Post-scan voice feedback toggle</td></tr>
+        <tr><td><code>sensitivity</code></td><td>enum</td><td><code>'medium'</code></td><td>low / medium / high — maps to threshold overrides</td></tr>
+        <tr><td><code>detectionMode</code></td><td>enum</td><td><code>'basic'</code></td><td>basic / ml — wires to pipeline singleton</td></tr>
+        <tr><td><code>saveHistory</code></td><td>boolean</td><td><code>true</code></td><td>Whether to persist analysis records</td></tr>
+        <tr><td><code>dataCollectionEnabled</code></td><td>boolean</td><td><code>true</code></td><td>Opt-in anonymised data sharing</td></tr>
+        <tr><td><code>showValidationMenu</code></td><td>boolean</td><td><code>false</code></td><td>Developer-only validation UI toggle</td></tr>
+      </tbody>
+    </table>
+
+    <h4>Sensitivity → Threshold Mapping</h4>
+    <table>
+      <thead><tr><th>Sensitivity Level</th><th>Anomaly Threshold</th><th>Probable Threshold</th><th>RMS Gate</th></tr></thead>
+      <tbody>
+        <tr><td>Low (conservative)</td><td><code>0.75</code></td><td><code>0.62</code></td><td><code>0.015</code></td></tr>
+        <tr><td>Medium (balanced)</td><td><code>0.65</code></td><td><code>0.50</code></td><td><code>0.008</code></td></tr>
+        <tr><td>High (sensitive)</td><td><code>0.55</code></td><td><code>0.40</code></td><td><code>0.005</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="glass">
+    <h3>React Context: AuthContext</h3>
+    <p>Provides <code>isPro</code> flag via Supabase Auth. Gates access to ML detection mode — free users see a lock icon and upgrade modal. Pro status is checked via <code>useAuth()</code> hook in AudioRecorder.</p>
+
+    <h3>Refs vs State in AudioRecorder</h3>
+    <p>AudioRecorder uses a deliberate dual-tracking pattern to avoid stale closure bugs in async callbacks and timers:</p>
+    <table>
+      <thead><tr><th>Mechanism</th><th>Purpose</th><th>Example</th></tr></thead>
+      <tbody>
+        <tr><td><code>isRecordingRef</code> (useRef)</td><td>Non-stale reads in timers, async callbacks, and event handlers</td><td>Timer auto-stop at 120s, keyboard shortcuts</td></tr>
+        <tr><td><code>isRecording</code> (useState)</td><td>React re-renders — drives waveform state machine transitions</td><td>AudioWaveform <code>isRecording</code> prop</td></tr>
+        <tr><td><code>sessionAnomaliesRef</code></td><td>Accumulates anomalies without re-renders during recording</td><td>Built into DB payload on stop</td></tr>
+        <tr><td><code>sessionConfidenceRef</code></td><td>Collects all confidence scores for averaging</td><td>Average confidence in report</td></tr>
+        <tr><td><code>sessionRejectionsRef</code></td><td>Counts silence rejections for ratio gate</td><td>Silence rejection ratio > 0.50 aborts report</td></tr>
+        <tr><td><code>recordingTimeRef</code></td><td>Accurate duration for DB payload (not stale closure)</td><td><code>duration_seconds</code> field</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     13. FAULT TYPE REFERENCE LIBRARY
+     ═══════════════════════════════════════════════════════════ -->
+<div class="page-break"></div>
+<div class="section" id="fault-library">
+  <div class="section-number">Section 11</div>
+  <h2>Fault Type Reference Library</h2>
+  <p>Complete <code>FAULT_NATURE_LIBRARY</code> from <code>audioMatchingEngine.js</code>. Each entry provides clinical-grade descriptions for the AnalysisDetails report.</p>
+
+  <div class="glass">
+    <table>
+      <thead>
+        <tr><th>Key</th><th>Nature Description</th><th>Recommended Fix</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>alternator_bearing_fault_critical</code><br/><span class="badge badge-critical">critical</span></td>
+          <td>The alternator's internal bearing race is failing, generating a sustained high-frequency whine (4–8 kHz). Causes increasing electrical load instability, progressive battery drain, and risk of complete loss of charging while driving.</td>
+          <td>Replace alternator bearing or full assembly. Inspect drive belt for glazing or cracking caused by failing bearing's irregular drag.</td>
+        </tr>
+        <tr>
+          <td><code>BearingAlternator</code><br/><span class="badge badge-high">high</span></td>
+          <td>Severe alternator bearing degradation with high kurtosis in the 4–10 kHz band, indicating metal-on-metal contact within bearing races. Leads to total alternator seizure and stranded vehicle.</td>
+          <td>Replace alternator immediately. Do not operate under high electrical load (A/C, headlights) until repaired.</td>
+        </tr>
+        <tr>
+          <td><code>intake_leak_low</code><br/><span class="badge badge-low">low</span></td>
+          <td>Vacuum or air leak in intake manifold/plenum gasket introducing unmetered air. Causes lean fuel condition, misfires under load, and rough idling. Prolonged lean running risks piston and valve damage.</td>
+          <td>Smoke machine or propane enrichment test to locate leak. Replace intake manifold gasket, vacuum lines, or affected component. Reset ECU fuel trims.</td>
+        </tr>
+        <tr>
+          <td><code>misfire_detected_medium</code><br/><span class="badge badge-medium">medium</span></td>
+          <td>One or more cylinders failing to complete combustion reliably. Common causes: fouled spark plugs, weak ignition coils, or injector deposits. Unburnt fuel damages catalytic converter.</td>
+          <td>Cylinder-balance test via OBD-II. Replace spark plugs, inspect coil-on-plug units, run injector cleaning cycle.</td>
+        </tr>
+        <tr>
+          <td><code>MotorStarter</code><br/><span class="badge badge-high">high</span></td>
+          <td>Electrical transient consistent with starter motor engagement or relay chatter. May indicate weak battery, corroded terminals, or failing solenoid. Repeated no-start accelerates flywheel ring gear wear.</td>
+          <td>Load-test battery, inspect terminal corrosion. Test starter solenoid draw with clamp ammeter. Replace battery or starter as indicated.</td>
+        </tr>
+        <tr>
+          <td><code>Piston</code><br/><span class="badge badge-high">high</span></td>
+          <td>Deep low-frequency knocking consistent with piston slap or big-end bearing wear. Piston slap typically cold-onset; bearing knock is constant and load-sensitive. Indicates significant internal engine wear.</td>
+          <td>Oil pressure test and cylinder leak-down test. Measure big-end bearing clearances. Engine rebuild/replacement likely if clearances exceed spec.</td>
+        </tr>
+        <tr>
+          <td><code>water_pump_failure_critical</code><br/><span class="badge badge-critical">critical</span></td>
+          <td>Water pump impeller/shaft bearing failing, causing irregular coolant flow. Leads to localised hot spots in cylinder head. Head gasket failure and engine overheating within minutes.</td>
+          <td>Replace water pump assembly and thermostat. Flush cooling system, inspect coolant contamination. Check head gasket.</td>
+        </tr>
+        <tr>
+          <td><code>timing_chain_rattle_high</code><br/><span class="badge badge-high">high</span></td>
+          <td>Timing chain tensioner has lost hydraulic pressure or chain stretched beyond tolerance. Metallic rattle during cold starts/acceleration. Failure causes severe valve-to-piston collision.</td>
+          <td>Replace timing chain, tensioner, and guide rails as complete kit. Use manufacturer-spec engine oil.</td>
+        </tr>
+        <tr>
+          <td><code>PowerSteeringPump</code><br/><span class="badge badge-high">high</span></td>
+          <td>Power steering pump producing abnormal tonal whine under load. Indicates low fluid, cavitating pump, or failing vane mechanism. Loss of power assist occurs suddenly.</td>
+          <td>Check/top up PS fluid. Inspect for leaks at pump, rack, hose fittings. Replace pump and flush fluid if whine persists.</td>
+        </tr>
+        <tr>
+          <td><code>RockerArmAndValve</code><br/><span class="badge badge-high">high</span></td>
+          <td>Rhythmic high-frequency tapping in valvetrain. Consistent with excessive rocker arm clearance, collapsed lifter, or sticking valve stem. Causes camshaft lobe wear and valve float at high RPM.</td>
+          <td>Check valve clearances, adjust to spec. Inspect lifters for hydraulic collapse. Replace worn rockers, pushrods, or lifter assembly.</td>
+        </tr>
+        <tr>
+          <td><code>SerpentineBelt</code><br/><span class="badge badge-medium">medium</span></td>
+          <td>Irregular broadband noise in belt drive system. Glazed, cracked, or misaligned serpentine belt. Failure causes simultaneous loss of alternator, power steering, and water pump drive.</td>
+          <td>Inspect belt for cracking, glazing, proper tension. Check all driven pulleys for bearing noise/wobble. Replace belt and tensioner together.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     14. KEY THRESHOLDS & CONFIGURATION
+     ═══════════════════════════════════════════════════════════ -->
+<div class="page-break"></div>
+<div class="section" id="thresholds">
+  <div class="section-number">Section 12</div>
+  <h2>Key Thresholds & Configuration</h2>
+  <div class="glass">
+    <table>
+      <thead>
+        <tr><th>Parameter</th><th>Value</th><th>Source File</th><th>Purpose</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>ANOMALY_THRESHOLD</code></td>
+          <td><strong>0.75</strong></td>
+          <td><code>mlEmbeddingEngine.js</code></td>
+          <td>Cosine similarity score ≥ this triggers anomaly detection. Balances sensitivity vs. false positive rate for real-world mic audio.</td>
+        </tr>
+        <tr>
+          <td>RMS silence gate</td>
+          <td><strong>0.01</strong></td>
+          <td><code>audioFeatureExtractor.js</code></td>
+          <td>RMS below this over the full 1-second window rejects the frame as silence — prevents YAMNet inference on empty audio.</td>
+        </tr>
+        <tr>
+          <td>Silence rejection ratio</td>
+          <td><strong>0.50</strong> (50%)</td>
+          <td><code>AudioRecorder.jsx</code></td>
+          <td>If more than half of all classification windows were silence-rejected, the recording is aborted — "Unable to detect".</td>
+        </tr>
+        <tr>
+          <td>Classification interval</td>
+          <td><strong>900ms</strong></td>
+          <td><code>audioFeatureExtractor.js</code></td>
+          <td>Wall-clock minimum between classification attempts. Prevents overlapping YAMNet inference calls.</td>
+        </tr>
+        <tr>
+          <td>ScriptProcessor buffer</td>
+          <td><strong>4096 samples</strong></td>
+          <td><code>audioFeatureExtractor.js</code></td>
+          <td>onaudioprocess block size. At 16 kHz = 256ms per block, ~4 blocks fill the 1-second ring buffer.</td>
+        </tr>
+        <tr>
+          <td>Target sample rate</td>
+          <td><strong>16,000 Hz</strong></td>
+          <td><code>audioFeatureExtractor.js</code></td>
+          <td>YAMNet's required input sample rate. AudioContext created with explicit <code>sampleRate: 16000</code>.</td>
+        </tr>
+        <tr>
+          <td>Waveform FFT size</td>
+          <td><strong>2048</strong></td>
+          <td><code>AudioRecorder.jsx</code></td>
+          <td>AnalyserNode FFT size → 1024 frequency bins for time-domain waveform display.</td>
+        </tr>
+        <tr>
+          <td>Waveform smoothing</td>
+          <td><strong>0.0</strong></td>
+          <td><code>AudioRecorder.jsx</code></td>
+          <td>Zero temporal smoothing — ensures instant visual response to audio transients.</td>
+        </tr>
+        <tr>
+          <td>Auto-gain max</td>
+          <td><strong>8x</strong></td>
+          <td><code>AudioWaveform.jsx</code></td>
+          <td>Maximum amplification for quiet signals. Formula: <code>min(128 / max(maxDev, 4), 8)</code></td>
+        </tr>
+        <tr>
+          <td>Burst duration</td>
+          <td><strong>3000ms</strong></td>
+          <td><code>AudioWaveform.jsx</code></td>
+          <td>Duration of simulated burst animation before switching to live analyser data.</td>
+        </tr>
+        <tr>
+          <td>Max recording</td>
+          <td><strong>120 seconds</strong></td>
+          <td><code>AudioRecorder.jsx</code></td>
+          <td>Hard cap on recording duration. Timer auto-triggers <code>stopRecording()</code> at countdown zero.</td>
+        </tr>
+        <tr>
+          <td>Cache key</td>
+          <td><strong><code>vroomie_yamnet_fingerprints_v6</code></strong></td>
+          <td><code>datasetLoader.js</code></td>
+          <td>localStorage key for cached YAMNet fingerprint embeddings. Versioned for cache busting.</td>
+        </tr>
+        <tr>
+          <td>MediaRecorder chunk interval</td>
+          <td><strong>1000ms</strong></td>
+          <td><code>AudioRecorder.jsx</code></td>
+          <td><code>MediaRecorder.start(1000)</code> — emits data chunks every second.</td>
+        </tr>
+        <tr>
+          <td>Ring buffer size</td>
+          <td><strong>16,000 samples</strong></td>
+          <td><code>audioFeatureExtractor.js</code></td>
+          <td>Exactly 1 second at 16 kHz. Circular buffer overwrites oldest samples continuously.</td>
+        </tr>
+        <tr>
+          <td>Debug debounce</td>
+          <td><strong>250ms</strong></td>
+          <td><code>AudioRecorder.jsx</code></td>
+          <td>Max 4 debug stat re-renders per second in development mode.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     15. PWA & DEPLOYMENT
+     ═══════════════════════════════════════════════════════════ -->
+<div class="page-break"></div>
+<div class="section" id="pwa-deployment">
+  <div class="section-number">Section 13</div>
+  <h2>PWA & Deployment</h2>
+
+  <div class="glass">
+    <h3>Progressive Web App</h3>
+    <table>
+      <thead><tr><th>Feature</th><th>Implementation</th></tr></thead>
+      <tbody>
+        <tr><td>Plugin</td><td><code>vite-plugin-pwa</code> v1.2 — generates service worker and manifest at build time</td></tr>
+        <tr><td>Service Worker</td><td>Workbox-based, auto-generated. Precaches all static assets (HTML, JS, CSS, fonts)</td></tr>
+        <tr><td>Caching Strategy</td><td>Precache for app shell; runtime cache (stale-while-revalidate) for API calls and TF Hub model</td></tr>
+        <tr><td>Offline Support</td><td>Full offline capability after initial load. Analyses queued in IndexedDB (<code>idb</code> v8) for sync when online</td></tr>
+        <tr><td>Installability</td><td>Meets PWA install criteria — manifest with icons, start_url, display: standalone</td></tr>
+        <tr><td>Connectivity Detection</td><td>AudioRecorder monitors <code>online</code>/<code>offline</code> events, shows amber indicator badge when offline</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Deployment Pipeline</h3>
+    <div class="mermaid-wrapper">
+      <div class="mermaid">
+graph LR
+    DEV["👨‍💻 Developer<br/>npm run dev"]
+    BUILD["🔨 Vite Build<br/>npm run build:production"]
+    DIST["📦 dist/ folder<br/>Static assets + SW"]
+    GHP["🌐 GitHub Pages<br/>gh-pages -d dist"]
+    CDN["⚡ CDN Edge<br/>vroomie.in"]
+
+    DEV --> BUILD
+    BUILD --> DIST
+    DIST --> GHP
+    GHP --> CDN
+      </div>
+    </div>
+
+    <h3>Build Scripts</h3>
+    <table>
+      <thead><tr><th>Script</th><th>Command</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>dev</code></td><td><code>vite</code></td><td>Local dev server with HMR</td></tr>
+        <tr><td><code>build</code></td><td><code>vite build</code></td><td>Production bundle (default mode)</td></tr>
+        <tr><td><code>build:staging</code></td><td><code>vite build --mode staging</code></td><td>Staging environment build</td></tr>
+        <tr><td><code>build:production</code></td><td><code>vite build --mode production</code></td><td>Production build with env vars</td></tr>
+        <tr><td><code>deploy</code></td><td><code>gh-pages -d dist</code></td><td>Push dist/ to gh-pages branch</td></tr>
+        <tr><td><code>preview</code></td><td><code>vite preview</code></td><td>Locally preview production build</td></tr>
+      </tbody>
+    </table>
+
+    <h3>External Service Dependencies</h3>
+    <table>
+      <thead><tr><th>Service</th><th>Endpoint</th><th>Failure Mode</th></tr></thead>
+      <tbody>
+        <tr><td>TF Hub</td><td><code>tfhub.dev/google/tfjs-model/yamnet/tfjs/1</code></td><td>Model load fails → classification unavailable (graceful degradation)</td></tr>
+        <tr><td>Supabase Storage</td><td><code>bdldmkhcdtlqxaopxlam.supabase.co</code></td><td>Fingerprint fetch fails → cached embeddings used (or regenerated on reconnect)</td></tr>
+        <tr><td>Supabase DB</td><td>Same host, PostgREST API</td><td>Insert fails → local-only result with <code>local-UUID</code> fallback ID</td></tr>
+        <tr><td>Supabase Realtime</td><td>WebSocket channel</td><td>Push missed → manual refetch on next page load</td></tr>
+        <tr><td>Google Fonts</td><td><code>fonts.googleapis.com</code></td><td>Falls back to system font stack</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     FOOTER
+     ═══════════════════════════════════════════════════════════ -->
+<div class="divider"></div>
+<div style="text-align:center; padding: 2rem 0;">
+  <p style="color: var(--text-muted); font-size: 0.8rem;">
+    Vroomie System Architecture — Detailed Edition v2.0.0 • Generated 2026-06-23<br/>
+    © 2026 Vroomie Engineering. All rights reserved.
+  </p>
+</div>
+
+</div><!-- /container -->
+
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    themeVariables: {
+      primaryColor: '#06b6d4',
+      primaryTextColor: '#f1f5f9',
+      primaryBorderColor: '#06b6d4',
+      lineColor: '#64748b',
+      secondaryColor: '#8b5cf6',
+      tertiaryColor: '#0a0a1a',
+      fontSize: '14px',
+      fontFamily: 'Inter, sans-serif'
+    },
+    sequence: {
+      diagramMarginX: 20,
+      diagramMarginY: 20,
+      actorMargin: 60,
+      width: 200,
+      height: 50,
+      boxMargin: 10,
+      useMaxWidth: true,
+      wrap: true,
+      wrapPadding: 15
+    },
+    flowchart: {
+      useMaxWidth: true,
+      htmlLabels: true,
+      curve: 'basis'
+    },
+    er: {
+      useMaxWidth: true,
+      fontSize: 13
+    }
+  });
+</script>
+
+</body>
+</html>
