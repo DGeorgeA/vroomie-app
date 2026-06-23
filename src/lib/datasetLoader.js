@@ -2,7 +2,7 @@
 import { Logger } from './logger';
 import { supabase } from './supabase'; // if needed, but we can just use fetch
 
-const CACHE_KEY = 'vroomie_yamnet_fingerprints_v5';
+const CACHE_KEY = 'vroomie_yamnet_fingerprints_v6';
 const SUPABASE_BUCKET_URL = 'https://bdldmkhcdtlqxaopxlam.supabase.co/storage/v1/object/public/anomaly-patterns/';
 
 const FILES_TO_DOWNLOAD = [

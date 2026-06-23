@@ -6,7 +6,9 @@ const YAMNET_MODEL_URL = 'https://tfhub.dev/google/tfjs-model/yamnet/tfjs/1';
 
 let yamnetModel = null;
 let isModelLoading = false;
+let modelLoadPromise = null;
 let yamnetFingerprints = [];
+let isFingerprintsLoading = false;
 
 // Cosine Similarity Threshold for anomaly detection (0.0 to 1.0)
 // 0.75 balances sensitivity and precision for real-world microphone audio.
@@ -14,47 +16,41 @@ let yamnetFingerprints = [];
 // that reduce similarity vs clean WAV references — 0.90 rejects everything.
 const ANOMALY_THRESHOLD = 0.75;
 
-export async function initializeFingerprints() {
-  if (yamnetFingerprints.length === 0) {
-    yamnetFingerprints = await loadOrGenerateFingerprints(getAudioEmbedding);
-  }
-}
-
 /**
- * Initializes and caches the YAMNet model.
+ * Loads the YAMNet model only. No fingerprint loading.
+ * This must complete before getAudioEmbedding can be called.
  */
-export async function initializeEmbeddingEngine() {
-  await initializeFingerprints(); // Eagerly load fingerprints
+async function loadYamnetModel() {
   if (yamnetModel) return yamnetModel;
-  if (isModelLoading) {
-    while (isModelLoading) {
-      await new Promise(r => setTimeout(r, 100));
-    }
-    return yamnetModel;
-  }
+  if (modelLoadPromise) return modelLoadPromise;
 
-  isModelLoading = true;
-  try {
-    Logger.info('Loading YAMNet Embedding Model from TF Hub...');
-    yamnetModel = await tf.loadGraphModel(YAMNET_MODEL_URL, { fromTFHub: true });
-    
-    // Warm up the model
-    const dummyInput = tf.zeros([16000]); // 1 second of 16kHz
-    const [scores, embeddings, spectrogram] = yamnetModel.predict(dummyInput);
-    
-    scores.dispose();
-    embeddings.dispose();
-    spectrogram.dispose();
-    dummyInput.dispose();
-    
-    Logger.info('✅ YAMNet Model Loaded & Warmed Up');
-    isModelLoading = false;
-    return yamnetModel;
-  } catch (error) {
-    Logger.error('Failed to load YAMNet model:', error);
-    isModelLoading = false;
-    return null;
-  }
+  modelLoadPromise = (async () => {
+    isModelLoading = true;
+    try {
+      Logger.info('Loading YAMNet Embedding Model from TF Hub...');
+      yamnetModel = await tf.loadGraphModel(YAMNET_MODEL_URL, { fromTFHub: true });
+      
+      // Warm up the model
+      const dummyInput = tf.zeros([16000]); // 1 second of 16kHz
+      const [scores, embeddings, spectrogram] = yamnetModel.predict(dummyInput);
+      
+      scores.dispose();
+      embeddings.dispose();
+      spectrogram.dispose();
+      dummyInput.dispose();
+      
+      Logger.info('✅ YAMNet Model Loaded & Warmed Up');
+      isModelLoading = false;
+      return yamnetModel;
+    } catch (error) {
+      Logger.error('Failed to load YAMNet model:', error);
+      isModelLoading = false;
+      modelLoadPromise = null;
+      return null;
+    }
+  })();
+
+  return modelLoadPromise;
 }
 
 /**
@@ -63,8 +59,10 @@ export async function initializeEmbeddingEngine() {
  * @returns {Array<number>} - 1024-d embedding vector
  */
 export async function getAudioEmbedding(pcmData) {
+  // Ensure model is loaded first — calls loadYamnetModel (NOT initializeEmbeddingEngine)
+  // This prevents the circular dependency with fingerprint loading
   if (!yamnetModel) {
-    await initializeEmbeddingEngine();
+    await loadYamnetModel();
   }
   if (!yamnetModel) return null;
 
@@ -74,6 +72,34 @@ export async function getAudioEmbedding(pcmData) {
     const meanEmbedding = tf.mean(embeddings, 0);
     return Array.from(meanEmbedding.dataSync());
   });
+}
+
+/**
+ * Full initialization: loads model first, then generates/loads fingerprints.
+ * This is the public entry point called by audioFeatureExtractor.startExtraction().
+ * 
+ * ORDER IS CRITICAL:
+ *   1. Load YAMNet model (so getAudioEmbedding works)
+ *   2. Load/generate fingerprints (which calls getAudioEmbedding for each WAV)
+ */
+export async function initializeEmbeddingEngine() {
+  // Step 1: Load the model FIRST (no fingerprint dependency)
+  await loadYamnetModel();
+
+  // Step 2: Load fingerprints (needs working getAudioEmbedding, which needs the model)
+  if (yamnetFingerprints.length === 0 && !isFingerprintsLoading) {
+    isFingerprintsLoading = true;
+    try {
+      yamnetFingerprints = await loadOrGenerateFingerprints(getAudioEmbedding);
+      Logger.info(`✅ ${yamnetFingerprints.length} fingerprints loaded/generated`);
+    } catch (err) {
+      Logger.error('Failed to load fingerprints:', err);
+    } finally {
+      isFingerprintsLoading = false;
+    }
+  }
+
+  return yamnetModel;
 }
 
 /**
@@ -97,15 +123,16 @@ export function calculateCosineSimilarity(emb1, emb2) {
 }
 
 export function isEngineReady() {
-  return yamnetModel !== null;
+  return yamnetModel !== null && yamnetFingerprints.length > 0;
 }
 
 /**
  * Compares a live 1024-dim embedding against all known references.
- * Returns the best match payload, or 'normal' if none meet the strict threshold.
+ * Returns the best match payload, or 'normal' if none meet the threshold.
  */
 export function findBestMatch(liveEmbedding) {
   if (!liveEmbedding || !yamnetFingerprints || yamnetFingerprints.length === 0) {
+    Logger.warn(`[YAMNet] findBestMatch called with ${yamnetFingerprints?.length || 0} references — returning normal`);
     return { status: 'normal', confidence: 0, reason: 'no_references' };
   }
 
