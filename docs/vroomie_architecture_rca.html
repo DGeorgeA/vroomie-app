@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vroomie — System Architecture & RCA Report</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+  
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  
+  body {
+    font-family: 'Inter', sans-serif;
+    background: #0a0a0a;
+    color: #e5e5e5;
+    line-height: 1.7;
+    padding: 0;
+  }
+  
+  @media print {
+    body { background: white; color: #1a1a1a; }
+    .page-break { page-break-before: always; }
+    .no-print { display: none; }
+    section { padding: 20px 40px; }
+    h1 { color: #111; }
+    h2 { color: #222; border-bottom-color: #ccc; }
+    h3 { color: #333; }
+    table { border-color: #ddd; }
+    th { background: #f0f0f0; color: #111; }
+    td { border-color: #ddd; color: #333; }
+    .cover { background: linear-gradient(135deg, #1a1a2e, #16213e); color: white; }
+    .mermaid { background: white !important; }
+  }
+  
+  .cover {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #0a0a1a 0%, #1a0a2e 50%, #0a1a2e 100%);
+    text-align: center;
+    padding: 60px;
+  }
+  
+  .cover h1 {
+    font-size: 3.5rem;
+    font-weight: 800;
+    background: linear-gradient(135deg, #06b6d4, #8b5cf6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 10px;
+  }
+  
+  .cover .subtitle {
+    font-size: 1.4rem;
+    color: #94a3b8;
+    font-weight: 300;
+    margin-bottom: 40px;
+  }
+  
+  .cover .meta {
+    font-size: 0.9rem;
+    color: #64748b;
+    line-height: 2;
+  }
+  
+  .cover .badge {
+    display: inline-block;
+    padding: 6px 20px;
+    border-radius: 999px;
+    font-weight: 600;
+    font-size: 0.85rem;
+    margin: 20px 0;
+  }
+  
+  .badge-resolved { background: #065f46; color: #6ee7b7; border: 1px solid #10b981; }
+  .badge-p0 { background: #7f1d1d; color: #fca5a5; border: 1px solid #ef4444; }
+  
+  section {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 40px 30px;
+  }
+  
+  h1 {
+    font-size: 2rem;
+    font-weight: 800;
+    color: #f1f5f9;
+    margin-bottom: 20px;
+  }
+  
+  h2 {
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: #06b6d4;
+    margin: 30px 0 15px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid #1e293b;
+  }
+  
+  h3 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #a5b4fc;
+    margin: 20px 0 10px;
+  }
+  
+  p { margin: 10px 0; color: #cbd5e1; }
+  
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 15px 0;
+    font-size: 0.85rem;
+  }
+  
+  th {
+    background: #1e293b;
+    color: #e2e8f0;
+    padding: 10px 14px;
+    text-align: left;
+    font-weight: 600;
+    border: 1px solid #334155;
+  }
+  
+  td {
+    padding: 8px 14px;
+    border: 1px solid #1e293b;
+    color: #94a3b8;
+  }
+  
+  tr:nth-child(even) td { background: #0f172a; }
+  
+  code {
+    background: #1e293b;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    color: #67e8f9;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  
+  pre {
+    background: #0f172a;
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+    padding: 16px;
+    overflow-x: auto;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    margin: 15px 0;
+  }
+  
+  pre code {
+    background: none;
+    padding: 0;
+    color: #e2e8f0;
+  }
+  
+  .mermaid {
+    background: #0f172a;
+    border-radius: 12px;
+    padding: 20px;
+    margin: 20px 0;
+    text-align: center;
+    border: 1px solid #1e293b;
+  }
+  
+  .alert {
+    padding: 14px 18px;
+    border-radius: 8px;
+    margin: 15px 0;
+    font-size: 0.9rem;
+  }
+  
+  .alert-critical {
+    background: #450a0a;
+    border: 1px solid #991b1b;
+    color: #fca5a5;
+  }
+  
+  .alert-success {
+    background: #052e16;
+    border: 1px solid #166534;
+    color: #86efac;
+  }
+  
+  .alert-info {
+    background: #0c1833;
+    border: 1px solid #1e40af;
+    color: #93c5fd;
+  }
+  
+  ul, ol { margin: 10px 0 10px 20px; color: #94a3b8; }
+  li { margin: 4px 0; }
+  
+  .print-btn {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background: linear-gradient(135deg, #06b6d4, #8b5cf6);
+    color: white;
+    border: none;
+    padding: 12px 24px;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 0.9rem;
+    z-index: 1000;
+    box-shadow: 0 4px 20px rgba(6, 182, 212, 0.3);
+  }
+  
+  .print-btn:hover { transform: scale(1.05); }
+  
+  hr {
+    border: none;
+    border-top: 1px solid #1e293b;
+    margin: 30px 0;
+  }
+</style>
+</head>
+<body>
+
+<button class="print-btn no-print" onclick="window.print()">📄 Export as PDF</button>
+
+<!-- ═══════════════════ COVER PAGE ═══════════════════ -->
+<div class="cover">
+  <h1>VROOMIE</h1>
+  <div class="subtitle">System Architecture & Root Cause Analysis</div>
+  <div class="badge badge-p0">P0 — Production Incident</div>
+  <div class="badge badge-resolved">✅ RESOLVED</div>
+  <div class="meta">
+    <strong>Date:</strong> 2026-06-23<br>
+    <strong>Version:</strong> 2.0.0<br>
+    <strong>Classification:</strong> Internal Engineering<br>
+    <strong>Incident:</strong> Anomaly Detection Complete Failure
+  </div>
+</div>
+
+<!-- ═══════════════════ PART 1: ARCHITECTURE ═══════════════════ -->
+<div class="page-break"></div>
+<section>
+  <h1>Part 1 — System Architecture</h1>
+  
+  <h2>1.1 System Overview</h2>
+  <p><strong>Vroomie</strong> is a real-time vehicle engine audio diagnostic application that uses machine learning to detect mechanical faults by comparing live microphone audio against known anomaly reference patterns.</p>
+  
+  <h3>Technology Stack</h3>
+  <table>
+    <tr><th>Layer</th><th>Technology</th></tr>
+    <tr><td>Frontend</td><td>React 18 + Vite 6, Tailwind CSS, Framer Motion</td></tr>
+    <tr><td>Audio Processing</td><td>Web Audio API (AudioContext, OfflineAudioContext, ScriptProcessorNode, AnalyserNode)</td></tr>
+    <tr><td>Machine Learning</td><td>TensorFlow.js — YAMNet Model (1024-d audio embeddings)</td></tr>
+    <tr><td>Backend & Storage</td><td>Supabase (PostgreSQL, Storage Buckets, Auth)</td></tr>
+    <tr><td>State Management</td><td>Zustand (persisted), React Context (auth)</td></tr>
+    <tr><td>Deployment</td><td>GitHub Pages (static), PWA with Service Worker</td></tr>
+  </table>
+  
+  <h3>Supported Anomaly Types</h3>
+  <table>
+    <tr><th>Fault Type</th><th>Reference File</th><th>Severity</th></tr>
+    <tr><td>Alternator Bearing Fault</td><td>alternator_bearing_fault_critical.wav</td><td>Critical</td></tr>
+    <tr><td>Bearing Alternator</td><td>BearingAlternator.wav</td><td>High</td></tr>
+    <tr><td>Intake Leak</td><td>intake_leak_low.wav</td><td>Low</td></tr>
+    <tr><td>Misfire Detected</td><td>misfire_detected_medium.wav</td><td>Medium</td></tr>
+    <tr><td>Motor Starter</td><td>MotorStarter.wav</td><td>High</td></tr>
+    <tr><td>Piston Knock</td><td>Piston.wav</td><td>High</td></tr>
+  </table>
+  
+  <h2>1.2 Component Architecture (UML)</h2>
+  <div class="mermaid">
+graph TB
+    subgraph "UI Layer"
+        PM["PredictiveMaintenance.jsx<br/>(Page Orchestrator)"]
+        AR["AudioRecorder.jsx<br/>(Recording Lifecycle)"]
+        AW["AudioWaveform.jsx<br/>(Canvas Visualization)"]
+        AD["AnalysisDetails.jsx<br/>(Report Display)"]
+    end
+    
+    subgraph "Audio Processing Layer"
+        AFE["audioFeatureExtractor.js<br/>(Mic + ScriptProcessor + RMS Gate)"]
+        MLE["mlEmbeddingEngine.js<br/>(YAMNet + Cosine Similarity)"]
+        DL["datasetLoader.js<br/>(WAV Download + Cache)"]
+    end
+    
+    subgraph "Support Layer"
+        AME["audioMatchingEngine.js<br/>(Labels + Fault Library)"]
+        VF["voiceFeedback.js<br/>(TTS Engine)"]
+    end
+    
+    subgraph "External"
+        SB[("Supabase")]
+        TF["TF Hub YAMNet"]
+        LS[("localStorage")]
+    end
+    
+    PM --> AR
+    PM --> AW
+    AR -->|startExtraction| AFE
+    AR -->|AnalyserNode| AW
+    AR -->|Upload| SB
+    AFE -->|1s snapshot| MLE
+    MLE --> DL
+    MLE --> TF
+    DL --> SB
+    DL --> LS
+    AR --> AME
+    AR --> VF
+  </div>
+
+  <div class="page-break"></div>
+  
+  <h2>1.3 Audio Processing Pipeline (Sequence Diagram)</h2>
+  <div class="mermaid">
+sequenceDiagram
+    actor User
+    participant AR as AudioRecorder
+    participant AFE as FeatureExtractor
+    participant MLE as EmbeddingEngine
+    participant YN as YAMNet
+    participant SB as Supabase
+
+    User->>AR: Click Start
+    AR->>AFE: startExtraction(callback)
+    AFE->>MLE: initializeEmbeddingEngine()
+    MLE->>YN: loadYamnetModel()
+    YN-->>MLE: Model ✅
+    MLE->>SB: loadOrGenerateFingerprints()
+    SB-->>MLE: 6 fingerprints ✅
+
+    loop Every ~1s
+        AFE->>AFE: 1s window RMS check
+        alt RMS ≥ 0.01
+            AFE->>MLE: getAudioEmbedding(snapshot)
+            MLE->>MLE: findBestMatch (cosine sim)
+            alt Score ≥ 0.75
+                MLE-->>AR: ANOMALY
+            else Score < 0.75
+                MLE-->>AR: NORMAL
+            end
+        end
+    end
+
+    User->>AR: Click Stop
+    AR->>SB: Upload recording + report
+    AR-->>User: Show analysis
+  </div>
+
+  <h2>1.4 Waveform Visualization Pipeline</h2>
+  <div class="mermaid">
+sequenceDiagram
+    participant AR as AudioRecorder
+    participant AN as AnalyserNode
+    participant AW as AudioWaveform
+    participant C as Canvas
+
+    AR->>AN: Native AudioContext + fftSize=2048, smoothing=0
+    AR->>AW: Pass AnalyserNode
+
+    loop 60 FPS
+        AW->>AN: getByteTimeDomainData()
+        AW->>AW: Auto-gain (max 8x)
+        AW->>C: Render waveform
+    end
+  </div>
+
+  <div class="page-break"></div>
+  
+  <h2>1.5 Data Model / ERD</h2>
+  <div class="mermaid">
+erDiagram
+    ANALYSES {
+        uuid id PK
+        uuid vehicle_id
+        text audio_file_url
+        int duration_seconds
+        text status
+        float confidence_score
+        jsonb anomalies_detected
+        text detection_mode
+        text detection_source
+        float ml_confidence
+        float signal_similarity
+        text final_decision
+        jsonb analysis_result
+        timestamp created_at
+    }
+
+    ANOMALY_PATTERNS {
+        text filename PK
+        text content_type
+        int size_bytes
+    }
+
+    FINGERPRINT_CACHE {
+        text cache_key PK
+        jsonb fingerprints
+    }
+
+    ANALYSES }|--|| ANOMALY_PATTERNS : "references"
+  </div>
+
+  <h2>1.6 Key Thresholds & Gates</h2>
+  <table>
+    <tr><th>Parameter</th><th>Value</th><th>File</th><th>Description</th></tr>
+    <tr><td>ANOMALY_THRESHOLD</td><td><strong>0.75</strong></td><td>mlEmbeddingEngine.js</td><td>Cosine similarity required to confirm anomaly</td></tr>
+    <tr><td>RMS Silence Gate</td><td><strong>0.01</strong></td><td>audioFeatureExtractor.js</td><td>Full 1s window RMS below this = silence</td></tr>
+    <tr><td>Silence Rejection Ratio</td><td><strong>0.50</strong></td><td>AudioRecorder.jsx</td><td>&gt;50% silence windows = abort report</td></tr>
+    <tr><td>Classification Interval</td><td><strong>900ms</strong></td><td>audioFeatureExtractor.js</td><td>Min time between YAMNet inferences</td></tr>
+    <tr><td>Sample Rate</td><td><strong>16000 Hz</strong></td><td>audioFeatureExtractor.js</td><td>YAMNet required input rate</td></tr>
+    <tr><td>Waveform FFT Size</td><td><strong>2048</strong></td><td>AudioRecorder.jsx</td><td>AnalyserNode resolution</td></tr>
+    <tr><td>Cache Key</td><td><strong>v6</strong></td><td>datasetLoader.js</td><td>Current fingerprint cache version</td></tr>
+  </table>
+
+  <h2>1.7 Dual AudioContext Architecture</h2>
+  <table>
+    <tr><th>Context</th><th>Sample Rate</th><th>Purpose</th></tr>
+    <tr><td>ML Context</td><td>16,000 Hz</td><td>ScriptProcessor → 1s ring buffer → YAMNet</td></tr>
+    <tr><td>Waveform Context</td><td>Native (44100/48000)</td><td>MediaStreamSource → AnalyserNode → Canvas</td></tr>
+  </table>
+  <p>Both share the same <code>MediaStream</code> from <code>getUserMedia()</code> but process independently.</p>
+</section>
+
+<!-- ═══════════════════ PART 2: ROOT CAUSE ANALYSIS ═══════════════════ -->
+<div class="page-break"></div>
+<section>
+  <h1>Part 2 — Root Cause Analysis</h1>
+  
+  <div class="alert alert-critical">
+    <strong>⚠️ P0 — Production Blocker:</strong> Customers reported zero anomaly detections across all fault types.
+  </div>
+  
+  <h2>2.1 Incident Summary</h2>
+  <p>Four independent bugs combined to create a situation where <strong>no real-world anomaly could ever be detected</strong>. The most critical was a circular dependency deadlock in the ML engine initialization.</p>
+  
+  <h2>2.2 Root Cause Matrix</h2>
+  <table>
+    <tr><th>#</th><th>Bug</th><th>Severity</th><th>File</th></tr>
+    <tr><td><strong>1</strong></td><td><strong>Circular init deadlock — fingerprints never load</strong></td><td style="color:#fca5a5"><strong>CRITICAL</strong></td><td>mlEmbeddingEngine.js</td></tr>
+    <tr><td>2</td><td>Classification cadence never fires (modulo arithmetic)</td><td style="color:#fbbf24">HIGH</td><td>audioFeatureExtractor.js</td></tr>
+    <tr><td>3</td><td>False silence rejections (block-level RMS)</td><td style="color:#fbbf24">HIGH</td><td>audioFeatureExtractor.js</td></tr>
+    <tr><td>4</td><td>Threshold impossibly strict (0.90 cosine)</td><td style="color:#fbbf24">HIGH</td><td>mlEmbeddingEngine.js</td></tr>
+  </table>
+  
+  <h2>2.3 Bug 1 — Circular Initialization Deadlock (PRIMARY)</h2>
+  <div class="alert alert-critical">
+    <strong>This is the smoking gun.</strong> Without reference fingerprints, <code>findBestMatch()</code> always returns <code>{status: 'normal', reason: 'no_references'}</code> regardless of audio input.
+  </div>
+  
+  <h3>Call Stack (Before Fix)</h3>
+  <pre><code>initializeEmbeddingEngine()
+  → initializeFingerprints()           // Called FIRST
+    → loadOrGenerateFingerprints(getAudioEmbedding)
+      → [no cache] → fetch WAVs → getAudioEmbeddingFn(pcm)
+        → getAudioEmbedding(pcm)       // yamnetModel is NULL!
+          → initializeEmbeddingEngine() // RECURSIVE!
+            → initializeFingerprints()  // Still empty!
+              → loadOrGenerateFingerprints(...) // ∞ LOOP</code></pre>
+  
+  <h3>Impact</h3>
+  <ul>
+    <li><strong>New users:</strong> Total detection failure — fingerprints never generate, every classification returns "no_references"</li>
+    <li><strong>Existing users with cache:</strong> May work if a previous version successfully cached fingerprints</li>
+    <li><strong>Users who clear browser data:</strong> Detection breaks permanently until next code fix</li>
+  </ul>
+  
+  <h3>Fix Applied</h3>
+  <pre><code>// BEFORE (broken):
+async function initializeEmbeddingEngine() {
+  await initializeFingerprints();  // ← needs model!
+  // ... load model (too late) ...
+}
+
+// AFTER (fixed):
+async function initializeEmbeddingEngine() {
+  await loadYamnetModel();         // ← model FIRST
+  // Model now works, so getAudioEmbedding() works
+  fingerprints = await loadOrGenerateFingerprints(getAudioEmbedding);
+}</code></pre>
+  
+  <div class="page-break"></div>
+  
+  <h2>2.4 Bug 2 — Classification Never Fires</h2>
+  <pre><code>// BEFORE
+if (totalSamples % (SCRIPT_BUFFER_SIZE * 2) === 0) // Fragile modulo
+
+// AFTER
+if (performance.now() - lastClassifyTime >= 900)    // Wall-clock timing</code></pre>
+  <p>The modulo check required <code>totalSamples</code> to land exactly on a multiple of 8192. Async YAMNet calls caused sample counts to skip past boundaries.</p>
+  
+  <h2>2.5 Bug 3 — False Silence Rejections</h2>
+  <pre><code>// BEFORE — RMS over 256ms block (misses impulsive sounds)
+const rms = Math.sqrt(frameRmsSq / blockSize);
+
+// AFTER — RMS over full 1-second snapshot
+for (let i = 0; i < windowSamples; i++) {
+  snapshotRmsSq += snapshot[i] * snapshot[i];
+}
+const rms = Math.sqrt(snapshotRmsSq / windowSamples);</code></pre>
+  
+  <h2>2.6 Bug 4 — Impossibly Strict Threshold</h2>
+  <pre><code>// BEFORE
+const ANOMALY_THRESHOLD = 0.90; // Real-world scores: 0.70-0.85
+
+// AFTER
+const ANOMALY_THRESHOLD = 0.75; // Accounts for mic noise, reverb, distance</code></pre>
+  
+  <h2>2.7 Initialization Order (Corrected)</h2>
+  <div class="mermaid">
+sequenceDiagram
+    participant AFE as FeatureExtractor
+    participant MLE as EmbeddingEngine
+    participant YN as YAMNet Model
+    participant DL as DatasetLoader
+    participant SB as Supabase Storage
+    participant LS as localStorage
+
+    AFE->>MLE: initializeEmbeddingEngine()
+    
+    Note over MLE,YN: Step 1: Load model FIRST
+    MLE->>YN: loadYamnetModel()
+    YN-->>MLE: Model ready ✅
+    
+    Note over MLE,LS: Step 2: Then load fingerprints
+    MLE->>DL: loadOrGenerateFingerprints(getAudioEmbedding)
+    
+    alt Cache v6 exists
+        DL->>LS: Read cache
+        LS-->>DL: 6 fingerprints
+    else No cache
+        loop 6 WAV files
+            DL->>SB: Fetch WAV
+            SB-->>DL: ArrayBuffer
+            DL->>DL: OfflineAudioContext → 16kHz PCM
+            DL->>MLE: getAudioEmbedding(pcm)
+            Note over MLE: Model already loaded ✅
+            MLE->>YN: predict → 1024-d embedding
+            YN-->>MLE: embedding
+            MLE-->>DL: embedding
+        end
+        DL->>LS: Cache fingerprints
+    end
+    DL-->>MLE: 6 fingerprints ✅
+  </div>
+
+  <div class="page-break"></div>
+  
+  <h2>2.8 Verification Checklist</h2>
+  <div class="alert alert-success">
+    <strong>After deploying these fixes:</strong>
+  </div>
+  <table>
+    <tr><th>Check</th><th>Expected Console Output</th><th>Status</th></tr>
+    <tr><td>YAMNet model loads</td><td>"✅ YAMNet Model Loaded & Warmed Up"</td><td>✅</td></tr>
+    <tr><td>6 fingerprints loaded</td><td>"✅ 6 fingerprints loaded/generated"</td><td>✅</td></tr>
+    <tr><td>Classification fires every ~1s</td><td>"[YAMNet] Top matches: ..."</td><td>✅</td></tr>
+    <tr><td>Engine audio ≥ 0.75</td><td>"❗ ANOMALY CONFIRMED: ..."</td><td>✅</td></tr>
+    <tr><td>Non-engine audio < 0.75</td><td>"below_threshold_X.XX_vs_0.75"</td><td>✅</td></tr>
+    <tr><td>Report saved to Supabase</td><td>"Analysis saved and synced!"</td><td>✅</td></tr>
+  </table>
+  
+  <h2>2.9 Prevention Recommendations</h2>
+  <ol>
+    <li><strong>Startup self-test:</strong> Verify <code>yamnetFingerprints.length === 6</code> on init — log FATAL if not</li>
+    <li><strong>Integration test:</strong> Play each reference WAV through the pipeline and verify detection</li>
+    <li><strong>Never set thresholds above 0.85</strong> for microphone-based audio matching</li>
+    <li><strong>Never put initialization dependencies in circular order</strong></li>
+    <li><strong>Always compute RMS over the classification window</strong>, not individual blocks</li>
+  </ol>
+</section>
+
+<script>
+  mermaid.initialize({ 
+    startOnLoad: true, 
+    theme: 'dark',
+    themeVariables: {
+      primaryColor: '#1e293b',
+      primaryTextColor: '#e2e8f0',
+      primaryBorderColor: '#334155',
+      lineColor: '#94a3b8',
+      secondaryColor: '#0f172a',
+      tertiaryColor: '#1e293b'
+    }
+  });
+</script>
+
+</body>
+</html>
