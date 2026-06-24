@@ -2,7 +2,7 @@
 import { Logger } from './logger';
 import { supabase } from './supabase'; // if needed, but we can just use fetch
 
-const CACHE_KEY = 'vroomie_yamnet_fingerprints_v6';
+const CACHE_KEY = 'vroomie_yamnet_fingerprints_v7';
 const SUPABASE_BUCKET_URL = 'https://bdldmkhcdtlqxaopxlam.supabase.co/storage/v1/object/public/anomaly-patterns/';
 
 const FILES_TO_DOWNLOAD = [
@@ -65,6 +65,7 @@ export async function loadOrGenerateFingerprints(getAudioEmbeddingFn) {
     }
   }
 
+  // Update CACHE_KEY internally in the script
   Logger.info('Generating YAMNet fingerprints from Supabase bucket...');
   const fingerprints = [];
 
@@ -91,24 +92,45 @@ export async function loadOrGenerateFingerprints(getAudioEmbeddingFn) {
       source.connect(offlineCtx.destination);
       source.start(0);
       const renderedBuffer = await offlineCtx.startRendering();
-      const pcm = renderedBuffer.getChannelData(0);
+      const fullPcm = renderedBuffer.getChannelData(0);
       
-      Logger.info(`[Dataset] Decoded ${filename}: ${pcm.length} samples @ 16kHz (${(pcm.length/16000).toFixed(2)}s)`);
+      Logger.info(`[Dataset] Decoded ${filename}: ${fullPcm.length} samples @ 16kHz (${(fullPcm.length/16000).toFixed(2)}s)`);
       
-      const embedding = await getAudioEmbeddingFn(pcm);
-      if (embedding) {
-        const meta = deriveMetadata(filename);
-        fingerprints.push({
-          id: filename,
-          label: meta.label,
-          fault_type: meta.fault_type,
-          severity: meta.severity,
-          source_file: filename,
-          yamnet_embedding: embedding
-        });
-        Logger.info(`[Dataset] ✅ Fingerprint generated for: ${meta.label} (${meta.fault_type}, ${meta.severity})`);
-      } else {
-        Logger.warn(`[Dataset] ⚠️ No embedding returned for ${filename}`);
+      // ── NEW: Chunk the reference file into 1-second overlapping windows ──
+      // This ensures the reference embeddings have the exact same temporal
+      // distribution/concentration as the live 1-second mic captures.
+      const windowSamples = 16000;
+      const step = windowSamples / 2; // 50% overlap
+      let chunksExtracted = 0;
+
+      for (let start = 0; start <= fullPcm.length - windowSamples; start += step) {
+        const chunk = new Float32Array(windowSamples);
+        chunk.set(fullPcm.subarray(start, start + windowSamples));
+
+        // Skip absolute silence chunks (some references have silence at start/end)
+        let rmsSq = 0;
+        for (let j = 0; j < chunk.length; j++) rmsSq += chunk[j] * chunk[j];
+        const rms = Math.sqrt(rmsSq / chunk.length);
+        if (rms < 0.01) continue;
+
+        const embedding = await getAudioEmbeddingFn(chunk);
+        if (embedding) {
+          const meta = deriveMetadata(filename);
+          fingerprints.push({
+            id: `${filename}_chunk_${chunksExtracted}`,
+            label: meta.label,
+            fault_type: meta.fault_type,
+            severity: meta.severity,
+            source_file: filename,
+            yamnet_embedding: embedding
+          });
+          chunksExtracted++;
+        }
+      }
+      
+      Logger.info(`[Dataset] ✅ Generated ${chunksExtracted} chunk fingerprints for ${filename}`);
+      if (chunksExtracted === 0) {
+        Logger.warn(`[Dataset] ⚠️ No chunks generated for ${filename} (too short or silent)`);
       }
     } catch (err) {
       Logger.error(`Failed to process ${filename}:`, err);
