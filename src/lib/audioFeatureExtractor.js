@@ -1,5 +1,5 @@
 import { Logger } from './logger';
-import { initializeEmbeddingEngine, getAudioEmbedding, findBestMatch } from './mlEmbeddingEngine';
+import { initializeEmbeddingEngine, getAudioAnalysis, findBestMatch, resetDetectionState } from './mlEmbeddingEngine';
 
 // ─── Module-level state ───────────────────────────────────
 let isExtracting        = false;
@@ -25,6 +25,7 @@ export async function startExtraction(callback) {
 
   isExtracting       = true;
   onFeaturesCallback = callback;
+  resetDetectionState(); // fresh persistence state for each session
 
   Logger.info('🎤 [START] Requesting microphone and loading YAMNet...');
 
@@ -119,18 +120,19 @@ function useScriptProcessorMainThreadCapture(sr) {
       }
 
       try {
-        // Pass the full 1-second snapshot to YAMNet
-        const embedding = await getAudioEmbedding(snapshot);
-        if (!embedding) {
+        // Pass the full 1-second snapshot to YAMNet — embedding for fingerprint
+        // matching, class scores for the acoustic domain gate
+        const analysis = await getAudioAnalysis(snapshot);
+        if (!analysis) {
           isProcessing = false;
           return;
         }
 
-        const matchResult = findBestMatch(embedding);
+        const matchResult = findBestMatch(analysis.embedding, analysis.meanScores);
 
         if (onFeaturesCallback) {
           onFeaturesCallback({
-            compositeEmbedding: embedding,
+            compositeEmbedding: analysis.embedding,
             _workerResult: matchResult,
             rms: rms
           });
