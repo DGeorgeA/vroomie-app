@@ -60,6 +60,10 @@ export const FAULT_NATURE_LIBRARY = {
     nature: 'Irregular broadband noise in the belt drive system is present, indicating a glazed, cracked, or misaligned serpentine belt. Belt failure causes simultaneous loss of alternator, power steering, and water pump drive.',
     fix: 'Inspect the belt for cracking, glazing, and proper tension. Check all driven pulleys for bearing noise or wobble. Replace the belt and tensioner pulley on the same service interval.',
   },
+  'Issue_with_Power_steering_or_low_oil_or_serpentine_belt': {
+    nature: 'A sustained accessory-drive whine consistent with power steering pump strain, low lubricant level, or a slipping serpentine belt has been detected. These three faults share an overlapping acoustic signature; all indicate the engine\'s accessory system is operating under abnormal friction and will progressively worsen.',
+    fix: 'Check power steering fluid and engine oil levels first — top up if low. Inspect the serpentine belt for glazing, cracks, and correct tension. If levels and belt are good and the whine persists, have the power steering pump inspected for cavitation or vane wear.',
+  },
 };
 
 /**
@@ -68,10 +72,16 @@ export const FAULT_NATURE_LIBRARY = {
  */
 export function getFaultNarrative(rawLabel) {
   if (!rawLabel) return null;
-  // Try exact match first, then case-insensitive partial match
+  // Try exact match first, then separator-insensitive partial match — anomaly
+  // labels are space-separated ("alternator bearing fault critical") while
+  // library keys keep the source file's underscores.
   if (FAULT_NATURE_LIBRARY[rawLabel]) return FAULT_NATURE_LIBRARY[rawLabel];
-  const lower = rawLabel.toLowerCase();
-  const key = Object.keys(FAULT_NATURE_LIBRARY).find(k => lower.includes(k.toLowerCase()) || k.toLowerCase().includes(lower));
+  const norm = (s) => s.toLowerCase().replace(/[_\s]+/g, '');
+  const target = norm(rawLabel);
+  const key = Object.keys(FAULT_NATURE_LIBRARY).find(k => {
+    const kn = norm(k);
+    return target.includes(kn) || kn.includes(target);
+  });
   return key ? FAULT_NATURE_LIBRARY[key] : null;
 }
 

@@ -19,10 +19,10 @@ import * as tf from '@tensorflow/tfjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const DATASET = path.resolve(ROOT, '..', 'audio_files', 'Kaggle_dataset', 'archive', 'car diagnostics dataset');
-const FP_CACHE = path.join(ROOT, 'scratch', 'validation_fingerprints_cache.json');
+const FP_CACHE = path.join(ROOT, 'scratch', 'validation_fingerprints_cache_v2.json');
 const YAMNET_MODEL_URL = 'https://tfhub.dev/google/tfjs-model/yamnet/tfjs/1';
 const SR = 16000, WIN = SR;
-const ANOMALY_THRESHOLD = 0.75;
+const ANOMALY_THRESHOLD = 0.60;
 const VEHICLE_SCORE_FLOOR = 0.03;
 const PERSISTENCE_HITS = 2;
 const SINGLE_HIT_BYPASS_SCORE = 0.95;
@@ -170,9 +170,11 @@ async function main() {
     ['normal_engine_idle', path.join(DATASET, 'idle state', 'normal_engine_idle'), 12, true],
     ['normal_engine_startup', path.join(DATASET, 'startup state', 'normal_engine_startup'), 12, true],
     ['normal_brakes', path.join(DATASET, 'braking state', 'normal_brakes'), 12, true],
-    ['unseen fault: low_oil', path.join(DATASET, 'idle state', 'low_oil'), 4, false],
-    ['unseen fault: serpentine_belt', path.join(DATASET, 'idle state', 'serpentine_belt'), 4, false],
-    ['unseen fault: power_steering', path.join(DATASET, 'idle state', 'power_steering'), 4, false],
+    // These fault classes now HAVE bucket references — recall checks (should flag)
+    ['referenced fault: low_oil', path.join(DATASET, 'idle state', 'low_oil'), 4, false],
+    ['referenced fault: serpentine_belt', path.join(DATASET, 'idle state', 'serpentine_belt'), 4, false],
+    ['referenced fault: power_steering', path.join(DATASET, 'idle state', 'power_steering'), 4, false],
+    // Still no references for these — informational
     ['unseen fault: worn_out_brakes', path.join(DATASET, 'braking state', 'worn_out_brakes'), 4, false],
     ['unseen fault: bad_ignition', path.join(DATASET, 'startup state', 'bad_ignition'), 4, false],
     ['unseen fault: dead_battery', path.join(DATASET, 'startup state', 'dead_battery'), 4, false],

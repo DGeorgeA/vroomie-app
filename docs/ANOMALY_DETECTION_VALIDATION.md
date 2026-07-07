@@ -1,9 +1,9 @@
 # Anomaly Detection Accuracy — Root Cause & Validation Evidence
 
-Date: 2026-07-07
-Scope: detection engine only (`src/lib/mlEmbeddingEngine.js`, `src/lib/audioFeatureExtractor.js`,
-`src/data/yamnet_classes.js`). Waveform, report generation, UI, dataset, and thresholds
-were intentionally left untouched.
+Date: 2026-07-07 (updated same day: full-bucket references + 0.60 threshold)
+Scope: detection engine + reference loading (`src/lib/mlEmbeddingEngine.js`,
+`src/lib/audioFeatureExtractor.js`, `src/lib/datasetLoader.js`,
+`src/data/yamnet_classes.js`). Waveform, report generation, and UI untouched.
 
 ## Root cause (measured, not theorized)
 
@@ -39,38 +39,60 @@ Three-stage decision, replacing similarity-only:
    and reaches a 0.03 floor, or a vehicle class is the top-1 overall. Rejected windows
    count toward the existing session rejection gate, so speech/TV/silence sessions end in
    "Unable to detect vehicle audio" instead of a report.
-2. **Fingerprint similarity** (unchanged): cosine ≥ 0.75 against the same reference set.
+2. **Fingerprint similarity**: cosine ≥ **0.60** (product requirement 2026-07-07; was 0.75)
+   against the reference set — the anomaly is categorized by the matching reference's
+   file name.
 3. **Persistence** (new): a fault label must match in 2 windows within the session
    (or a single window at ≥ 0.95) before it is reported.
+
+**Reference set** (`src/lib/datasetLoader.js`): the `anomaly-patterns` Storage bucket is
+listed at runtime and EVERY `.wav` in it is fingerprinted — 55 files / 119 chunk
+embeddings at validation time (was a hardcoded 6-file subset). Numbered variants
+(`Issue_with_Power_steering_or_low_oil_or_serpentine_belt_2/4/…/88.wav`) collapse into one
+anomaly category derived from the file name. Max 3 evenly-spaced 1-second chunks per file;
+embeddings rounded to 4 decimals to fit localStorage (cache key `…_v8`, old `…_v7` removed).
+Uploading a new sample to the bucket adds it to the matcher with no code change.
 
 `src/data/yamnet_classes.js` was regenerated from the canonical
 `yamnet_class_map.csv` (the previous file was a corrupted CSV paste with shifted indices;
 it was unused). `scripts/generate_class_map_js.mjs` reproduces it.
 
-## Validation evidence
+## Validation evidence (full bucket, threshold 0.60 vs 0.75)
 
-### Controlled matrix — `scripts/validate_anomaly_accuracy.mjs` (15 sessions, 129 windows)
+### Controlled matrix — `scripts/validate_anomaly_accuracy.mjs` (21 sessions, 147 windows)
 
 Negatives: digital silence, near-silent room, audible ambient noise, synthetic music,
-4 TTS speech clips (2 voices), TV-style speech+music. Positives: the 6 known fault
-recordings (bearing ×2, starter, piston, intake leak, misfire).
+4 TTS speech clips (2 voices), TV-style speech+music. Positives: 12 reference fault
+recordings (bearing ×2, starter, piston, power steering pump, serpentine belt,
+rocker/valve, intake leak, misfire, timing chain, water pump, combined power-steering set).
 
-| Pipeline | False positives | False negatives |
+| Pipeline (gate + persistence in both) | False positives | False negatives |
 |---|---|---|
-| Old (HEAD) | 1/9 (ambient → "intake leak") | 0/6 |
-| **Fixed** | **0/9** | **0/6** |
+| **SHIP @ 0.60** | **0/9** | **1/12** (water pump — see below) |
+| PREV @ 0.75 | 0/9 | 1/12 (same file) |
+
+Reference: the original similarity-only engine scored 1/9 FP (ambient noise → "intake
+leak" at 0.88) with no gate.
+
+The single false negative is `water_pump_failure_critical.wav` itself: YAMNet identifies
+that file as a **pure synthetic sine tone** ("Sine wave" 0.57, constant across all 5
+seconds) — it is a placeholder, not a recording of a water pump. The domain gate correctly
+refuses to classify synthetic tones as vehicle audio (weakening it to accept sine waves
+would make alarm beeps and test tones matchable). Fails identically at 0.75, so it is
+unrelated to the 0.60 threshold. Fix: upload a real water-pump recording to the bucket —
+it will be fingerprinted automatically.
 
 ### Regression sweep — `scripts/regression_sweep_kaggle.mjs` (60 sessions, real car audio)
 
-36 healthy sessions (normal idle ×12, normal startup ×12, normal brakes ×12) and
-24 unseen-fault sessions (low oil, serpentine belt, power steering, worn brakes,
-bad ignition, dead battery — no fingerprints exist for these classes).
-
-- Healthy audio false anomalies: **0/36** (old engine: 1/36 — a 1.5 s idle clip at 0.924
-  vs the bearing reference; caught by the 0.95 single-window bar + persistence).
-- Unseen faults: no false cross-labels; sessions end HEALTHY or REJECTED, never a wrong
-  fault name.
-- Total across both suites: **75 sessions, 0 false anomalies, 6/6 known faults detected.**
+- Healthy audio (normal idle ×12, normal startup ×12, normal brakes ×12):
+  **0/36 false anomalies at 0.60.**
+- Raw Kaggle fault clips (low oil / serpentine / power steering / worn brakes /
+  bad ignition / dead battery): no false cross-labels. Note: the raw Kaggle
+  low-oil/serpentine/power-steering clips do not reach 0.60 against the bucket's processed
+  variants of the same dataset — cross-recording generalization is limited; the matcher
+  detects sounds acoustically close to its actual reference recordings.
+- Total across both suites: **81 sessions, 0 false anomalies, 11/12 reference faults
+  detected** (the 12th being the synthetic-tone placeholder above).
 
 ### Build & boot
 
@@ -79,11 +101,12 @@ waveform render (verified via headless preview).
 
 ## Known residual limits (honest)
 
-- The reference set contains only 6 fault recordings; serpentine belt / power steering /
-  rocker-valve faults present in `anomaly-patterns` are not in `FILES_TO_DOWNLOAD` and
-  therefore cannot be detected. Dataset expansion was deliberately out of scope (Phase 0).
-- Sustained audio that is both engine-like AND ≥ 0.75 similar to a reference for 2+ seconds
-  will still flag — that is the design of fingerprint matching, now correctly restricted to
-  the vehicle domain.
-- Users with a cached fingerprint set in localStorage keep the same `v7` cache key; the fix
-  is decision-layer only, so no cache invalidation is needed.
+- `water_pump_failure_critical.wav` is a synthetic sine tone and cannot be detected until
+  replaced with a real recording (see above).
+- Detection generalizes to sounds acoustically similar to the bucket recordings; a fault
+  recorded under very different conditions (mic, distance, vehicle) may fall below 0.60.
+  More reference samples per fault → better coverage; they are picked up automatically.
+- Sustained audio that is engine-like AND ≥ 0.60 similar to a reference for 2+ windows
+  will flag — that is the design of fingerprint matching, restricted to the vehicle domain.
+- First run after this change regenerates fingerprints (55 files, ~11 MB download + YAMNet
+  embedding in-browser); subsequent runs use the localStorage cache (`…_v8`).

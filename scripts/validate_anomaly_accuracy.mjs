@@ -26,18 +26,14 @@ const VERBOSE = process.argv.includes('--verbose');
 
 const YAMNET_MODEL_URL = 'https://tfhub.dev/google/tfjs-model/yamnet/tfjs/1';
 const BUCKET = 'https://bdldmkhcdtlqxaopxlam.supabase.co/storage/v1/object/public/anomaly-patterns/';
-const FILES_TO_DOWNLOAD = [
-  'alternator_bearing_fault_critical.wav',
-  'BearingAlternator.wav',
-  'intake_leak_low.wav',
-  'misfire_detected_medium.wav',
-  'MotorStarter.wav',
-  'Piston.wav'
-];
+const BUCKET_LIST_URL = 'https://bdldmkhcdtlqxaopxlam.supabase.co/storage/v1/object/list/anomaly-patterns';
+const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJkbGRta2hjZHRscXhhb3B4bGFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjM4NDMwNDYsImV4cCI6MjA3OTQxOTA0Nn0.v3lbUrwF6ZDPn-z8NYE01h7Fs1cTa1TAxQlTAsY3xbU';
 const SR = 16000;
 const WIN = SR; // 1-second windows, same as production
-const ANOMALY_THRESHOLD = 0.75; // production value — DO NOT CHANGE
-const FP_CACHE = path.join(ROOT, 'scratch', 'validation_fingerprints_cache.json');
+const ANOMALY_THRESHOLD = 0.60;      // shipped threshold (product requirement)
+const COMPARE_THRESHOLD = 0.75;      // previous threshold, for comparison
+const MAX_CHUNKS_PER_FILE = 3;       // same as datasetLoader.js
+const FP_CACHE = path.join(ROOT, 'scratch', 'validation_fingerprints_cache_v2.json');
 
 // ─── YAMNet class map ────────────────────────────────────────────────────────
 function loadClassMap() {
@@ -186,30 +182,53 @@ function domainGate(meanScores) {
   return { accepted, vehicleScore, interfererScore, top1 };
 }
 
-// ─── Fingerprints (identical to datasetLoader.js) ────────────────────────────
-async function buildFingerprints() {
+// ─── Fingerprints (identical to datasetLoader.js: full bucket, chunk cap, grouped labels) ───
+export async function listBucketWavs() {
+  const res = await fetch(BUCKET_LIST_URL, {
+    method: 'POST',
+    headers: { apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prefix: '', limit: 500, sortBy: { column: 'name', order: 'asc' } })
+  });
+  if (!res.ok) throw new Error(`bucket list HTTP ${res.status}`);
+  const items = await res.json();
+  return items.map(o => o.name).filter(n => n.toLowerCase().endsWith('.wav'));
+}
+
+export async function buildFingerprints() {
   if (fs.existsSync(FP_CACHE)) {
     const parsed = JSON.parse(fs.readFileSync(FP_CACHE, 'utf8'));
     console.log(`[Fingerprints] Loaded ${parsed.length} from cache.`);
     return parsed;
   }
+  const files = await listBucketWavs();
+  console.log(`[Fingerprints] Bucket listing: ${files.length} wav files`);
   const fps = [];
-  for (const filename of FILES_TO_DOWNLOAD) {
-    const res = await fetch(BUCKET + filename);
+  for (const filename of files) {
+    const res = await fetch(BUCKET + encodeURIComponent(filename));
     if (!res.ok) { console.warn(`[Fingerprints] ${filename} -> HTTP ${res.status}, skipped`); continue; }
     const buf = Buffer.from(await res.arrayBuffer());
     const { pcm, sampleRate } = decodeWav(buf);
     const full = resampleTo16k(pcm, sampleRate);
     const step = WIN / 2;
-    let n = 0;
+    const candidateStarts = [];
     for (let start = 0; start + WIN <= full.length; start += step) {
-      const chunk = full.slice(start, start + WIN);
-      if (rmsOf(chunk) < 0.01) continue;
-      const { emb } = analyzeWindow(chunk);
-      fps.push({ label: filename.replace('.wav', '').replace(/_/g, ' '), source_file: filename, yamnet_embedding: emb });
+      if (rmsOf(full.slice(start, start + WIN)) >= 0.01) candidateStarts.push(start);
+    }
+    let selected = candidateStarts;
+    if (candidateStarts.length > MAX_CHUNKS_PER_FILE) {
+      selected = [];
+      for (let k = 0; k < MAX_CHUNKS_PER_FILE; k++) {
+        selected.push(candidateStarts[Math.floor(k * (candidateStarts.length - 1) / (MAX_CHUNKS_PER_FILE - 1))]);
+      }
+    }
+    const label = filename.replace(/\.wav$/i, '').replace(/_\d+$/, '').replace(/_/g, ' ');
+    let n = 0;
+    for (const start of selected) {
+      const { emb } = analyzeWindow(full.slice(start, start + WIN));
+      fps.push({ label, source_file: filename, yamnet_embedding: emb.map(v => Math.round(v * 1e4) / 1e4) });
       n++;
     }
-    console.log(`[Fingerprints] ${filename}: ${n} chunks (${(full.length / SR).toFixed(1)}s @ ${sampleRate}Hz src)`);
+    console.log(`[Fingerprints] ${filename}: ${n} chunks (label: ${label})`);
   }
   fs.mkdirSync(path.dirname(FP_CACHE), { recursive: true });
   fs.writeFileSync(FP_CACHE, JSON.stringify(fps));
@@ -251,20 +270,33 @@ function loadLocalWav(p) {
 }
 
 // ─── Session simulation (mirrors audioFeatureExtractor + AudioRecorder) ─────
+// Both rules use the FULL shipped pipeline (domain gate + persistence); they
+// differ only in similarity threshold, isolating the 0.60-vs-0.75 decision.
 function runSession(name, pcm, fingerprints, expected) {
   const windows = [];
   for (let start = 0; start + WIN <= pcm.length; start += WIN) windows.push(pcm.slice(start, start + WIN));
   if (windows.length === 0) windows.push(pcm);
 
-  const cur = { anomalies: new Map(), rejected: 0, windows: 0 };
-  const gat = { anomalies: new Map(), rejected: 0, windows: 0 };
-  const candidateHits = new Map(); // persistence state for gated rule
+  const mkState = () => ({ anomalies: new Map(), hits: new Map(), rejected: 0, windows: 0 });
+  const ship = mkState(); // 0.60
+  const prev = mkState(); // 0.75
   const topSeen = new Map();
+
+  const applyRule = (state, threshold, gateAccepted, best, bestLabel) => {
+    if (!gateAccepted) { state.rejected++; return; }
+    if (best >= threshold) {
+      const h = (state.hits.get(bestLabel) || 0) + 1;
+      state.hits.set(bestLabel, h);
+      if (h >= 2 || best >= 0.95) {
+        state.anomalies.set(bestLabel, Math.max(state.anomalies.get(bestLabel) || 0, best));
+      }
+    }
+  };
 
   for (const w of windows) {
     const rms = rmsOf(w);
-    cur.windows++; gat.windows++;
-    if (rms < 0.01) { cur.rejected++; gat.rejected++; continue; }
+    ship.windows++; prev.windows++;
+    if (rms < 0.01) { ship.rejected++; prev.rejected++; continue; }
 
     const { emb, meanScores } = analyzeWindow(w);
     let best = -1, bestLabel = null;
@@ -275,21 +307,9 @@ function runSession(name, pcm, fingerprints, expected) {
     const t5 = topK(meanScores, 3);
     for (const t of t5) topSeen.set(t.name, Math.max(topSeen.get(t.name) || 0, t.score));
 
-    // CURRENT production rule
-    if (best >= ANOMALY_THRESHOLD) cur.anomalies.set(bestLabel, Math.max(cur.anomalies.get(bestLabel) || 0, best));
-
-    // GATED rule: domain gate -> cosine threshold -> persistence
-    // (2 matched windows per session, or a single >= 0.90 high-confidence match)
     const gate = domainGate(meanScores);
-    if (!gate.accepted) {
-      gat.rejected++;
-    } else if (best >= ANOMALY_THRESHOLD) {
-      const hits = (candidateHits.get(bestLabel) || 0) + 1;
-      candidateHits.set(bestLabel, hits);
-      if (hits >= 2 || best >= 0.95) {
-        gat.anomalies.set(bestLabel, Math.max(gat.anomalies.get(bestLabel) || 0, best));
-      }
-    }
+    applyRule(ship, ANOMALY_THRESHOLD, gate.accepted, best, bestLabel);
+    applyRule(prev, COMPARE_THRESHOLD, gate.accepted, best, bestLabel);
 
     if (VERBOSE) {
       console.log(`    [${name}] rms=${rms.toFixed(3)} best=${best.toFixed(3)} (${bestLabel}) gate=${gate.accepted ? 'PASS' : 'REJECT'} veh=${gate.vehicleScore.toFixed(2)} intf=${gate.interfererScore.toFixed(2)} top1=${gate.top1.name}(${gate.top1.score.toFixed(2)})`);
@@ -302,15 +322,15 @@ function runSession(name, pcm, fingerprints, expected) {
     if (r.anomalies.size > 0) return `ANOMALY: ${[...r.anomalies.keys()].join('; ')}`;
     return mostlyRejected ? 'REJECTED (no vehicle audio)' : 'HEALTHY';
   };
-  const curV = verdict(cur), gatV = verdict(gat);
+  const shipV = verdict(ship), prevV = verdict(prev);
   const ok = (v) => expected === 'anomaly' ? v.startsWith('ANOMALY') : !v.startsWith('ANOMALY');
   const top3 = [...topSeen.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([n, s]) => `${n}(${s.toFixed(2)})`).join(', ');
 
   console.log(`\n■ ${name}  [expect: ${expected}]  (${windows.length} windows)`);
   console.log(`    YAMNet hears: ${top3 || 'n/a (all below RMS gate)'}`);
-  console.log(`    CURRENT: ${curV}   ${ok(curV) ? '✓' : '✗ WRONG'}`);
-  console.log(`    GATED:   ${gatV}   ${ok(gatV) ? '✓' : '✗ WRONG'}`);
-  return { name, expected, current: curV, gated: gatV, currentOk: ok(curV), gatedOk: ok(gatV) };
+  console.log(`    SHIP@0.60: ${shipV}   ${ok(shipV) ? '✓' : '✗ WRONG'}`);
+  console.log(`    PREV@0.75: ${prevV}   ${ok(prevV) ? '✓' : '✗ WRONG'}`);
+  return { name, expected, ship: shipV, prev: prevV, shipOk: ok(shipV), prevOk: ok(prevV) };
 }
 
 // ─── Main ────────────────────────────────────────────────────────────────────
@@ -339,12 +359,15 @@ async function main() {
   }
 
   // Positives — the actual fault recordings the fingerprints derive from
-  for (const f of ['BearingAlternator.wav', 'MotorStarter.wav', 'Piston.wav']) {
+  for (const f of ['BearingAlternator.wav', 'MotorStarter.wav', 'Piston.wav',
+                   'PowerSteeringPump.wav', 'SerpentineBelt.wav', 'RockerArmAndValve.wav']) {
     const p = path.join(af, f);
     if (fs.existsSync(p)) cases.push([`fault: ${f}`, loadLocalWav(p), 'anomaly']);
   }
-  for (const f of ['alternator_bearing_fault_critical.wav', 'intake_leak_low.wav', 'misfire_detected_medium.wav']) {
-    const res = await fetch(BUCKET + f);
+  for (const f of ['alternator_bearing_fault_critical.wav', 'intake_leak_low.wav', 'misfire_detected_medium.wav',
+                   'timing_chain_rattle_high.wav', 'water_pump_failure_critical.wav',
+                   'Issue_with_Power_steering_or_low_oil_or_serpentine_belt_2.wav']) {
+    const res = await fetch(BUCKET + encodeURIComponent(f));
     if (res.ok) {
       const { pcm, sampleRate } = decodeWav(Buffer.from(await res.arrayBuffer()));
       cases.push([`fault: ${f}`, resampleTo16k(pcm, sampleRate), 'anomaly']);
@@ -362,10 +385,10 @@ async function main() {
     const fn = pos.filter(r => !r[key]).length;
     return { fp, fn, negN: neg.length, posN: pos.length };
   };
-  const c = stat('currentOk'), g = stat('gatedOk');
+  const s = stat('shipOk'), p = stat('prevOk');
   console.log('\n═══════════════ SUMMARY ═══════════════');
-  console.log(`CURRENT (HEAD):  false positives ${c.fp}/${c.negN}   false negatives ${c.fn}/${c.posN}`);
-  console.log(`GATED  (fix):    false positives ${g.fp}/${g.negN}   false negatives ${g.fn}/${g.posN}`);
+  console.log(`SHIP@0.60:  false positives ${s.fp}/${s.negN}   false negatives ${s.fn}/${s.posN}`);
+  console.log(`PREV@0.75:  false positives ${p.fp}/${p.negN}   false negatives ${p.fn}/${p.posN}`);
   fs.writeFileSync(path.join(ROOT, 'scratch', 'validation_results.json'), JSON.stringify(results, null, 2));
 }
 

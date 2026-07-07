@@ -12,10 +12,11 @@ let yamnetFingerprints = [];
 let isFingerprintsLoading = false;
 
 // Cosine Similarity Threshold for anomaly detection (0.0 to 1.0)
-// 0.75 balances sensitivity and precision for real-world microphone audio.
-// Real-world audio has environmental noise, reverb, and mic response curves
-// that reduce similarity vs clean WAV references — 0.90 rejects everything.
-const ANOMALY_THRESHOLD = 0.75;
+// 0.60 per product requirement (2026-07-07): a >= 60% match against any bucket
+// reference categorizes the anomaly by that reference's file name. Precision at
+// this threshold depends on the acoustic domain gate + persistence stages below;
+// without them, 0.60 would match nearly any sustained sound.
+const ANOMALY_THRESHOLD = 0.60;
 
 // ─── Acoustic domain gate ─────────────────────────────────────────────────────
 // YAMNet embeddings of ANY two audible sounds (speech, music, engines) routinely
