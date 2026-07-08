@@ -135,7 +135,9 @@ export default function TestDetection() {
 
   // Initialize dataset on mount
   useEffect(() => {
-    // initializeAudioDataset().then(() => setRefCount(referenceIndex.length));
+    import('@/lib/datasetLoader').then(({ loadReferenceSet }) =>
+      loadReferenceSet().then(set => setRefCount(set.faults.length))
+    ).catch(err => Logger.warn('TestDetection: reference set unavailable', err?.message));
   }, []);
 
   const handleRefreshRefs = async () => {
@@ -184,14 +186,10 @@ export default function TestDetection() {
           anomaly:    r.anomaly || null,
           confidence: r.confidence || 0,
           rms:        r.rms || 0,
+          reason:     r.reason || '',
         };
         dbgLines.push(line);
         setDbgLog([...dbgLines]);
-
-        if (r.status === 'anomaly' && r.anomaly) {
-          const exists = sessionAnomaliesRef.current.some(a => a.label === r.anomaly);
-          if (!exists) sessionAnomaliesRef.current.push({ label: r.anomaly, confidence: r.confidence });
-        }
       });
 
       // Auto-stop after RECORD_DURATION_S
@@ -205,7 +203,29 @@ export default function TestDetection() {
       stopExtraction();
       await new Promise(resolve => setTimeout(resolve, 300));
 
-      // Evaluate result
+      // Evaluate with the SAME session fraction rule as AudioRecorder:
+      // a fault is confirmed when >= 50% of gate-accepted windows are
+      // candidates for it, with at least 4 accepted windows.
+      const acceptedLines = dbgLines.filter(l =>
+        l.status === 'candidate' || (l.status === 'normal' && l.reason !== '' && !l.reason.startsWith('rejected_'))
+      );
+      const hitCounts = new Map();
+      for (const l of dbgLines) {
+        if (l.status === 'candidate' && l.anomaly) {
+          const e = hitCounts.get(l.anomaly) || { hits: 0, confidence: 0 };
+          e.hits++;
+          e.confidence = Math.max(e.confidence, l.confidence);
+          hitCounts.set(l.anomaly, e);
+        }
+      }
+      sessionAnomaliesRef.current = [];
+      if (acceptedLines.length >= 4) {
+        for (const [label, e] of hitCounts) {
+          if (e.hits / acceptedLines.length >= 0.5) {
+            sessionAnomaliesRef.current.push({ label, confidence: e.confidence });
+          }
+        }
+      }
       const detected    = sessionAnomaliesRef.current.length > 0;
       const expected    = scenario.type === 'anomaly';
       const pass        = detected === expected;

@@ -32,9 +32,16 @@ export default function AudioRecorder({
   const chunksRef = useRef([]);
   const timerRef = useRef(null);
   const streamRef = useRef(null);
-  const sessionAnomaliesRef = useRef([]);
-  const sessionConfidenceRef = useRef([]); 
-  const sessionRejectionsRef = useRef(0);
+  // Session tallies for the fraction decision rule (calibrated offline —
+  // scripts/benchmark_discrimination.mjs): a fault is confirmed when >= 50% of
+  // gate-accepted windows are candidates for the SAME fault, with >= 4 accepted
+  // windows total. Candidates alone never surface to the user.
+  const sessionCandidatesRef = useRef(new Map()); // label -> {hits, severity, confSum, firstSeen}
+  const sessionCandidateWindowsRef = useRef(0);   // total candidate windows (any label)
+  const sessionCleanWindowsRef = useRef(0);       // gate-passed windows that stayed healthy
+  const sessionRejectionsRef = useRef(0);         // silence / non-vehicle windows
+  const SESSION_FRACTION = 0.5;
+  const SESSION_MIN_ACCEPTED = 4;
   
   const [remainingTime, setRemainingTime] = useState(120);
   // Read voice alerts + detection mode from global settings store (persisted)
@@ -124,6 +131,40 @@ export default function AudioRecorder({
     }
   };
 
+  // Session-level decision (the fraction rule). Called at stop — candidates
+  // only become reported anomalies if they dominated the session.
+  const computeSessionOutcome = () => {
+    const accepted = sessionCleanWindowsRef.current + sessionCandidateWindowsRef.current;
+    const rejections = sessionRejectionsRef.current;
+    const confirmed = [];
+    if (accepted >= SESSION_MIN_ACCEPTED) {
+      for (const [label, e] of sessionCandidatesRef.current) {
+        if (e.hits / accepted >= SESSION_FRACTION) {
+          confirmed.push({
+            type:             buildReadableLabel(label),
+            rawLabel:         label,
+            severity:         e.severity,
+            timestamp:        e.firstSeen,
+            status:           'anomaly',
+            signalSimilarity: e.confSum / e.hits,
+            finalDecision:    'ANOMALY DETECTED',
+          });
+        }
+      }
+    }
+    const totalWindows = accepted + rejections;
+    const isMostlyRejected = totalWindows > 0 && rejections / totalWindows > 0.5;
+    // Confidence: anomaly sessions -> mean calibrated margin-confidence of the
+    // confirmed fault(s); healthy sessions -> window agreement rate. Never a
+    // hard-coded default.
+    const avgConfidence = confirmed.length > 0
+      ? (confirmed.reduce((a, c) => a + c.signalSimilarity, 0) / confirmed.length) * 100
+      : accepted > 0
+        ? (sessionCleanWindowsRef.current / accepted) * 100
+        : 0;
+    return { confirmed, accepted, rejections, isMostlyRejected, avgConfidence };
+  };
+
   const startRecording = () => {
     // MANDATORY debug log — confirms button is wired and responding instantly
     console.log("[Vroomie] Start Recording triggered");
@@ -133,8 +174,9 @@ export default function AudioRecorder({
       // The waveform burst animation fires here. Timer starts here.
       // User sees immediate feedback before mic even initialises.
       // ══════════════════════════════════════════════════════════════
-      sessionAnomaliesRef.current  = [];
-      sessionConfidenceRef.current = [];
+      sessionCandidatesRef.current = new Map();
+      sessionCandidateWindowsRef.current = 0;
+      sessionCleanWindowsRef.current = 0;
       sessionRejectionsRef.current = 0;
 
       isRecordingRef.current = true;   // ← update ref FIRST (used by async callbacks)
@@ -217,10 +259,18 @@ export default function AudioRecorder({
 
         if (status === 'normal' && reason.startsWith('rejected_')) {
           sessionRejectionsRef.current++;
-        }
-
-        if (confidence > 0) {
-          sessionConfidenceRef.current.push(confidence);
+        } else if (status === 'normal' && reason !== '') {
+          // gate-passed window that resolved healthy (below threshold / healthy margin)
+          sessionCleanWindowsRef.current++;
+        } else if (status === 'candidate' && anomaly) {
+          sessionCandidateWindowsRef.current++;
+          const entry = sessionCandidatesRef.current.get(anomaly) || {
+            hits: 0, confSum: 0, severity, firstSeen: recordingTimeRef.current
+          };
+          entry.hits++;
+          entry.confSum += confidence;
+          if (severity === 'critical') entry.severity = 'critical';
+          sessionCandidatesRef.current.set(anomaly, entry);
         }
 
         // Debounced debug stats — max 4 re-renders/sec
@@ -243,23 +293,6 @@ export default function AudioRecorder({
           }
         }
 
-        // Accumulate confirmed anomalies only
-        if (status === 'anomaly' && anomaly) {
-          const cleanLabel = buildReadableLabel(anomaly);
-          const anomalyData = {
-            type:             cleanLabel,
-            rawLabel:         anomaly,
-            severity,
-            timestamp:        recordingTime,
-            status:           'anomaly',
-            signalSimilarity: confidence,
-            finalDecision:    'ANOMALY DETECTED',
-          };
-          if (!sessionAnomaliesRef.current.some(a => a.rawLabel === anomaly)) {
-            sessionAnomaliesRef.current.push(anomalyData);
-            Logger.info(`Session anomaly added: ${cleanLabel}`);
-          }
-        }
       });
 
       // ══════════════════════════════════════════════════════════════
@@ -338,10 +371,7 @@ export default function AudioRecorder({
         // ── FIX: Synchronous TTS in onClick context ──
         // Modern browsers block speechSynthesis in async callbacks (like onstop/handleAudioUpload)
         // We trigger it here where the user interaction is still valid.
-        const realAnomalies = sessionAnomaliesRef.current || [];
-        const rejections = sessionRejectionsRef.current || 0;
-        const totalWindows = sessionConfidenceRef.current.length + rejections;
-        const isMostlySilence = totalWindows > 0 && (rejections / totalWindows) > 0.5;
+        const { confirmed: realAnomalies, isMostlyRejected: isMostlySilence } = computeSessionOutcome();
 
         if (isVoiceAlertsEnabled) {
           if (isMostlySilence) {
@@ -396,22 +426,19 @@ export default function AudioRecorder({
   const handleAudioUpload = async (blob) => {
     try {
       const activeMode = getDetectionMode();
-      const realAnomalies = sessionAnomaliesRef.current || [];
-      const rejections = sessionRejectionsRef.current || 0;
-      
-      const totalConf = sessionConfidenceRef.current.reduce((a, b) => a + b, 0);
-      const avgConfidence = sessionConfidenceRef.current.length > 0
-        ? (totalConf / sessionConfidenceRef.current.length) * 100
-        : 75;
+      // ── Session decision: fraction rule + rejection gate ──
+      // If the system rejected most windows (silence / non-vehicle audio) we
+      // abort the report. Otherwise, no confirmed fault means a HEALTHY vehicle.
+      const {
+        confirmed: realAnomalies,
+        rejections,
+        accepted,
+        isMostlyRejected: isMostlySilence,
+        avgConfidence
+      } = computeSessionOutcome();
 
-      // ── Shazam Approach: Rejection Gate ──
-      // If the system actively rejected the audio domain (e.g. too much silence)
-      // we abort the report. Otherwise, if there are no anomalies, it's a HEALTHY vehicle!
-      const totalWindows = sessionConfidenceRef.current.length + rejections;
-      const isMostlySilence = totalWindows > 0 && (rejections / totalWindows) > 0.5;
-      
       if (isMostlySilence) {
-        console.warn(`[Vroomie] Audio rejected (Silence). Rejections: ${rejections}/${totalWindows}. Aborting report publish.`);
+        console.warn(`[Vroomie] Audio rejected (non-vehicle). Rejections: ${rejections}/${rejections + accepted}. Aborting report publish.`);
         toast.error("Unable to detect vehicle audio. Please try again.", { duration: 4000 });
         if (onRecordingComplete) onRecordingComplete(null);
         return;

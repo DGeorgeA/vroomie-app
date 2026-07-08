@@ -32,7 +32,7 @@ export default defineConfig({
         clientsClaim: true,
         cleanupOutdatedCaches: true,
         // Exclude the worklet from SW precache (it must be loaded by AudioContext directly)
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,jpeg,woff2,wasm}'],
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,jpeg,woff2,wasm,json}'],
         globIgnores: ['**/audio-processor.worklet.js'],
         runtimeCaching: [
           {

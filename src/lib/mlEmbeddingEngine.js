@@ -1,6 +1,6 @@
 import * as tf from '@tensorflow/tfjs';
 import { Logger } from './logger';
-import { loadOrGenerateFingerprints } from './datasetLoader';
+import { loadReferenceSet } from './datasetLoader';
 import { YAMNET_CLASSES } from '../data/yamnet_classes';
 
 const YAMNET_MODEL_URL = 'https://tfhub.dev/google/tfjs-model/yamnet/tfjs/1';
@@ -8,15 +8,27 @@ const YAMNET_MODEL_URL = 'https://tfhub.dev/google/tfjs-model/yamnet/tfjs/1';
 let yamnetModel = null;
 let isModelLoading = false;
 let modelLoadPromise = null;
-let yamnetFingerprints = [];
-let isFingerprintsLoading = false;
+let faultReferences = [];   // augmented fault embeddings from the static artifact
+let anchorReferences = [];  // healthy + interferer anchor embeddings
+let isReferencesLoading = false;
 
 // Cosine Similarity Threshold for anomaly detection (0.0 to 1.0)
 // 0.60 per product requirement (2026-07-07): a >= 60% match against any bucket
 // reference categorizes the anomaly by that reference's file name. Precision at
-// this threshold depends on the acoustic domain gate + persistence stages below;
+// this threshold depends on the domain gate + MARGIN rule + persistence below;
 // without them, 0.60 would match nearly any sustained sound.
 const ANOMALY_THRESHOLD = 0.60;
+
+// Margin rule: a fault match only counts if it beats the closest HEALTHY/interferer
+// anchor by this much. This inverts the old "find the closest anomaly" logic into
+// "is this closer to a known fault than to a healthy engine?".
+//
+// Windows that qualify are emitted as status 'candidate'; the SESSION decision
+// (>= 50% of accepted windows agreeing on one fault, min 4 windows) is applied
+// by AudioRecorder at stop. Calibrated on held-out data by
+// scripts/benchmark_discrimination.mjs + scripts/rule_explorer.mjs:
+// healthy FP 0/35, interferer FP 0/5, fault recall 16/36, refs 5/6.
+const ANCHOR_MARGIN = 0.05;
 
 // ─── Acoustic domain gate ─────────────────────────────────────────────────────
 // YAMNet embeddings of ANY two audible sounds (speech, music, engines) routinely
@@ -33,8 +45,10 @@ const VEHICLE_MECH_NAMES = [
   'Engine', 'Light engine (high frequency)', 'Medium engine (mid frequency)',
   'Heavy engine (low frequency)', 'Engine knocking', 'Engine starting', 'Idling',
   'Accelerating, revving, vroom', 'Lawn mower', 'Chainsaw',
-  'Mechanisms', 'Ratchet, pawl', 'Gears', 'Pulleys', 'Sewing machine', 'Mechanical fan',
-  'Air conditioning', 'Tools', 'Hammer', 'Jackhammer', 'Sawing', 'Power tool', 'Drill',
+  // NOTE: 'Mechanical fan' and 'Air conditioning' are deliberately EXCLUDED —
+  // household fans/AC passed the gate and matched hiss-like references.
+  'Mechanisms', 'Ratchet, pawl', 'Gears', 'Pulleys', 'Sewing machine',
+  'Tools', 'Hammer', 'Jackhammer', 'Sawing', 'Power tool', 'Drill',
   'Rattle', 'Squeak', 'Squeal', 'Whir', 'Hum', 'Vibration', 'Throbbing', 'Rumble',
   'Clicking', 'Tick', 'Clatter', 'Creak', 'Scrape', 'Grind'
 ];
@@ -62,16 +76,6 @@ const INTERFERER_INDICES = (() => {
 // score 0.00–0.02, so the margin test (vehicle > interferer) does the real work.
 const VEHICLE_SCORE_FLOOR = 0.03;
 
-// Persistence: a fault must match in 2 windows within a session (or once with
-// near-perfect similarity) before it is reported. Real mechanical faults are
-// sustained; one-off spurious matches are not.
-const PERSISTENCE_HITS = 2;
-const SINGLE_HIT_BYPASS_SCORE = 0.95;
-let candidateHits = new Map();
-
-export function resetDetectionState() {
-  candidateHits = new Map();
-}
 
 /**
  * Loads the YAMNet model only. No fingerprint loading.
@@ -174,28 +178,31 @@ export function evaluateAudioDomain(meanScores) {
 }
 
 /**
- * Full initialization: loads model first, then generates/loads fingerprints.
- * This is the public entry point called by audioFeatureExtractor.startExtraction().
- * 
- * ORDER IS CRITICAL:
- *   1. Load YAMNet model (so getAudioEmbedding works)
- *   2. Load/generate fingerprints (which calls getAudioEmbedding for each WAV)
+ * Full initialization: YAMNet model + static reference artifact.
+ * References are pre-built offline (scripts/build_reference_fingerprints.mjs),
+ * so both loads are independent and run in parallel.
  */
 export async function initializeEmbeddingEngine() {
-  // Step 1: Load the model FIRST (no fingerprint dependency)
-  await loadYamnetModel();
+  const refsNeeded = faultReferences.length === 0 && !isReferencesLoading;
+  if (refsNeeded) isReferencesLoading = true;
 
-  // Step 2: Load fingerprints (needs working getAudioEmbedding, which needs the model)
-  if (yamnetFingerprints.length === 0 && !isFingerprintsLoading) {
-    isFingerprintsLoading = true;
-    try {
-      yamnetFingerprints = await loadOrGenerateFingerprints(getAudioEmbedding);
-      Logger.info(`✅ ${yamnetFingerprints.length} fingerprints loaded/generated`);
-    } catch (err) {
-      Logger.error('Failed to load fingerprints:', err);
-    } finally {
-      isFingerprintsLoading = false;
+  const [, refSet] = await Promise.all([
+    loadYamnetModel(),
+    refsNeeded
+      ? loadReferenceSet().catch(err => {
+          Logger.error('Failed to load reference set:', err);
+          return null;
+        })
+      : Promise.resolve(null)
+  ]);
+
+  if (refsNeeded) {
+    if (refSet) {
+      faultReferences = refSet.faults;
+      anchorReferences = refSet.anchors;
+      Logger.info(`✅ Reference set ready: ${faultReferences.length} fault embeddings, ${anchorReferences.length} anchors`);
     }
+    isReferencesLoading = false;
   }
 
   return yamnetModel;
@@ -222,7 +229,19 @@ export function calculateCosineSimilarity(emb1, emb2) {
 }
 
 export function isEngineReady() {
-  return yamnetModel !== null && yamnetFingerprints.length > 0;
+  return yamnetModel !== null && faultReferences.length > 0;
+}
+
+/**
+ * Maps a decision margin (bestFault − bestAnchor) to a calibrated confidence.
+ * Anchored so that a match at exactly the margin threshold reports ~0.6 and a
+ * decisive margin (≥ ~0.25 above threshold) saturates near 0.97. Unlike raw
+ * cosine (0.7–0.9 for ANY pair of sustained sounds), this reflects how much
+ * closer the audio is to the fault than to a healthy engine.
+ */
+function marginToConfidence(margin) {
+  const x = (margin - ANCHOR_MARGIN) / 0.25;
+  return Math.max(0.6, Math.min(0.97, 0.6 + 0.37 * x));
 }
 
 /**
@@ -237,12 +256,12 @@ export function isEngineReady() {
  *        from fault recordings.
  */
 export function findBestMatch(liveEmbedding, meanScores = null) {
-  if (!liveEmbedding || !yamnetFingerprints || yamnetFingerprints.length === 0) {
-    Logger.warn(`[YAMNet] findBestMatch called with ${yamnetFingerprints?.length || 0} references — returning normal`);
+  if (!liveEmbedding || faultReferences.length === 0) {
+    Logger.warn(`[YAMNet] findBestMatch called with ${faultReferences.length} references — returning normal`);
     return { status: 'normal', confidence: 0, reason: 'no_references' };
   }
 
-  // ── Stage 1: acoustic domain gate ──
+  // ── Stage 1: acoustic domain gate — is this vehicle audio at all? ──
   if (meanScores) {
     const domain = evaluateAudioDomain(meanScores);
     if (!domain.accepted) {
@@ -256,53 +275,51 @@ export function findBestMatch(liveEmbedding, meanScores = null) {
     }
   }
 
-  // ── Stage 2: fingerprint similarity ──
+  // ── Stage 2: discriminative match — closer to a fault than to healthy? ──
   let bestScore = -1;
   let bestMatch = null;
-
-  // Log ALL reference comparisons for diagnostics
-  const allScores = [];
-  for (const ref of yamnetFingerprints) {
-    const score = calculateCosineSimilarity(liveEmbedding, ref.yamnet_embedding);
-    allScores.push({ label: ref.label, score: score.toFixed(4) });
+  for (const ref of faultReferences) {
+    const score = calculateCosineSimilarity(liveEmbedding, ref.emb);
     if (score > bestScore) {
       bestScore = score;
       bestMatch = ref;
     }
   }
+  let bestAnchor = 0;
+  for (const anchor of anchorReferences) {
+    const score = calculateCosineSimilarity(liveEmbedding, anchor.emb);
+    if (score > bestAnchor) bestAnchor = score;
+  }
+  const margin = bestScore - bestAnchor;
+  Logger.info(`[YAMNet] bestFault=${bestMatch.label}(${bestScore.toFixed(3)}) bestAnchor=${bestAnchor.toFixed(3)} margin=${margin.toFixed(3)}`);
 
-  // Log top 3 matches for debugging
-  allScores.sort((a, b) => parseFloat(b.score) - parseFloat(a.score));
-  const top3 = allScores.slice(0, 3).map(s => `${s.label}(${s.score})`).join(', ');
-  Logger.info(`[YAMNet] Top matches: ${top3} | Threshold: ${ANOMALY_THRESHOLD}`);
-
-  if (bestScore >= ANOMALY_THRESHOLD && bestMatch) {
-    // ── Stage 3: persistence ──
-    const hits = (candidateHits.get(bestMatch.label) || 0) + 1;
-    candidateHits.set(bestMatch.label, hits);
-    if (hits < PERSISTENCE_HITS && bestScore < SINGLE_HIT_BYPASS_SCORE) {
-      Logger.info(`[YAMNet] Candidate pending confirmation: ${bestMatch.label} (score=${bestScore.toFixed(3)}, hit ${hits}/${PERSISTENCE_HITS})`);
-      return {
-        status: 'normal',
-        anomaly: null,
-        confidence: bestScore,
-        reason: 'pending_confirmation'
-      };
-    }
-    Logger.info(`❗ ANOMALY CONFIRMED: ${bestMatch.label} (score=${bestScore.toFixed(3)} >= ${ANOMALY_THRESHOLD}, hits=${hits})`);
+  if (bestScore < ANOMALY_THRESHOLD) {
     return {
-      status: 'anomaly',
-      anomaly: bestMatch.label,
-      severity: bestMatch.severity || 'high',
-      confidence: bestScore,
-      rms: 0 // Legacy field needed by UI
+      status: 'normal',
+      anomaly: null,
+      confidence: 0,
+      reason: `below_threshold_${bestScore.toFixed(2)}_vs_${ANOMALY_THRESHOLD}`
+    };
+  }
+  if (margin < ANCHOR_MARGIN) {
+    // Sounds like an engine, but no closer to a fault than to a healthy engine.
+    return {
+      status: 'normal',
+      anomaly: null,
+      confidence: 0,
+      reason: `healthy_margin_${margin.toFixed(3)}`
     };
   }
 
+  // ── Stage 3: emit a candidate — the session-level fraction rule in
+  // AudioRecorder decides whether the fault is sustained enough to report.
+  const confidence = marginToConfidence(margin);
+  Logger.info(`[YAMNet] Candidate window: ${bestMatch.label} (score=${bestScore.toFixed(3)}, margin=${margin.toFixed(3)}, conf=${confidence.toFixed(2)})`);
   return {
-    status: 'normal',
-    anomaly: null,
-    confidence: bestScore,
-    reason: `below_threshold_${bestScore.toFixed(2)}_vs_${ANOMALY_THRESHOLD}`
+    status: 'candidate',
+    anomaly: bestMatch.label,
+    severity: bestMatch.severity || 'high',
+    confidence,
+    rms: 0 // Legacy field needed by UI
   };
 }

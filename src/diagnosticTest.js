@@ -1,4 +1,3 @@
-import { loadOrGenerateFingerprints } from './lib/datasetLoader';
 import { initializeEmbeddingEngine, getAudioEmbedding, calculateCosineSimilarity } from './lib/mlEmbeddingEngine';
 import { Logger } from './lib/logger';
 

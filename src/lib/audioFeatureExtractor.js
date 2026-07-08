@@ -1,5 +1,5 @@
 import { Logger } from './logger';
-import { initializeEmbeddingEngine, getAudioAnalysis, findBestMatch, resetDetectionState } from './mlEmbeddingEngine';
+import { initializeEmbeddingEngine, getAudioAnalysis, findBestMatch } from './mlEmbeddingEngine';
 
 // ─── Module-level state ───────────────────────────────────
 let isExtracting        = false;
@@ -25,7 +25,6 @@ export async function startExtraction(callback) {
 
   isExtracting       = true;
   onFeaturesCallback = callback;
-  resetDetectionState(); // fresh persistence state for each session
 
   Logger.info('🎤 [START] Requesting microphone and loading YAMNet...');
 

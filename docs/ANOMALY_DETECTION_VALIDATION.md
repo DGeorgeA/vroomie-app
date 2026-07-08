@@ -1,9 +1,70 @@
 # Anomaly Detection Accuracy — Root Cause & Validation Evidence
 
-Date: 2026-07-07 (updated same day: full-bucket references + 0.60 threshold)
-Scope: detection engine + reference loading (`src/lib/mlEmbeddingEngine.js`,
-`src/lib/audioFeatureExtractor.js`, `src/lib/datasetLoader.js`,
-`src/data/yamnet_classes.js`). Waveform, report generation, and UI untouched.
+Date: 2026-07-07 (v9 architecture — offline reference factory + margin decision rule;
+earlier same-day sections kept below for history)
+
+## v9 — THE CURRENT ARCHITECTURE (approved RCA remediation)
+
+**Root cause established by audit** (`scripts/bucket_audit.mjs`, full RCA in the
+project conversation): the reference dataset could not distinguish healthy from
+faulty engines. Healthy idle recordings scored 0.80–0.92 cosine against the
+44-file power-steering reference set (which is 74–81% of all references and is
+acoustically ≈ generic idle — YAMNet hears "Engine"/"Vehicle"). Any car —
+healthy or not — collapsed to "Issue with Power steering or low oil or
+serpentine belt". "~80% confidence" was raw cosine plus a hard-coded
+`avgConfidence = 75` default, never a calibrated probability. One reference
+(`water_pump_failure_critical.wav`) is a synthetic sine tone; the bucket's 55
+JSON files are dead, partially mislabeled v7-era fingerprints (unused by code).
+
+**Remediation:**
+
+1. **Offline reference factory** — `scripts/build_reference_fingerprints.mjs`
+   (run on dataset change, commit the output):
+   QC (rejects synthetic tones/short/silent files) → RMS loudness normalization
+   → augmentation (phone-band filter, +15 dB-SNR noise, ±2% rate, room echo) →
+   YAMNet embeddings → int8-quantized `public/fingerprints_v9.json` (~800 KB,
+   432 fault embeddings from 54 QC-passing WAVs + 88 anchors). Anchors are the
+   "compared to what?": healthy idle/startup/brakes (EVEN-numbered Kaggle clips)
+   plus speech/music/noise. In-browser fingerprint generation and localStorage
+   caches are gone; the artifact is served statically and SW-precached.
+2. **Margin decision rule** (`src/lib/mlEmbeddingEngine.js`): per 1 s window —
+   RMS gate → acoustic domain gate ('Mechanical fan'/'Air conditioning' removed
+   from the accept list) → best fault cosine ≥ 0.60 AND
+   (bestFault − bestAnchor) ≥ 0.05 → emits a **candidate**.
+3. **Session fraction rule** (`AudioRecorder.jsx`): a fault is reported only if
+   ≥ 50% of gate-accepted windows are candidates for it (min 4 windows).
+   Confidence = calibrated margin mapping (anomaly) or window agreement rate
+   (healthy). The `avgConfidence = 75` default is removed.
+
+**Calibration & held-out validation** (`scripts/benchmark_discrimination.mjs` +
+`scripts/rule_explorer.mjs`; ODD-numbered Kaggle clips, each looped to 12 s
+sessions; the operating point was selected across fixed/tiered/fraction/mean
+rule families):
+
+| Set (held out) | Result |
+|---|---|
+| Healthy idle/startup/brakes (35 sessions) | **0 false anomalies** |
+| Speech / TV / music / noise (5 sessions) | **0 false anomalies** |
+| Faulty (power steering, serpentine, low oil — 36 sessions) | **16 detected (44%)** |
+| Bucket reference originals (6) | 5 detected (MotorStarter suppressed — a normal starter crank is acoustically the same event) |
+
+Honest limits: 44% held-out recall reflects the reference dataset (processed
+1.5 s clips vs raw recordings). The single highest-leverage improvement remains
+real phone-mic recordings of real vehicles uploaded to the bucket, then
+re-running the factory. Raising recall by loosening the margin was measured and
+rejected: margin 0.05 without the fraction rule gives 29% healthy false
+positives — the exact failure this architecture removes.
+
+---
+
+## Historical sections (superseded by v9 above)
+
+Scope of the sections below: detection engine + reference loading
+(`src/lib/mlEmbeddingEngine.js`, `src/lib/audioFeatureExtractor.js`,
+`src/lib/datasetLoader.js`, `src/data/yamnet_classes.js`).
+NOTE: `scripts/validate_anomaly_accuracy.mjs` and
+`scripts/regression_sweep_kaggle.mjs` test the pre-v9 decision rule; the
+authoritative v9 harness is `scripts/benchmark_discrimination.mjs`.
 
 ## Root cause (measured, not theorized)
 
