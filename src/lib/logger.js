@@ -3,7 +3,8 @@
  * Can be hooked into an external observability platform later.
  */
 
-const IS_DEBUG = import.meta.env.DEV || true; // Set up debug flags as needed
+// Optional chaining keeps this importable outside Vite (Node test harnesses)
+const IS_DEBUG = import.meta.env?.DEV || true; // Set up debug flags as needed
 
 export const Logger = {
   info: (message, context = {}) => {

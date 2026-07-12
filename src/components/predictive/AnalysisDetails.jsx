@@ -173,6 +173,12 @@ export default function AnalysisDetails({ analysis, onClose }) {
                             {anomaly.severity?.toUpperCase()}
                           </span>
                         </div>
+                        {/* Noise-discounted possibility statement */}
+                        {anomaly.statement && (
+                          <p className="text-sm text-amber-300/90 font-medium mb-2">
+                            {anomaly.statement}
+                          </p>
+                        )}
                         <p className="text-sm text-gray-400 mb-3">
                           {anomaly.description}
                         </p>

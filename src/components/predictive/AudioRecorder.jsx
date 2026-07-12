@@ -3,6 +3,7 @@ import { Mic, Square, Bug, Lock, Sparkles } from "lucide-react";
 import GlassButton from "../ui/GlassButton";
 import { toast } from "sonner";
 import { startExtraction, stopExtraction, getActiveMediaStream, getActiveAudioContext } from "@/lib/audioFeatureExtractor";
+import { startMotionCapture, stopMotionCapture } from "@/lib/motionDetector";
 import { buildReadableLabel, resetMatchState } from "@/lib/audioMatchingEngine"; // Legacy fallback if needed
 import { clearContinuousAlert, speakScanResult, speakUnableToDetect } from "@/lib/voiceFeedback";
 import { Logger } from "@/lib/logger";
@@ -42,6 +43,15 @@ export default function AudioRecorder({
   const sessionRejectionsRef = useRef(0);         // silence / non-vehicle windows
   const SESSION_FRACTION = 0.5;
   const SESSION_MIN_ACCEPTED = 4;
+  const motionResultRef = useRef(null); // vehicle-vibration verdict for this session
+
+  // Anomalies are only published when the device sensed vehicle vibration —
+  // or when motion sensing is unavailable (desktop / permission denied), in
+  // which case the check is skipped entirely (fail-open).
+  const isAnomalySuppressedByStillness = () => {
+    const m = motionResultRef.current;
+    return Boolean(m && m.available && m.verdict === 'still');
+  };
   
   const [remainingTime, setRemainingTime] = useState(120);
   // Read voice alerts + detection mode from global settings store (persisted)
@@ -140,13 +150,20 @@ export default function AudioRecorder({
     if (accepted >= SESSION_MIN_ACCEPTED) {
       for (const [label, e] of sessionCandidatesRef.current) {
         if (e.hits / accepted >= SESSION_FRACTION) {
+          const readable = buildReadableLabel(label);
+          const meanConf = e.confSum / e.hits;
+          const possibility = Math.round(meanConf * 100);
           confirmed.push({
-            type:             buildReadableLabel(label),
+            type:             readable,
             rawLabel:         label,
             severity:         e.severity,
             timestamp:        e.firstSeen,
             status:           'anomaly',
-            signalSimilarity: e.confSum / e.hits,
+            signalSimilarity: meanConf,
+            possibility,
+            sourceFile:       e.sourceFile,
+            // Noise-discounted possibility statement (product requirement):
+            statement:        `There is a ${possibility}% possibility that there could be a possible ${readable}${e.sourceFile ? ` (${e.sourceFile})` : ''}`,
             finalDecision:    'ANOMALY DETECTED',
           });
         }
@@ -181,6 +198,10 @@ export default function AudioRecorder({
 
       isRecordingRef.current = true;   // ← update ref FIRST (used by async callbacks)
       setIsRecording(true);            // ← triggers waveform BURST immediately
+      motionResultRef.current = null;
+      // Vehicle-presence sensing — MUST start inside this click handler so the
+      // iOS motion-permission prompt has a user gesture. Fail-open by design.
+      startMotionCapture();
       recordingTimeRef.current = 0;
       setRecordingTime(0);
       setRemainingTime(120);
@@ -219,6 +240,7 @@ export default function AudioRecorder({
       _startExtractionAsync(activeMode).catch(error => {
         // Revert all UI state if async setup failed
         console.error("🚨 Error in startRecording:", error);
+        stopMotionCapture();
         isRecordingRef.current = false;
         setIsRecording(false);
           if (timerRef.current) clearInterval(timerRef.current);
@@ -265,10 +287,14 @@ export default function AudioRecorder({
         } else if (status === 'candidate' && anomaly) {
           sessionCandidateWindowsRef.current++;
           const entry = sessionCandidatesRef.current.get(anomaly) || {
-            hits: 0, confSum: 0, severity, firstSeen: recordingTimeRef.current
+            hits: 0, confSum: 0, maxConf: 0, sourceFile: null, severity, firstSeen: recordingTimeRef.current
           };
           entry.hits++;
           entry.confSum += confidence;
+          if (confidence > entry.maxConf) {
+            entry.maxConf = confidence;
+            entry.sourceFile = workerResult.sourceFile || entry.sourceFile;
+          }
           if (severity === 'critical') entry.severity = 'critical';
           sessionCandidatesRef.current.set(anomaly, entry);
         }
@@ -368,13 +394,17 @@ export default function AudioRecorder({
         clearContinuousAlert();
         toast.info("Processing audio...");
 
+        // Finalize the vehicle-vibration verdict for this session
+        motionResultRef.current = stopMotionCapture();
+
         // ── FIX: Synchronous TTS in onClick context ──
         // Modern browsers block speechSynthesis in async callbacks (like onstop/handleAudioUpload)
         // We trigger it here where the user interaction is still valid.
         const { confirmed: realAnomalies, isMostlyRejected: isMostlySilence } = computeSessionOutcome();
+        const stillnessSuppressed = realAnomalies.length > 0 && isAnomalySuppressedByStillness();
 
         if (isVoiceAlertsEnabled) {
-          if (isMostlySilence) {
+          if (isMostlySilence || stillnessSuppressed) {
             speakUnableToDetect(language);
           } else if (realAnomalies.length === 0) {
             speakScanResult([], language); // "No anomalies found"
@@ -417,6 +447,7 @@ export default function AudioRecorder({
     } catch (error) {
       console.error("Error stopping recording:", error);
       toast.error("Failed to stop recording cleanly");
+      stopMotionCapture();
       isRecordingRef.current = false;
       setIsRecording(false);
       setTimeout(() => stopExtraction(), 0);
@@ -440,6 +471,17 @@ export default function AudioRecorder({
       if (isMostlySilence) {
         console.warn(`[Vroomie] Audio rejected (non-vehicle). Rejections: ${rejections}/${rejections + accepted}. Aborting report publish.`);
         toast.error("Unable to detect vehicle audio. Please try again.", { duration: 4000 });
+        if (onRecordingComplete) onRecordingComplete(null);
+        return;
+      }
+
+      // ── Vehicle-motion gate: anomaly alerts require sensed vehicle vibration
+      // when motion sensors are available. A phone lying still in a quiet room
+      // (e.g. in front of a TV) cannot produce a fault report.
+      if (realAnomalies.length > 0 && isAnomalySuppressedByStillness()) {
+        const m = motionResultRef.current;
+        console.warn(`[Vroomie] Anomaly suppressed — no vehicle vibration sensed (rms=${m.vibrationRms.toFixed(4)}, samples=${m.samples}). Aborting report publish.`);
+        toast.error("Anomaly-like audio detected, but no vehicle vibration was sensed. Keep the phone in or on the running vehicle and try again.", { duration: 6000 });
         if (onRecordingComplete) onRecordingComplete(null);
         return;
       }
@@ -518,6 +560,9 @@ export default function AudioRecorder({
         return;
       }
 
+      if (realAnomalies.length > 0 && realAnomalies[0].statement) {
+        toast.warning(realAnomalies[0].statement, { duration: 8000 });
+      }
       toast.success('Analysis saved and synced!');
 
       // onRecordingComplete triggers the realtime refetch

@@ -22,9 +22,11 @@ windows before matching — replayed bucket samples went undetected. Calibration
 
 Held-out validation (91 sessions): healthy 0/35 FP, interferers 0/9 FP (speech,
 TV, music, white/pink noise, fan, tone), held-out raw faults 14/36, bucket
-reference replay **10/11** (was 5–6; the miss is MotorStarter — a normal
-starter crank, correctly suppressed by healthy-startup anchors). Session rule
-constants re-verified as the zero-FP optimum on the new measurements.
+reference replay **10/11** (was 5–6; the miss is `intake_leak_low` — an intake
+leak is acoustically a hiss, and the strengthened white-noise anchors that
+provide fan/ambient immunity out-score it; every other reference incl.
+MotorStarter now replays correctly). Session rule constants re-verified as the
+zero-FP optimum on the new measurements.
 
 ## v9 — Architecture (approved RCA remediation)
 

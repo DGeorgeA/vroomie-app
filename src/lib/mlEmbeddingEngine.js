@@ -249,15 +249,19 @@ export function isEngineReady() {
 }
 
 /**
- * Maps a decision margin (bestFault − bestAnchor) to a calibrated confidence.
- * Anchored so that a match at exactly the margin threshold reports ~0.6 and a
- * decisive margin (≥ ~0.25 above threshold) saturates near 0.97. Unlike raw
- * cosine (0.7–0.9 for ANY pair of sustained sounds), this reflects how much
- * closer the audio is to the fault than to a healthy engine.
+ * Maps a decision margin (bestFault − bestAnchor) to the reported
+ * "possibility" percentage. The margin is the match strength AFTER
+ * discounting the noise/healthy background (best anchor similarity is
+ * subtracted), so unlike raw cosine (0.7–0.9 for ANY pair of sustained
+ * sounds) it reflects how much closer the audio is to the fault than to a
+ * healthy engine or ambient noise.
+ *
+ * Product requirement (2026-07-07): an anomaly is only ever reported when its
+ * noise-discounted possibility exceeds 70%. A window at exactly the qualifying
+ * margin (0.05) maps to 0.70; a decisive margin (≥ 0.30) saturates at 0.97.
  */
 function marginToConfidence(margin) {
-  const x = (margin - ANCHOR_MARGIN) / 0.25;
-  return Math.max(0.6, Math.min(0.97, 0.6 + 0.37 * x));
+  return Math.max(0.70, Math.min(0.97, 0.70 + 1.08 * (margin - ANCHOR_MARGIN)));
 }
 
 /**
@@ -336,6 +340,7 @@ export function findBestMatch(liveEmbedding, meanScores = null) {
     anomaly: bestMatch.label,
     severity: bestMatch.severity || 'high',
     confidence,
+    sourceFile: bestMatch.source_file || null, // Supabase reference that matched
     rms: 0 // Legacy field needed by UI
   };
 }
