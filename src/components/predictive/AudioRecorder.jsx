@@ -45,10 +45,11 @@ export default function AudioRecorder({
   const SESSION_MIN_ACCEPTED = 4;
   const motionResultRef = useRef(null); // vehicle-vibration verdict for this session
 
-  // Anomalies are only published when the device sensed vehicle vibration —
-  // or when motion sensing is unavailable (desktop / permission denied), in
-  // which case the check is skipped entirely (fail-open).
-  const isAnomalySuppressedByStillness = () => {
+  // Vehicle-vibration verdict is an ANNOTATION, not a hard gate: controlled
+  // bench tests (reference samples replayed at a stationary phone) must still
+  // detect, so anomalies always publish — sessions where sensors demonstrably
+  // measured stillness carry a "vibration not sensed" note instead.
+  const isVibrationUnverified = () => {
     const m = motionResultRef.current;
     return Boolean(m && m.available && m.verdict === 'still');
   };
@@ -401,10 +402,9 @@ export default function AudioRecorder({
         // Modern browsers block speechSynthesis in async callbacks (like onstop/handleAudioUpload)
         // We trigger it here where the user interaction is still valid.
         const { confirmed: realAnomalies, isMostlyRejected: isMostlySilence } = computeSessionOutcome();
-        const stillnessSuppressed = realAnomalies.length > 0 && isAnomalySuppressedByStillness();
 
         if (isVoiceAlertsEnabled) {
-          if (isMostlySilence || stillnessSuppressed) {
+          if (isMostlySilence) {
             speakUnableToDetect(language);
           } else if (realAnomalies.length === 0) {
             speakScanResult([], language); // "No anomalies found"
@@ -475,15 +475,19 @@ export default function AudioRecorder({
         return;
       }
 
-      // ── Vehicle-motion gate: anomaly alerts require sensed vehicle vibration
-      // when motion sensors are available. A phone lying still in a quiet room
-      // (e.g. in front of a TV) cannot produce a fault report.
-      if (realAnomalies.length > 0 && isAnomalySuppressedByStillness()) {
+      // ── Vehicle-motion annotation: when sensors demonstrably measured
+      // stillness, anomalies still publish (bench replay of reference samples
+      // is a supported validation flow) but each carries an explicit
+      // "vibration not sensed" note so at-the-vehicle verification is prompted.
+      if (realAnomalies.length > 0 && isVibrationUnverified()) {
         const m = motionResultRef.current;
-        console.warn(`[Vroomie] Anomaly suppressed — no vehicle vibration sensed (rms=${m.vibrationRms.toFixed(4)}, samples=${m.samples}). Aborting report publish.`);
-        toast.error("Anomaly-like audio detected, but no vehicle vibration was sensed. Keep the phone in or on the running vehicle and try again.", { duration: 6000 });
-        if (onRecordingComplete) onRecordingComplete(null);
-        return;
+        console.warn(`[Vroomie] Anomaly published WITHOUT vehicle vibration (rms=${m.vibrationRms.toFixed(4)}, samples=${m.samples}).`);
+        for (const a of realAnomalies) {
+          a.motionVerified = false;
+          a.statement = `${a.statement} — vehicle vibration was not sensed; verify at the running vehicle`;
+        }
+      } else if (realAnomalies.length > 0) {
+        for (const a of realAnomalies) a.motionVerified = true;
       }
 
 
@@ -538,6 +542,14 @@ export default function AudioRecorder({
           detected_patterns: realAnomalies.length > 0
             ? realAnomalies.map(a => a.type)
             : ['smooth_idle', 'consistent_rpm'],
+          // Vehicle-vibration telemetry — supportability for field reports
+          motion: motionResultRef.current
+            ? {
+                verdict: motionResultRef.current.verdict,
+                vibration_rms: +((motionResultRef.current.vibrationRms || 0).toFixed(4)),
+                samples: motionResultRef.current.samples || 0
+              }
+            : null,
         },
         // processed_at intentionally omitted — created_at is server-generated (DEFAULT now())
         // Never inject client-side timestamps into the primary timestamp chain

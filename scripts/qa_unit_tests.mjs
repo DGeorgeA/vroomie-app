@@ -59,11 +59,17 @@ check('hand-held phone classified as moving (never suppressed)', rHand.verdict =
 check('short capture returns insufficient (fail-open)', classifyMotionSamples(still.slice(0, 10)).verdict === 'insufficient');
 check('empty/no sensor data returns insufficient (fail-open)', classifyMotionSamples([]).verdict === 'insufficient');
 
-// ─── QA-2: fail-open wiring in the recorder ─────────────────────────────────
-check('anomaly suppression requires motion data to be AVAILABLE',
+// ─── QA-2: motion wiring in the recorder (annotation semantics) ─────────────
+check('stillness verdict requires motion data to be AVAILABLE (fail-open)',
   recorderSrc.includes("m.available && m.verdict === 'still'"));
-check('suppression only applies to sessions WITH anomalies',
-  recorderSrc.includes('realAnomalies.length > 0 && isAnomalySuppressedByStillness()'));
+check('anomalies are NEVER suppressed by stillness — annotated instead',
+  recorderSrc.includes('vehicle vibration was not sensed; verify at the running vehicle') &&
+  recorderSrc.includes('published WITHOUT vehicle vibration') &&
+  !recorderSrc.includes('Keep the phone in or on the running vehicle and try again'));
+check('motion annotation applies only to sessions WITH anomalies',
+  recorderSrc.includes('realAnomalies.length > 0 && isVibrationUnverified()'));
+check('motion telemetry stored in analysis_result',
+  recorderSrc.includes('vibration_rms'));
 
 // ─── QA-3: possibility statements from real benchmark measurements ─────────
 const measPath = path.join(ROOT, 'scratch', 'bench_measurements.json');

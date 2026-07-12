@@ -1,4 +1,44 @@
-# QA Report — Audio Pipeline v9.2
+# QA Report — Audio Pipeline v9.2 / v9.2.1
+
+## v9.2.1 addendum — P0 "alternator bearing not detected live" RCA
+
+Failure report: a known alternator bearing sample replayed at the microphone
+under controlled conditions was not identified.
+
+**QA-7 — Live-replay channel simulation** (`scripts/diagnose_live_replay.mjs`):
+every bucket reference was passed through a speaker→room→mic channel model
+(small-speaker bandpass 300–8000 Hz, dual room echo, 25 dB-SNR room noise,
+AGC-style soft compression, phone-mic level) and run through the EXACT shipped
+pipeline with per-window telemetry (RMS, gate verdict + top-1 class, top-5
+candidate matches, anchor similarity, margin, rejection reason).
+
+Result: **11/11 references detected with correct labels** —
+`BearingAlternator` margins 0.078–0.202 (top-1 in all 15/15 windows),
+`alternator_bearing_fault_critical` margins 0.210–0.269 (12/15 windows
+accepted, 10 candidates). Channel-processed negatives (ambient noise, fan,
+TV speech): **0/3 false flags**. Conclusion: the acoustic pipeline is NOT the
+live failure — no similarity, margin, gate, or threshold stage rejects the
+benchmark anomaly under realistic replay conditions.
+
+**Exact failure stage (measured by elimination): post-classification.**
+1. The v9.2 vehicle-motion gate HARD-SUPPRESSED anomalies when the device was
+   still — a controlled bench test (stationary phone, sample played from a
+   speaker) is precisely that posture. Fixed in v9.2.1: stillness now ANNOTATES
+   the published anomaly ("vehicle vibration was not sensed; verify at the
+   running vehicle") instead of suppressing it; motion telemetry is stored in
+   `analysis_result.motion`.
+2. Stale service-worker bundles run pre-fix engines on devices that haven't
+   fully reloaded. The sidebar build marker now reads `v9.2.1-MARGIN-ENGINE` so
+   field tests can verify the running build before concluding anything.
+3. Sessions shorter than ~6 s yield < 4 accepted windows → no verdict is
+   mathematically possible (by design). Live validation protocol: record ≥ 10 s.
+
+QA suite re-run after the changes: all checks pass (motion assertions updated
+to annotation semantics); build clean; production bundle boot verified with the
+new version marker and zero console errors.
+
+---
+
 
 Date: 2026-07-07 · Scope: possibility statement (≥70%, noise-discounted),
 vehicle-motion gate, and regression assurance over the full detection stack.

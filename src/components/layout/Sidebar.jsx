@@ -207,7 +207,7 @@ const Sidebar = React.memo(function Sidebar({ onFeedbackOpen }) {
         )}
 
         <div className="mt-4 text-center">
-          <span className="text-[10px] text-zinc-700 font-mono tracking-tighter">v1.2.7-CALIBRATED</span>
+          <span className="text-[10px] text-zinc-700 font-mono tracking-tighter">v9.2.1-MARGIN-ENGINE</span>
         </div>
       </div>
 
