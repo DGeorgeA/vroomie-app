@@ -11,6 +11,15 @@
 
 import { supabase } from '@/lib/supabase';
 import { Logger } from '@/lib/logger';
+import { activateSubscription } from './subscriptionService';
+
+// Razorpay plan ids -> subscriber_base plan ids. The app's pro gate
+// (AuthContext -> isProUser) reads subscriber_base, so a verified Razorpay
+// payment MUST be reflected there or the user pays and gets nothing.
+const RZP_TO_LOCAL_PLAN = {
+  AI_ENABLED_MONTHLY: 'monthly',
+  AI_ENABLED_YEARLY: 'yearly',
+};
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -65,7 +74,11 @@ async function loadRazorpaySDK() {
     script.src = 'https://checkout.razorpay.com/v1/checkout.js';
     script.async = true;
     script.onload = () => { _rzpScriptLoaded = true; resolve(true); };
-    script.onerror = () => resolve(false);
+    script.onerror = () => {
+      // Remove the dead tag so a retry can append a fresh one
+      script.remove();
+      resolve(false);
+    };
     document.head.appendChild(script);
   });
 }
@@ -76,7 +89,7 @@ export async function createRazorpayOrder({ planId, userId, userEmail }) {
   const plan = SUBSCRIPTION_PLANS[planId];
   if (!plan || plan.price === 0) throw new Error('Invalid paid plan');
 
-  // Call Supabase Edge Function (deploy separately — see docs/edge-functions)
+  // Call Supabase Edge Function (deploy separately — see backend/payments)
   const { data, error } = await supabase.functions.invoke('create-razorpay-order', {
     body: {
       planId,
@@ -84,6 +97,8 @@ export async function createRazorpayOrder({ planId, userId, userEmail }) {
       currency: plan.currency,
       userId,
       receipt: `vrm_${userId?.slice(0, 8)}_${Date.now()}`,
+      // Reconciliation metadata — surfaces in the Razorpay dashboard and webhooks
+      notes: { planId, userId: userId || 'anonymous' },
     },
   });
 
@@ -96,29 +111,31 @@ export async function createRazorpayOrder({ planId, userId, userEmail }) {
 
 // ── Open Razorpay checkout ────────────────────────────────────────────────────
 
+/**
+ * Failure semantics:
+ *  - Failures BEFORE the checkout modal opens (SDK load, missing key, order
+ *    creation) THROW, so callers can run their fallback path (SubscriptionPage
+ *    falls back to UPI in its catch block — previously unreachable because
+ *    these errors were swallowed into onFailure).
+ *  - Failures AFTER the modal opens (payment declined, user dismissed,
+ *    verification failed) arrive asynchronously via onFailure.
+ */
 export async function openRazorpayCheckout({ planId, userId, userEmail, onSuccess, onFailure }) {
   const sdkReady = await loadRazorpaySDK();
   if (!sdkReady || !window.Razorpay) {
     const msg = 'Razorpay SDK could not be loaded. Check your internet connection.';
     Logger.error(msg);
-    onFailure?.(new Error(msg));
-    return;
+    throw new Error(msg);
   }
 
   if (!RAZORPAY_KEY_ID) {
     const msg = 'VITE_RAZORPAY_KEY_ID is not configured.';
     Logger.error(msg);
-    onFailure?.(new Error(msg));
-    return;
+    throw new Error(msg);
   }
 
-  let orderData;
-  try {
-    orderData = await createRazorpayOrder({ planId, userId, userEmail });
-  } catch (err) {
-    onFailure?.(err);
-    return;
-  }
+  // Throws on failure — caller's catch handles it (UPI fallback)
+  const orderData = await createRazorpayOrder({ planId, userId, userEmail });
 
   const plan = SUBSCRIPTION_PLANS[planId];
 
@@ -130,8 +147,16 @@ export async function openRazorpayCheckout({ planId, userId, userEmail, onSucces
     description: plan.name,
     order_id: orderData.orderId,
     prefill: { email: userEmail },
+    notes: { planId, userId: userId || 'anonymous' },
     theme: { color: '#EAB308' }, // Vroomie yellow
-    modal: { backdropclose: false, escape: false },
+    modal: {
+      backdropclose: false,
+      escape: false,
+      ondismiss: () => {
+        Logger.info('Razorpay checkout dismissed by user');
+        onFailure?.(new Error('Payment was cancelled'));
+      },
+    },
     handler: async (response) => {
       try {
         const verified = await verifyPaymentSignature({
@@ -168,6 +193,19 @@ export async function verifyPaymentSignature({ orderId, paymentId, signature, pl
     throw new Error(error.message || 'Verification failed');
   }
 
+  // Sync subscriber_base — the table the app's pro gate actually reads.
+  // Without this, a verified Razorpay payment activated only the backend
+  // 'subscriptions' table and the user still appeared as Free in the app.
+  const localPlan = RZP_TO_LOCAL_PLAN[planId];
+  if (localPlan && userId) {
+    try {
+      await activateSubscription(userId, localPlan);
+    } catch (syncErr) {
+      Logger.error('Payment verified but subscription sync failed', syncErr);
+      throw new Error('Payment received but activation failed — please contact support with payment id ' + paymentId);
+    }
+  }
+
   Logger.info('Payment verified, subscription activated', data);
   return data;
 }
@@ -176,9 +214,12 @@ export async function verifyPaymentSignature({ orderId, paymentId, signature, pl
 
 export async function getActiveSubscription(userId) {
   if (!userId) return null;
+  // No join on subscription_plans: the joined data is unused by the app and a
+  // missing FK/table in the live DB would error the whole query, silently
+  // degrading a paying user to Free.
   const { data, error } = await supabase
     .from('subscriptions')
-    .select('*, subscription_plans(*)')
+    .select('*')
     .eq('user_id', userId)
     .eq('status', 'active')
     .maybeSingle();
@@ -193,16 +234,16 @@ export async function getActiveSubscription(userId) {
 export async function isSubscriptionActive(userId) {
   const sub = await getActiveSubscription(userId);
   if (!sub) return false;
-  const notExpired = sub.expires_at && new Date(sub.expires_at) > new Date();
-  return notExpired;
+  return Boolean(sub.expires_at && new Date(sub.expires_at) > new Date());
 }
 
 // ── API quota helpers ─────────────────────────────────────────────────────────
 
 export async function getApiQuota(userId) {
   if (!userId) return SUBSCRIPTION_PLANS.FREE;
-  const active = await isSubscriptionActive(userId);
-  if (!active) return SUBSCRIPTION_PLANS.FREE;
+  // Single round-trip (was three sequential queries for the same row)
   const sub = await getActiveSubscription(userId);
-  return SUBSCRIPTION_PLANS[sub?.plan_id] || SUBSCRIPTION_PLANS.FREE;
+  const active = Boolean(sub?.expires_at && new Date(sub.expires_at) > new Date());
+  if (!active) return SUBSCRIPTION_PLANS.FREE;
+  return SUBSCRIPTION_PLANS[sub.plan_id] || SUBSCRIPTION_PLANS.FREE;
 }

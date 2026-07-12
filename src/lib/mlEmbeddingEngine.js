@@ -26,8 +26,9 @@ const ANOMALY_THRESHOLD = 0.60;
 // Windows that qualify are emitted as status 'candidate'; the SESSION decision
 // (>= 50% of accepted windows agreeing on one fault, min 4 windows) is applied
 // by AudioRecorder at stop. Calibrated on held-out data by
-// scripts/benchmark_discrimination.mjs + scripts/rule_explorer.mjs:
-// healthy FP 0/35, interferer FP 0/5, fault recall 16/36, refs 5/6.
+// scripts/benchmark_discrimination.mjs + scripts/rule_explorer.mjs (v9.1 gate):
+// healthy FP 0/35, interferer FP 0/9 (speech/TV/music/noise/fan/tone),
+// held-out raw fault recall 14/36, bucket reference replay 10/11.
 const ANCHOR_MARGIN = 0.05;
 
 // ─── Acoustic domain gate ─────────────────────────────────────────────────────
@@ -75,6 +76,15 @@ const INTERFERER_INDICES = (() => {
 // recordings score 0.03–0.65 on vehicle classes while speech/music/ambient noise
 // score 0.00–0.02, so the margin test (vehicle > interferer) does the real work.
 const VEHICLE_SCORE_FLOOR = 0.03;
+
+// Generic-sound pass-through ceiling. Real fault recordings often classify as
+// generic acoustics rather than vehicle classes (measured: alternator bearing →
+// "White noise"/"Waterfall", misfire → "Explosion"/"Rain", pump whine → "Sine
+// wave"), which the strict vehicle-vs-interferer test rejected. Such windows may
+// proceed to embedding matching — where healthy/noise anchors discriminate —
+// but ONLY when interferer (speech/music/TV) evidence is negligible. Measured:
+// fault recordings score ≤ 0.09 on interferer classes; speech/TV/music 0.17–1.0.
+const GENERIC_INTERFERER_CEILING = 0.15;
 
 
 /**
@@ -171,8 +181,14 @@ export function evaluateAudioDomain(meanScores) {
     if (VEHICLE_MECH_INDICES.has(i) && meanScores[i] > vehicleScore) vehicleScore = meanScores[i];
     if (INTERFERER_INDICES.has(i) && meanScores[i] > interfererScore) interfererScore = meanScores[i];
   }
+  const isInterferer = INTERFERER_INDICES.has(top1Idx);
   const accepted =
+    // Explicitly mechanical top-1 (Engine, Gears, Rattle, …) — pass.
     VEHICLE_MECH_INDICES.has(top1Idx) ||
+    // Generic acoustics (White noise, Sine wave, Explosion, …): pass to the
+    // margin matcher, but only when speech/music/TV evidence is negligible.
+    (!isInterferer && interfererScore < GENERIC_INTERFERER_CEILING) ||
+    // Interferer top-1: only an overwhelmingly dominant mechanical signature passes.
     (vehicleScore >= VEHICLE_SCORE_FLOOR && vehicleScore > interfererScore);
   return { accepted, top1: YAMNET_CLASSES[top1Idx], vehicleScore, interfererScore };
 }

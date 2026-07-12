@@ -132,7 +132,9 @@ function gate(sc) {
     if (VEH.has(i) && sc[i] > veh) veh = sc[i];
     if (INTF.has(i) && sc[i] > intf) intf = sc[i];
   }
-  return VEH.has(t1) || (veh >= 0.03 && veh > intf);
+  // Mirrors evaluateAudioDomain: mechanical top-1 | generic non-interferer
+  // with negligible interferer evidence | dominant mechanical signature
+  return VEH.has(t1) || (!INTF.has(t1) && intf < 0.15) || (veh >= 0.03 && veh > intf);
 }
 
 // Precompute per-window measurements for a session; decisions applied per margin later.
@@ -198,23 +200,54 @@ const sets = [];
 sets.push(['healthy idle (held-out)', pickOdd(path.join(DATASET, 'idle state', 'normal_engine_idle'), 15).map(loadWav), 'neg']);
 sets.push(['healthy startup (held-out)', pickOdd(path.join(DATASET, 'startup state', 'normal_engine_startup'), 10).map(loadWav), 'neg']);
 sets.push(['healthy brakes (held-out)', pickOdd(path.join(DATASET, 'braking state', 'normal_brakes'), 10).map(loadWav), 'neg']);
-sets.push(['interferers (speech/TV/music/noise)', [
+function pinkNoise(sec, amp) {
+  const a = new Float32Array(SR * sec);
+  let y = 0;
+  for (let i = 0; i < a.length; i++) { y = 0.85 * y + 0.15 * (Math.random() * 2 - 1); a[i] = y * amp * 4; }
+  return a;
+}
+function fanSim(sec) {
+  const a = new Float32Array(SR * sec);
+  let y = 0;
+  for (let i = 0; i < a.length; i++) {
+    const t = i / SR;
+    y = 0.95 * y + 0.05 * (Math.random() * 2 - 1);
+    a[i] = 0.035 * Math.sin(2 * Math.PI * 120 * t) + 0.018 * Math.sin(2 * Math.PI * 240 * t) + y * 0.45;
+  }
+  return a;
+}
+function sineTone(sec, hz, amp) {
+  const a = new Float32Array(SR * sec);
+  for (let i = 0; i < a.length; i++) a[i] = amp * Math.sin(2 * Math.PI * hz * (i / SR));
+  return a;
+}
+sets.push(['interferers (speech/TV/music/noise/fan/tone)', [
   loadWav(path.join(ta, 'speech_news.wav')),
   loadWav(path.join(ta, 'speech_conversation.wav')),
   mix(loadWav(path.join(ta, 'speech_news.wav')), synthMusic(8), 0.35),
   synthMusic(12),
   noiseSig(12, 0.05),
+  noiseSig(12, 0.15),
+  pinkNoise(12, 0.05),
+  fanSim(12),
+  sineTone(12, 300, 0.1),
 ], 'neg']);
 sets.push(['fault power_steering (held-out)', pickOdd(path.join(DATASET, 'idle state', 'power_steering'), 12).map(loadWav), 'pos']);
 sets.push(['fault serpentine_belt (held-out)', pickOdd(path.join(DATASET, 'idle state', 'serpentine_belt'), 12).map(loadWav), 'pos']);
 sets.push(['fault low_oil (held-out)', pickOdd(path.join(DATASET, 'idle state', 'low_oil'), 12).map(loadWav), 'pos']);
 // bucket originals (the references' own source recordings, mic-free sanity positives)
 const bucketPos = [];
-for (const f of ['BearingAlternator.wav', 'Piston.wav', 'MotorStarter.wav', 'intake_leak_low.wav', 'misfire_detected_medium.wav', 'timing_chain_rattle_high.wav']) {
+const bucketNames = [];
+for (const f of ['BearingAlternator.wav', 'Piston.wav', 'MotorStarter.wav', 'intake_leak_low.wav',
+                 'misfire_detected_medium.wav', 'timing_chain_rattle_high.wav',
+                 'alternator_bearing_fault_critical.wav', 'PowerSteeringPump.wav',
+                 'SerpentineBelt.wav', 'RockerArmAndValve.wav',
+                 'Issue_with_Power_steering_or_low_oil_or_serpentine_belt_2.wav']) {
   const res = await fetch(BUCKET + encodeURIComponent(f));
-  if (res.ok) bucketPos.push(decodeWav(Buffer.from(await res.arrayBuffer())));
+  if (res.ok) { bucketPos.push(decodeWav(Buffer.from(await res.arrayBuffer()))); bucketNames.push(f); }
 }
 sets.push(['bucket reference originals', bucketPos, 'pos']);
+console.log(`[Bench] bucket originals under test: ${bucketNames.join(', ')}`);
 
 // ─── measure everything once ────────────────────────────────────────
 const measured = [];

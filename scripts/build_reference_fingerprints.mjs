@@ -297,11 +297,44 @@ for (const f of ['speech_news', 'speech_conversation', 'speech_narration', 'spee
     anchors.push({ kind: 'interferer', source: f, q: quantize(embed(rmsNormalize(full.slice(s, s + WIN)))) });
   }
 }
-{ // broadband noise + synth music anchors
+{ // Broadband/tonal interferer anchors. The domain gate deliberately admits
+  // generic acoustics (white noise, sine tones, rain-like broadband) so that
+  // fault recordings classified as such aren't lost — these anchors are what
+  // stops household noise from out-scoring the fault references at the
+  // margin-matching stage.
   const rnd = mulberry32(42);
-  const noiseW = new Float32Array(WIN);
-  for (let i = 0; i < WIN; i++) noiseW[i] = (rnd() * 2 - 1) * 0.05;
-  anchors.push({ kind: 'interferer', source: 'whitenoise', q: quantize(embed(noiseW)) });
+  const white = (amp) => {
+    const a = new Float32Array(WIN);
+    for (let i = 0; i < WIN; i++) a[i] = (rnd() * 2 - 1) * amp;
+    return a;
+  };
+  anchors.push({ kind: 'interferer', source: 'whitenoise-quiet', q: quantize(embed(white(0.03))) });
+  anchors.push({ kind: 'interferer', source: 'whitenoise', q: quantize(embed(white(0.08))) });
+  anchors.push({ kind: 'interferer', source: 'whitenoise-loud', q: quantize(embed(white(0.2))) });
+  // Pink-ish noise (1-pole lowpassed white) — rain / air vents / room tone
+  {
+    const a = new Float32Array(WIN);
+    let y = 0;
+    for (let i = 0; i < WIN; i++) { y = 0.85 * y + 0.15 * (rnd() * 2 - 1); a[i] = y * 0.35; }
+    anchors.push({ kind: 'interferer', source: 'pinknoise', q: quantize(embed(a)) });
+  }
+  // Household fan sim: mains hum harmonics + brown-ish noise bed
+  {
+    const a = new Float32Array(WIN);
+    let y = 0;
+    for (let i = 0; i < WIN; i++) {
+      const t = i / SR;
+      y = 0.95 * y + 0.05 * (rnd() * 2 - 1);
+      a[i] = 0.04 * Math.sin(2 * Math.PI * 120 * t) + 0.02 * Math.sin(2 * Math.PI * 240 * t) + y * 0.5;
+    }
+    anchors.push({ kind: 'interferer', source: 'fansim', q: quantize(embed(a)) });
+  }
+  // Pure test tone — TV test patterns, appliance beeps
+  {
+    const a = new Float32Array(WIN);
+    for (let i = 0; i < WIN; i++) a[i] = 0.1 * Math.sin(2 * Math.PI * 440 * (i / SR));
+    anchors.push({ kind: 'interferer', source: 'sine440', q: quantize(embed(a)) });
+  }
   const music = new Float32Array(WIN);
   for (let i = 0; i < WIN; i++) {
     const t = i / SR;
