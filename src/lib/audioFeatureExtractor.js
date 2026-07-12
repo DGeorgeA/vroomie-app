@@ -12,6 +12,34 @@ let onFeaturesCallback  = null;
 const TARGET_SR = 16000;
 const SCRIPT_BUFFER_SIZE = 4096;
 
+// Linear resampler — device capture rate → YAMNet's required 16 kHz.
+function resampleTo16k(pcm, srIn) {
+  if (srIn === TARGET_SR) return pcm.length === TARGET_SR ? pcm : pcm.slice(0, TARGET_SR);
+  const ratio = srIn / TARGET_SR;
+  const out = new Float32Array(TARGET_SR);
+  const maxIdx = pcm.length - 1;
+  for (let i = 0; i < TARGET_SR; i++) {
+    const x = i * ratio;
+    const l = Math.min(maxIdx, Math.floor(x));
+    const r = Math.min(maxIdx, l + 1);
+    out[i] = pcm[l] * (1 - (x - l)) + pcm[r] * (x - l);
+  }
+  return out;
+}
+
+// Identical to the reference factory's loudness normalization — live windows
+// and reference embeddings must see the same input level.
+function rmsNormalize(pcm, target = 0.05) {
+  let sq = 0;
+  for (let i = 0; i < pcm.length; i++) sq += pcm[i] * pcm[i];
+  const r = Math.sqrt(sq / pcm.length);
+  if (r < 1e-6) return pcm;
+  const g = target / r;
+  const out = new Float32Array(pcm.length);
+  for (let i = 0; i < pcm.length; i++) out[i] = Math.max(-1, Math.min(1, pcm[i] * g));
+  return out;
+}
+
 // ─── Public API ───────────────────────────────────────────
 
 export function getActiveMediaStream()   { return mediaStream; }
@@ -36,9 +64,13 @@ export async function startExtraction(callback) {
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
     });
 
-    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: TARGET_SR });
+    // Capture at the DEVICE's native rate and resample to 16 kHz in code.
+    // Forcing a 16 kHz context on a mic stream is a known iOS Safari failure
+    // class (silence / NotSupportedError when context rate != hardware rate);
+    // native-rate capture behaves identically on every platform.
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
     const sr = audioContext.sampleRate;
-    Logger.info(`✅ AudioContext sampleRate=${sr}`);
+    Logger.info(`✅ AudioContext sampleRate=${sr} (resampling to ${TARGET_SR} in software)`);
 
     mediaStreamSource = audioContext.createMediaStreamSource(mediaStream);
 
@@ -106,8 +138,10 @@ function useScriptProcessorMainThreadCapture(sr) {
       }
       const rms = Math.sqrt(snapshotRmsSq / windowSamples);
 
-      // Hard RMS pre-gate to reject silence
-      if (rms < 0.01) {
+      // Hard RMS pre-gate to reject silence. 0.005 (was 0.01): phone mics with
+      // AGC disabled capture quietly; level is equalized by normalization below,
+      // so the gate only needs to exclude true silence.
+      if (rms < 0.005) {
         if (onFeaturesCallback) {
           onFeaturesCallback({
             _workerResult: { status: 'normal', reason: 'rejected_silence' },
@@ -119,9 +153,15 @@ function useScriptProcessorMainThreadCapture(sr) {
       }
 
       try {
-        // Pass the full 1-second snapshot to YAMNet — embedding for fingerprint
-        // matching, class scores for the acoustic domain gate
-        const analysis = await getAudioAnalysis(snapshot);
+        // ── Make the live window mathematically identical to the reference
+        // pipeline (scripts/build_reference_fingerprints.mjs):
+        //   1. resample device rate → 16 kHz
+        //   2. RMS-normalize to the SAME 0.05 target used for every reference
+        // Without (2), quiet phone-mic captures embed differently from the
+        // loudness-normalized references and similarity collapses.
+        const pcm16k = resampleTo16k(snapshot, sr);
+        const normalized = rmsNormalize(pcm16k, 0.05);
+        const analysis = await getAudioAnalysis(normalized);
         if (!analysis) {
           isProcessing = false;
           return;

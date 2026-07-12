@@ -576,7 +576,7 @@ export default function AudioRecorder({
             accepted,
             rejected: rejections,
             candidate_windows: sessionCandidateWindowsRef.current,
-            engine_build: 'v9.2.1'
+            engine_build: 'v9.3'
           },
         },
         // processed_at intentionally omitted — created_at is server-generated (DEFAULT now())

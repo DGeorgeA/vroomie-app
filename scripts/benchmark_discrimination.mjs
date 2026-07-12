@@ -137,13 +137,24 @@ function gate(sc) {
   return VEH.has(t1) || (!INTF.has(t1) && intf < 0.15) || (veh >= 0.03 && veh > intf);
 }
 
+// Live-pipeline parity: windows are RMS-normalized to the reference target
+// (audioFeatureExtractor does the same) after a 0.005 silence gate.
+function rmsNormalize(pcm, target = 0.05) {
+  const r = rmsOf(pcm);
+  if (r < 1e-6) return pcm;
+  const g = target / r;
+  const out = new Float32Array(pcm.length);
+  for (let i = 0; i < pcm.length; i++) out[i] = Math.max(-1, Math.min(1, pcm[i] * g));
+  return out;
+}
+
 // Precompute per-window measurements for a session; decisions applied per margin later.
 function measureSession(pcm) {
   const wins = [];
   for (let s = 0; s + WIN <= pcm.length; s += WIN) {
     const w = pcm.slice(s, s + WIN);
-    if (rmsOf(w) < 0.01) { wins.push(null); continue; }
-    const { emb, sc } = analyze(w);
+    if (rmsOf(w) < 0.005) { wins.push(null); continue; }
+    const { emb, sc } = analyze(rmsNormalize(w));
     if (!gate(sc)) { wins.push(null); continue; }
     let bf = -1, bl = null;
     for (const f of FAULTS) { const c = cosine(emb, f.emb); if (c > bf) { bf = c; bl = f.label; } }

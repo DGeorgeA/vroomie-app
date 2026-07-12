@@ -1,4 +1,41 @@
-# QA Report — Audio Pipeline v9.2 / v9.2.1
+# QA Report — Audio Pipeline v9.2 → v9.3
+
+## v9.3 addendum — level-invariance + device-rate capture (P0 recheck)
+
+Root cause of persistent field misses, found by hunting device-class failures a
+desktop E2E cannot see — two violations of "reference pipeline and live
+pipeline must be mathematically identical":
+
+1. **Level asymmetry**: the factory RMS-normalizes every reference chunk to
+   0.05 before embedding, but live mic windows entered YAMNet RAW, and anything
+   under 0.01 RMS was discarded as silence. With AGC deliberately disabled, a
+   phone mic a metre from a source captures at ~0.005–0.02 RMS — the entire
+   session was thrown away as "silence" regardless of content.
+2. **Forced 16 kHz capture context**: `AudioContext({sampleRate:16000})` +
+   `createMediaStreamSource` is a known iOS Safari failure class (silence /
+   errors when context rate ≠ hardware rate).
+
+Fix (audioFeatureExtractor.js): capture at device native rate → software
+resample to 16 kHz → silence gate at 0.005 raw RMS → RMS-normalize to the
+factory's 0.05 target → YAMNet. No decision constants changed.
+
+Measured results (all harnesses updated to the identical path):
+- Quiet-capture replay (raw RMS ≈ 0.008 — previously 100% discarded):
+  **5/5 detected** (both alternator bearing files, power steering, serpentine,
+  piston); quiet ambient/fan negatives: **0 false flags**.
+- Loud replay: 11/11 unchanged. TV speech: fully rejected.
+- Held-out 91-session benchmark IMPROVED: fault recall 14/36 → **21/36** at
+  unchanged **0/35 healthy, 0/9 interferer FP** (normalization equalizes live
+  and reference levels, raising genuine-fault margins ~50%).
+- True in-browser E2E at quiet injection (pre-fix failure zone): real app
+  detected BearingAlternator at **78% possibility**, 20/23 candidate windows,
+  correct statement stored; test record deleted after verification.
+
+Build marker: sidebar `v9.3-LEVEL-INVARIANT`; reports carry
+`engine_build: "v9.3"`. Field tests MUST confirm the marker before concluding.
+
+---
+
 
 ## v9.2.1 addendum — P0 "alternator bearing not detected live" RCA
 

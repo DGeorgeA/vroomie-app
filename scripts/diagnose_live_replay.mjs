@@ -179,6 +179,17 @@ const loopTo = (pcm, sec) => {
   return out;
 };
 
+// Live-pipeline parity (audioFeatureExtractor): 0.005 silence gate, then
+// RMS-normalize to the reference factory's 0.05 target before inference.
+function rmsNormalizeWin(pcm, target = 0.05) {
+  const r = rmsOf(pcm);
+  if (r < 1e-6) return pcm;
+  const g = target / r;
+  const out = new Float32Array(pcm.length);
+  for (let i = 0; i < pcm.length; i++) out[i] = Math.max(-1, Math.min(1, pcm[i] * g));
+  return out;
+}
+
 function diagnoseSession(name, pcm, verbose = true) {
   const perLabel = new Map();
   let accepted = 0, rejected = 0, windows = 0;
@@ -187,8 +198,8 @@ function diagnoseSession(name, pcm, verbose = true) {
     const w = pcm.slice(s, s + WIN);
     windows++;
     const rms = rmsOf(w);
-    if (rms < 0.01) { rejected++; windowLog.push({ t: s / SR, rms, stage: 'REJECT@rms' }); continue; }
-    const { emb, sc } = analyze(w);
+    if (rms < 0.005) { rejected++; windowLog.push({ t: s / SR, rms, stage: 'REJECT@rms' }); continue; }
+    const { emb, sc } = analyze(rmsNormalizeWin(w));
     const g = gateVerdict(sc);
     if (!g.accepted) { rejected++; windowLog.push({ t: s / SR, rms, stage: `REJECT@gate top1=${g.top1} veh=${g.veh.toFixed(2)} intf=${g.intf.toFixed(2)}` }); continue; }
     accepted++;
@@ -240,6 +251,12 @@ const refs = ['BearingAlternator.wav', 'alternator_bearing_fault_critical.wav', 
   'RockerArmAndValve.wav', 'Issue_with_Power_steering_or_low_oil_or_serpentine_belt_2.wav'];
 console.log('\n════ LIVE-REPLAY SIMULATION (speaker→room→mic channel) — POSITIVES ════');
 const results = [];
+const scaleTo = (pcm, targetRms) => {
+  const g = targetRms / Math.max(1e-6, rmsOf(pcm));
+  const out = new Float32Array(pcm.length);
+  for (let i = 0; i < pcm.length; i++) out[i] = pcm[i] * g;
+  return out;
+};
 for (const f of refs) {
   const res = await fetch(BUCKET + encodeURIComponent(f));
   if (!res.ok) { console.log(`  ! ${f} HTTP ${res.status}`); continue; }
@@ -247,6 +264,18 @@ for (const f of refs) {
   const chan = replayChannel(loopTo(pcm, 15));
   const verbose = f.toLowerCase().includes('alternator') || f.toLowerCase().includes('bearing');
   results.push({ f, ...diagnoseSession(`REPLAY ${f}`, chan, verbose) });
+}
+
+// QUIET-CAPTURE variants — phone mic with AGC disabled at distance
+// (raw capture rms ~0.008, the field-failure condition)
+console.log('\n════ QUIET-CAPTURE REPLAY (raw rms ≈ 0.008) — POSITIVES ════');
+const quietResults = [];
+for (const f of ['BearingAlternator.wav', 'alternator_bearing_fault_critical.wav', 'PowerSteeringPump.wav', 'SerpentineBelt.wav', 'Piston.wav']) {
+  const res = await fetch(BUCKET + encodeURIComponent(f));
+  if (!res.ok) continue;
+  const pcm = decodeWav(Buffer.from(await res.arrayBuffer()));
+  const quiet = scaleTo(replayChannel(loopTo(pcm, 15)), 0.008);
+  quietResults.push({ f, ...diagnoseSession(`QUIET ${f}`, quiet, false) });
 }
 
 // ─── Negatives through the same channel (FP guard) ──────────────────
@@ -259,7 +288,9 @@ function fanSim(sec) {
 }
 const negs = [
   ['ambient noise (channel)', replayChannel(noiseSig(15, 0.05, 3))],
+  ['QUIET ambient noise (rms 0.008)', scaleTo(replayChannel(noiseSig(15, 0.05, 3)), 0.008)],
   ['fan (channel)', replayChannel(fanSim(15))],
+  ['QUIET fan (rms 0.008)', scaleTo(replayChannel(fanSim(15)), 0.008)],
 ];
 const ta = path.join(ROOT, 'scratch', 'testaudio');
 if (fs.existsSync(path.join(ta, 'speech_news.wav'))) {
