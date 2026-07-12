@@ -44,6 +44,7 @@ export default function AudioRecorder({
   const SESSION_FRACTION = 0.5;
   const SESSION_MIN_ACCEPTED = 4;
   const motionResultRef = useRef(null); // vehicle-vibration verdict for this session
+  const sessionNoRefsRef = useRef(false); // reference artifact failed to load
 
   // Vehicle-vibration verdict is an ANNOTATION, not a hard gate: controlled
   // bench tests (reference samples replayed at a stationary phone) must still
@@ -196,6 +197,7 @@ export default function AudioRecorder({
       sessionCandidateWindowsRef.current = 0;
       sessionCleanWindowsRef.current = 0;
       sessionRejectionsRef.current = 0;
+      sessionNoRefsRef.current = false;
 
       isRecordingRef.current = true;   // ← update ref FIRST (used by async callbacks)
       setIsRecording(true);            // ← triggers waveform BURST immediately
@@ -282,6 +284,7 @@ export default function AudioRecorder({
 
         if (status === 'normal' && reason.startsWith('rejected_')) {
           sessionRejectionsRef.current++;
+          if (reason === 'rejected_no_references') sessionNoRefsRef.current = true;
         } else if (status === 'normal' && reason !== '') {
           // gate-passed window that resolved healthy (below threshold / healthy margin)
           sessionCleanWindowsRef.current++;
@@ -468,6 +471,23 @@ export default function AudioRecorder({
         avgConfidence
       } = computeSessionOutcome();
 
+      // ── Engine-health gate: if NOTHING was analyzed (YAMNet never loaded,
+      // session too short) or the reference artifact failed to load, a report
+      // would be fabricated from zero evidence — abort with a specific error
+      // instead of publishing a fake-HEALTHY result.
+      if (accepted + rejections === 0) {
+        console.error('[Vroomie] Zero windows analyzed — model not ready or session too short. Aborting report.');
+        toast.error("The audio engine could not analyze this session. Record for at least 10 seconds and check your connection.", { duration: 6000 });
+        if (onRecordingComplete) onRecordingComplete(null);
+        return;
+      }
+      if (sessionNoRefsRef.current && accepted === 0) {
+        console.error('[Vroomie] Reference dataset failed to load — aborting report.');
+        toast.error("Fault reference data failed to load. Check your connection and try again.", { duration: 6000 });
+        if (onRecordingComplete) onRecordingComplete(null);
+        return;
+      }
+
       if (isMostlySilence) {
         console.warn(`[Vroomie] Audio rejected (non-vehicle). Rejections: ${rejections}/${rejections + accepted}. Aborting report publish.`);
         toast.error("Unable to detect vehicle audio. Please try again.", { duration: 4000 });
@@ -550,6 +570,14 @@ export default function AudioRecorder({
                 samples: motionResultRef.current.samples || 0
               }
             : null,
+          // Per-session pipeline diagnostics — makes field failures diagnosable
+          session_diagnostics: {
+            windows_analyzed: accepted + rejections,
+            accepted,
+            rejected: rejections,
+            candidate_windows: sessionCandidateWindowsRef.current,
+            engine_build: 'v9.2.1'
+          },
         },
         // processed_at intentionally omitted — created_at is server-generated (DEFAULT now())
         // Never inject client-side timestamps into the primary timestamp chain

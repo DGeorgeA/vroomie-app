@@ -277,8 +277,11 @@ function marginToConfidence(margin) {
  */
 export function findBestMatch(liveEmbedding, meanScores = null) {
   if (!liveEmbedding || faultReferences.length === 0) {
-    Logger.warn(`[YAMNet] findBestMatch called with ${faultReferences.length} references — returning normal`);
-    return { status: 'normal', confidence: 0, reason: 'no_references' };
+    Logger.warn(`[YAMNet] findBestMatch called with ${faultReferences.length} references`);
+    // 'rejected_' prefix: these windows must count as rejections so the session
+    // ABORTS ("unable to analyze") instead of publishing a fake-HEALTHY report
+    // when the reference artifact failed to load.
+    return { status: 'normal', confidence: 0, reason: 'rejected_no_references' };
   }
 
   // ── Stage 1: acoustic domain gate — is this vehicle audio at all? ──
