@@ -552,6 +552,10 @@ export default function AudioRecorder({
 
       if (insertErr) {
         console.error('Failed to save analysis to DB:', insertErr.message);
+        // The possibility statement must reach the user even when the DB write fails
+        if (realAnomalies.length > 0 && realAnomalies[0].statement) {
+          toast.warning(realAnomalies[0].statement, { duration: 8000 });
+        }
         toast.error('Recording saved locally only. DB write failed.');
         // Still notify UI with local data so UI doesn't break
         if (onRecordingComplete) {

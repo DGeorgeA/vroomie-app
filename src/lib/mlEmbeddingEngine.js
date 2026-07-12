@@ -341,6 +341,10 @@ export function findBestMatch(liveEmbedding, meanScores = null) {
     severity: bestMatch.severity || 'high',
     confidence,
     sourceFile: bestMatch.source_file || null, // Supabase reference that matched
+    // Raw decision components — observability for debug panels / QA harnesses
+    bestFaultSimilarity: bestScore,
+    bestAnchorSimilarity: bestAnchor,
+    margin,
     rms: 0 // Legacy field needed by UI
   };
 }
