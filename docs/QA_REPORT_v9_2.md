@@ -1,4 +1,37 @@
-# QA Report — Audio Pipeline v9.2 → v9.3 (+ adversarial addendum)
+# QA Report — Audio Pipeline v9.2 → v9.4 (+ adversarial addendum)
+
+## v9.4 addendum — real-world sample detection (YouTube alternator bearing)
+
+Field failure: a real alternator-bearing recording (YouTube short) played at
+the mic was not detected. Reproduced through the REAL app (fake-mic injection):
+gate accepted 83/83 windows, but only ~13% matched references — an unseen
+recording at the edge of the reference cloud. Three measured fixes:
+
+1. **Reference promotion** — the recording itself is now a curated reference
+   (`reference_audio/alternator_bearing_noise_2.wav`; factory ingests local
+   curated WAVs since the bucket rejects anon uploads via RLS). Label
+   "alternator bearing noise", family `alternator_bearing_fault`.
+2. **Speaker-replay augmentation** — every reference now gets a speaker-channel
+   variant (300–8000 Hz bandpass + dual room echo); playing a sample from a
+   phone/TV at the mic is the standard field test and was outside the old
+   augmentation family.
+3. **Family vote aggregation + measured fraction floor** — live sessions split
+   candidate votes across sibling bearing references so no single label reached
+   50%. Votes now aggregate by `fault_type` (dominant label is reported), and
+   the session fraction is 0.45 — the measured zero-FP floor (0.40 flags a
+   held-out healthy startup session; worst 60 s healthy session totals 41.7%).
+   Dense chunk coverage (8 chunks) for curated local references.
+
+Validation: YouTube clip 3/3 variants offline (raw 90%, speaker-channel 79%,
+quiet 79% candidate density); REAL-app E2E produced status=flagged with
+"There is a 74% possibility that there could be a possible Alternator bearing
+noise (alternator_bearing_noise_2.wav)" at 35/42 candidate windows. Full
+regression: family rule @0.45 → healthy 0/35, interferers 0/9, held-out faults
+22/36, bucket replay 10/11; long-healthy 0/22; intermittent 12/12. All test
+records removed from production after verification.
+
+---
+
 
 ## v9.3 adversarial addendum — BMAD cycle on the human test pattern
 

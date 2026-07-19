@@ -34,14 +34,16 @@ export default function AudioRecorder({
   const timerRef = useRef(null);
   const streamRef = useRef(null);
   // Session tallies for the fraction decision rule (calibrated offline —
-  // scripts/benchmark_discrimination.mjs): a fault is confirmed when >= 50% of
-  // gate-accepted windows are candidates for the SAME fault, with >= 4 accepted
-  // windows total. Candidates alone never surface to the user.
+  // scripts/benchmark_discrimination.mjs + family/fraction grids): a fault is
+  // confirmed when >= 45% of gate-accepted windows are candidates for the same
+  // fault FAMILY (fault_type), min 4 accepted windows. 0.45 is the measured
+  // zero-false-positive floor (0.40 flags a held-out healthy startup session;
+  // worst 60 s healthy session measures 41.7% total candidates).
   const sessionCandidatesRef = useRef(new Map()); // label -> {hits, severity, confSum, firstSeen}
   const sessionCandidateWindowsRef = useRef(0);   // total candidate windows (any label)
   const sessionCleanWindowsRef = useRef(0);       // gate-passed windows that stayed healthy
   const sessionRejectionsRef = useRef(0);         // silence / non-vehicle windows
-  const SESSION_FRACTION = 0.5;
+  const SESSION_FRACTION = 0.45;
   const SESSION_MIN_ACCEPTED = 4;
   const motionResultRef = useRef(null); // vehicle-vibration verdict for this session
   const sessionNoRefsRef = useRef(false); // reference artifact failed to load
@@ -150,14 +152,19 @@ export default function AudioRecorder({
     const rejections = sessionRejectionsRef.current;
     const confirmed = [];
     if (accepted >= SESSION_MIN_ACCEPTED) {
-      for (const [label, e] of sessionCandidatesRef.current) {
+      for (const [familyKey, e] of sessionCandidatesRef.current) {
         if (e.hits / accepted >= SESSION_FRACTION) {
-          const readable = buildReadableLabel(label);
+          // Report the DOMINANT reference label within the confirmed family
+          let dominantLabel = familyKey;
+          let best = 0;
+          for (const [l, c] of e.labelHits) if (c > best) { best = c; dominantLabel = l; }
+          const readable = buildReadableLabel(dominantLabel);
           const meanConf = e.confSum / e.hits;
           const possibility = Math.round(meanConf * 100);
           confirmed.push({
             type:             readable,
-            rawLabel:         label,
+            rawLabel:         dominantLabel,
+            faultType:        familyKey,
             severity:         e.severity,
             timestamp:        e.firstSeen,
             status:           'anomaly',
@@ -290,17 +297,22 @@ export default function AudioRecorder({
           sessionCleanWindowsRef.current++;
         } else if (status === 'candidate' && anomaly) {
           sessionCandidateWindowsRef.current++;
-          const entry = sessionCandidatesRef.current.get(anomaly) || {
-            hits: 0, confSum: 0, maxConf: 0, sourceFile: null, severity, firstSeen: recordingTimeRef.current
+          // Aggregate by fault FAMILY (faultType) — sibling references of the
+          // same physical fault must reinforce, not split, the session vote.
+          const familyKey = workerResult.faultType || anomaly;
+          const entry = sessionCandidatesRef.current.get(familyKey) || {
+            hits: 0, confSum: 0, maxConf: 0, sourceFile: null, severity,
+            firstSeen: recordingTimeRef.current, labelHits: new Map()
           };
           entry.hits++;
           entry.confSum += confidence;
+          entry.labelHits.set(anomaly, (entry.labelHits.get(anomaly) || 0) + 1);
           if (confidence > entry.maxConf) {
             entry.maxConf = confidence;
             entry.sourceFile = workerResult.sourceFile || entry.sourceFile;
           }
           if (severity === 'critical') entry.severity = 'critical';
-          sessionCandidatesRef.current.set(anomaly, entry);
+          sessionCandidatesRef.current.set(familyKey, entry);
         }
 
         // Debounced debug stats — max 4 re-renders/sec
@@ -577,7 +589,7 @@ export default function AudioRecorder({
             rejected: rejections,
             candidate_windows: sessionCandidateWindowsRef.current,
             capture_settings: getCaptureSettings(),
-            engine_build: 'v9.3'
+            engine_build: 'v9.4'
           },
         },
         // processed_at intentionally omitted — created_at is server-generated (DEFAULT now())

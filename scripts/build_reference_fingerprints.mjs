@@ -40,6 +40,10 @@ const OUT = path.join(ROOT, 'public', 'fingerprints_v9.json');
 
 const MAX_CHUNKS_NUMBERED = 1; // 44 near-duplicate files of one class — 1 chunk each
 const MAX_CHUNKS_SINGLE = 3;
+// Curated local recordings get dense coverage: live mic windows crop the source
+// at arbitrary phase, so every ~1.3 s of a real recording needs a reference
+// chunk or between-chunk crops fall below the similarity threshold.
+const MAX_CHUNKS_LOCAL = 8;
 const SYNTH_CLASSES = new Set(['Sine wave', 'Harmonic', 'Chirp tone', 'Sound effect', 'Theremin', 'Tuning fork', 'Sidetone', 'Dial tone', 'Synthesizer', 'Pulse']);
 
 // ─── class map (for QC) ─────────────────────────────────────────────
@@ -146,6 +150,21 @@ function roomEcho(pcm, delayMs = 45, decay = 0.35) {
   for (let i = 0; i < pcm.length; i++) out[i] = pcm[i] + (i >= d ? pcm[i - d] * decay : 0);
   return out;
 }
+// Speaker-replay transform: small-speaker bandpass (300–8000 Hz) + dual room
+// echo — matches the measured speaker→air→mic channel of a sample played from
+// a phone/TV near the recording device (the standard field validation method).
+function speakerReplay(pcm) {
+  const wH = 2 * Math.PI * 300 / SR, cH = Math.cos(wH), sH = Math.sin(wH) / 1.414, a0H = 1 + sH;
+  let s = biquad(pcm, (1 + cH) / 2 / a0H, -(1 + cH) / a0H, (1 + cH) / 2 / a0H, -2 * cH / a0H, (1 - sH) / a0H);
+  const wL = 2 * Math.PI * 8000 / SR, cL = Math.cos(wL), sL = Math.sin(wL) / 1.414, a0L = 1 + sL;
+  s = biquad(s, (1 - cL) / 2 / a0L, (1 - cL) / a0L, (1 - cL) / 2 / a0L, -2 * cL / a0L, (1 - sL) / a0L);
+  const e1 = Math.floor(SR * 0.025), e2 = Math.floor(SR * 0.060);
+  const out = new Float32Array(s.length);
+  for (let i = 0; i < s.length; i++) {
+    out[i] = s[i] + (i >= e1 ? s[i - e1] * 0.25 : 0) + (i >= e2 ? s[i - e2] * 0.15 : 0);
+  }
+  return out;
+}
 
 // ─── YAMNet ─────────────────────────────────────────────────────────
 console.log('[Factory] Loading YAMNet…');
@@ -246,6 +265,7 @@ for (const name of wavs) {
         ['rate+', rateShift(base, 1.02)],
         ['rate-', rateShift(base, 0.98)],
         ['echo', rmsNormalize(roomEcho(base))],
+        ['speaker', rmsNormalize(speakerReplay(base))],
       ];
       for (const [vname, w] of variants) {
         faults.push({ ...meta, source_file: name, variant: vname, q: quantize(embed(w)) });
@@ -254,6 +274,50 @@ for (const name of wavs) {
     qcLog.push(`OK     ${name}: ${starts.length} chunk(s) x 6 variants`);
   } catch (e) {
     qcLog.push(`REJECT ${name}: ${e.message}`);
+  }
+}
+
+// ─── Local curated references (repo: reference_audio/) ─────────────
+// Real-world fault recordings that can't be uploaded to the bucket with the
+// anon key (RLS). Same QC + augmentation as bucket files; label derives from
+// the file name. Move them into the bucket via the dashboard when convenient —
+// dual presence is harmless (near-identical embeddings).
+const LOCAL_REF_DIR = path.join(ROOT, 'reference_audio');
+if (fs.existsSync(LOCAL_REF_DIR)) {
+  for (const name of fs.readdirSync(LOCAL_REF_DIR).filter(f => f.toLowerCase().endsWith('.wav'))) {
+    try {
+      const { pcm, sr } = decodeWav(fs.readFileSync(path.join(LOCAL_REF_DIR, name)));
+      if (pcm.length / sr < 1.0) { qcLog.push(`REJECT local/${name}: shorter than 1.0s`); continue; }
+      const full = resampleTo(pcm, sr, SR);
+      if (rmsOf(full) < 0.01) { qcLog.push(`REJECT local/${name}: near-silent`); continue; }
+      const mid = Math.max(0, Math.floor(full.length / 2) - WIN / 2);
+      const probe = full.slice(mid, mid + WIN);
+      if (probe.length === WIN && SYNTH_CLASSES.has(topClass(probe))) {
+        qcLog.push(`REJECT local/${name}: synthetic tone`);
+        continue;
+      }
+      // Curated real recordings always get dense chunk coverage
+      const starts = selectChunks(full, MAX_CHUNKS_LOCAL);
+      const meta = deriveMeta(name);
+      for (const s of starts) {
+        const base = rmsNormalize(full.slice(s, s + WIN));
+        const variants = [
+          ['orig', base],
+          ['band', rmsNormalize(phoneBand(base))],
+          ['noise', addNoise(base, 15, seedCounter++)],
+          ['rate+', rateShift(base, 1.02)],
+          ['rate-', rateShift(base, 0.98)],
+          ['echo', rmsNormalize(roomEcho(base))],
+        ['speaker', rmsNormalize(speakerReplay(base))],
+        ];
+        for (const [vname, w] of variants) {
+          faults.push({ ...meta, source_file: name, variant: vname, q: quantize(embed(w)) });
+        }
+      }
+      qcLog.push(`OK     local/${name}: ${starts.length} chunk(s) x 6 variants`);
+    } catch (e) {
+      qcLog.push(`REJECT local/${name}: ${e.message}`);
+    }
   }
 }
 

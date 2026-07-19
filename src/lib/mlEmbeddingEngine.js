@@ -341,6 +341,10 @@ export function findBestMatch(liveEmbedding, meanScores = null) {
   return {
     status: 'candidate',
     anomaly: bestMatch.label,
+    // Fault family — session votes aggregate per family so sibling references
+    // of the same physical fault (e.g. three alternator-bearing recordings)
+    // reinforce instead of splitting the fraction vote.
+    faultType: bestMatch.fault_type || bestMatch.label,
     severity: bestMatch.severity || 'high',
     confidence,
     sourceFile: bestMatch.source_file || null, // Supabase reference that matched
