@@ -79,24 +79,47 @@ export async function isProUser(userId) {
 export async function activateSubscription(userId, planId) {
   const plan = PLANS[planId];
   if (!plan) throw new Error(`Unknown plan: ${planId}`);
-  
+
   const expiry = new Date();
   expiry.setDate(expiry.getDate() + plan.durationDays);
-  
-  const { error } = await supabase
+
+  // .select() so we can detect the 0-rows case: a bare .update() reports
+  // success even when no subscriber_base row exists (signup trigger optional),
+  // which silently swallowed paid activations.
+  const { data: updated, error } = await supabase
     .from('subscriber_base')
     .update({
       plan: 'pro',
       subscription_status: 'active',
       expiry_date: expiry.toISOString()
     })
-    .eq('user_id', userId);
-  
+    .eq('user_id', userId)
+    .select();
+
   if (error) {
     Logger.error('Subscription activation failed', error);
     throw error;
   }
-  
+
+  if (!updated || updated.length === 0) {
+    // No row yet — create it (RLS "Insert on signup" allows inserting own row)
+    const { data: authData } = await supabase.auth.getUser();
+    const email = authData?.user?.email || 'unknown';
+    const { error: insertErr } = await supabase
+      .from('subscriber_base')
+      .insert({
+        user_id: userId,
+        email,
+        plan: 'pro',
+        subscription_status: 'active',
+        expiry_date: expiry.toISOString()
+      });
+    if (insertErr) {
+      Logger.error('Subscription activation insert failed', insertErr);
+      throw insertErr;
+    }
+  }
+
   Logger.info(`Subscription activated: ${plan.name}, expires ${expiry.toLocaleDateString()}`);
   return { plan: plan.name, expiry };
 }

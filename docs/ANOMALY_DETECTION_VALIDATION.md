@@ -3,7 +3,32 @@
 Date: 2026-07-07 (v9 architecture — offline reference factory + margin decision rule;
 earlier same-day sections kept below for history)
 
-## v9 — THE CURRENT ARCHITECTURE (approved RCA remediation)
+## v9.1 — Calibrated domain gate (sample-replay recall)
+
+Real fault recordings often classify as GENERIC acoustics, not vehicle classes
+(measured: alternator bearing → "White noise"/"Waterfall", misfire →
+"Explosion"/"Rain", pump whine → "Sine wave"), so the strict gate dropped their
+windows before matching — replayed bucket samples went undetected. Calibration
+(refined from a proposal drafted in a secondary working copy, whose
+`vehicleScore >= 0.001` clause was replaced — it admitted ambient noise):
+
+- Gate: generic non-interferer top-1 classes now pass IF interferer evidence is
+  negligible (`interfererScore < 0.15`; fault recordings measure ≤ 0.09,
+  speech/TV/music 0.17–1.0). Explicit interferer top-1 still requires a
+  dominant mechanical signature.
+- Anchors: interferer anchor set expanded 10 → 15 (white noise ×3 levels, pink
+  noise, mains-hum fan simulation, pure tone) so admitted generics lose the
+  margin race instead of relying on the gate.
+
+Held-out validation (91 sessions): healthy 0/35 FP, interferers 0/9 FP (speech,
+TV, music, white/pink noise, fan, tone), held-out raw faults 14/36, bucket
+reference replay **10/11** (was 5–6; the miss is `intake_leak_low` — an intake
+leak is acoustically a hiss, and the strengthened white-noise anchors that
+provide fan/ambient immunity out-score it; every other reference incl.
+MotorStarter now replays correctly). Session rule constants re-verified as the
+zero-FP optimum on the new measurements.
+
+## v9 — Architecture (approved RCA remediation)
 
 **Root cause established by audit** (`scripts/bucket_audit.mjs`, full RCA in the
 project conversation): the reference dataset could not distinguish healthy from

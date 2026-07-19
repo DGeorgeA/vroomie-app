@@ -184,6 +184,7 @@ export default function TestDetection() {
         const line = {
           status:     r.status || 'normal',
           anomaly:    r.anomaly || null,
+          faultType:  r.faultType || r.anomaly || null,
           confidence: r.confidence || 0,
           rms:        r.rms || 0,
           reason:     r.reason || '',
@@ -212,16 +213,17 @@ export default function TestDetection() {
       const hitCounts = new Map();
       for (const l of dbgLines) {
         if (l.status === 'candidate' && l.anomaly) {
-          const e = hitCounts.get(l.anomaly) || { hits: 0, confidence: 0 };
+          const key = l.faultType || l.anomaly; // family aggregation, as in AudioRecorder
+          const e = hitCounts.get(key) || { hits: 0, confidence: 0 };
           e.hits++;
           e.confidence = Math.max(e.confidence, l.confidence);
-          hitCounts.set(l.anomaly, e);
+          hitCounts.set(key, e);
         }
       }
       sessionAnomaliesRef.current = [];
       if (acceptedLines.length >= 4) {
         for (const [label, e] of hitCounts) {
-          if (e.hits / acceptedLines.length >= 0.5) {
+          if (e.hits / acceptedLines.length >= 0.45) {
             sessionAnomaliesRef.current.push({ label, confidence: e.confidence });
           }
         }
