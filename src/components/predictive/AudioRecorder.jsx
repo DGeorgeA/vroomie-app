@@ -498,7 +498,7 @@ export default function AudioRecorder({
         avgConfidence
       } = computeSessionOutcome();
 
-      if (isMostlySilence) {
+      if (isMostlySilence && realAnomalies.length === 0) {
         console.warn(`[Vroomie] Audio rejected (non-vehicle). Rejections: ${rejections}/${rejections + accepted}. Aborting report publish.`);
         toast.error("Unable to detect vehicle audio. Please try again.", { duration: 4000 });
         if (onRecordingComplete) onRecordingComplete(null);
