@@ -1,6 +1,6 @@
 import { Logger } from './logger';
 import { initializeEmbeddingEngine, getAudioAnalysis, findBestMatch } from './mlEmbeddingEngine';
-import { linearResample } from './audioPreprocessor';
+import { linearResample, applyPhoneBand } from './audioPreprocessor';
 
 // ─── Module-level state ───────────────────────────────────
 let isExtracting        = false;
@@ -133,10 +133,14 @@ function useScriptProcessorMainThreadCapture(sr) {
         normalizedSnapshot[i] = Math.max(-1, Math.min(1, resampledSnapshot[i] * gain));
       }
 
+      // Mathematical parity with build_reference_fingerprints.mjs (Phone bandpass sim)
+      // The offline generator applies this AFTER RMS normalization to simulate a mobile mic.
+      // Since live web tests can be from laptops (which lack this hardware curve), we must explicitly apply it.
+      const finalSnapshot = applyPhoneBand(normalizedSnapshot, 16000);
+
       try {
-        // Pass the full 1-second 16kHz normalized snapshot to YAMNet — embedding for fingerprint
-        // matching, class scores for the acoustic domain gate
-        const analysis = await getAudioAnalysis(normalizedSnapshot);
+        // Pass the full 1-second 16kHz normalized+bandpassed snapshot to YAMNet
+        const analysis = await getAudioAnalysis(finalSnapshot);
         if (!analysis) {
           isProcessing = false;
           return;
