@@ -1,6 +1,6 @@
 import { Logger } from './logger';
 import { initializeEmbeddingEngine, getAudioAnalysis, findBestMatch } from './mlEmbeddingEngine';
-import { linearResample, applyBandpass } from './audioPreprocessor';
+import { linearResample } from './audioPreprocessor';
 
 // ─── Module-level state ───────────────────────────────────
 let isExtracting        = false;
@@ -102,11 +102,7 @@ function useScriptProcessorMainThreadCapture(sr) {
       // Mathematical parity with build_reference_fingerprints.mjs (Resample to 16kHz)
       // YAMNet STRICTLY requires 16000 Hz. If device mic is 48kHz, passing 48000 samples 
       // will down-pitch the audio by 3x and destroy the acoustic fingerprint.
-      
-      // Anti-Aliasing: Filter frequencies above 5kHz BEFORE downsampling to prevent
-      // high-frequency noise from folding back and corrupting the Mel-spectrogram.
-      const filteredSnapshot = applyBandpass(snapshot, sr);
-      const resampledSnapshot = linearResample(filteredSnapshot, sr, 16000);
+      const resampledSnapshot = linearResample(snapshot, sr, 16000);
       const resampledLen = resampledSnapshot.length;
 
       // Compute RMS over the FULL 1-second snapshot (not just the current block)
