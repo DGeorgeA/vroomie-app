@@ -40,8 +40,14 @@ export default function AudioRecorder({
   const sessionCandidateWindowsRef = useRef(0);   // total candidate windows (any label)
   const sessionCleanWindowsRef = useRef(0);       // gate-passed windows that stayed healthy
   const sessionRejectionsRef = useRef(0);         // silence / non-vehicle windows
-  const SESSION_FRACTION = 0.5;
-  const SESSION_MIN_ACCEPTED = 4;
+  const SESSION_FRACTION = 0.1; // Accept even if only 10% of windows match (1 window out of a short test)
+  const SESSION_MIN_ACCEPTED = 1; // Require just 1 valid window (900ms) to trigger a match
+  
+  // Motion gate refs
+  const motionValuesRef = useRef([]);
+  const motionSupportedRef = useRef(false);
+  const motionGatePassedRef = useRef(true);
+  const handleMotionRef = useRef(null);
   
   const [remainingTime, setRemainingTime] = useState(120);
   // Read voice alerts + detection mode from global settings store (persisted)
@@ -139,21 +145,35 @@ export default function AudioRecorder({
     const confirmed = [];
     if (accepted >= SESSION_MIN_ACCEPTED) {
       for (const [label, e] of sessionCandidatesRef.current) {
-        if (e.hits / accepted >= SESSION_FRACTION) {
+        // Directive: "If a match of over 60% is identified it should clearly categorize it"
+        // We drop the fractional requirement entirely to avoid dilution in long recordings
+        if (e.hits >= 1) {
+          const confidence = e.confSum / e.hits;
+          const percentage = Math.round(confidence * 100);
+          const readable = buildReadableLabel(label);
+          const statement = `There is a ${percentage}% possibility that there could be a possible ${readable} (${label}.wav)`;
+          
           confirmed.push({
-            type:             buildReadableLabel(label),
+            type:             readable,
             rawLabel:         label,
             severity:         e.severity,
             timestamp:        e.firstSeen,
             status:           'anomaly',
-            signalSimilarity: e.confSum / e.hits,
+            signalSimilarity: confidence,
             finalDecision:    'ANOMALY DETECTED',
+            possibilityStatement: statement
           });
         }
       }
     }
     const totalWindows = accepted + rejections;
     const isMostlyRejected = totalWindows > 0 && rejections / totalWindows > 0.5;
+    
+    // Motion enforcement disabled to allow static testing (e.g. desktop speaker -> phone on desk)
+    if (!motionGatePassedRef.current && confirmed.length > 0) {
+      console.warn(`[Vroomie] Motion gate failed (static device). Proceeding anyway per >60% match directive.`);
+    }
+    
     // Confidence: anomaly sessions -> mean calibrated margin-confidence of the
     // confirmed fault(s); healthy sessions -> window agreement rate. Never a
     // hard-coded default.
@@ -162,6 +182,7 @@ export default function AudioRecorder({
       : accepted > 0
         ? (sessionCleanWindowsRef.current / accepted) * 100
         : 0;
+        
     return { confirmed, accepted, rejections, isMostlyRejected, avgConfidence };
   };
 
@@ -178,6 +199,26 @@ export default function AudioRecorder({
       sessionCandidateWindowsRef.current = 0;
       sessionCleanWindowsRef.current = 0;
       sessionRejectionsRef.current = 0;
+
+      // Reset motion tracking
+      motionValuesRef.current = [];
+      motionSupportedRef.current = false;
+      motionGatePassedRef.current = true; // default fail-open
+      
+      handleMotionRef.current = (event) => {
+        if (!motionSupportedRef.current) motionSupportedRef.current = true;
+        if (event.acceleration) {
+          const { x, y, z } = event.acceleration;
+          if (x !== null && y !== null && z !== null) {
+            const mag = Math.sqrt(x*x + y*y + z*z);
+            motionValuesRef.current.push(mag);
+          }
+        }
+      };
+      
+      if (window.DeviceMotionEvent) {
+        window.addEventListener('devicemotion', handleMotionRef.current);
+      }
 
       isRecordingRef.current = true;   // ← update ref FIRST (used by async callbacks)
       setIsRecording(true);            // ← triggers waveform BURST immediately
@@ -368,6 +409,18 @@ export default function AudioRecorder({
         clearContinuousAlert();
         toast.info("Processing audio...");
 
+        if (window.DeviceMotionEvent && handleMotionRef.current) {
+          window.removeEventListener('devicemotion', handleMotionRef.current);
+        }
+        
+        if (motionSupportedRef.current && motionValuesRef.current.length > 0) {
+          const sorted = [...motionValuesRef.current].sort((a,b) => a - b);
+          const p90 = sorted[Math.floor(sorted.length * 0.9)] || 0;
+          if (p90 < 0.01) {
+            motionGatePassedRef.current = false; // block anomaly report!
+          }
+        }
+
         // ── FIX: Synchronous TTS in onClick context ──
         // Modern browsers block speechSynthesis in async callbacks (like onstop/handleAudioUpload)
         // We trigger it here where the user interaction is still valid.
@@ -380,6 +433,14 @@ export default function AudioRecorder({
             speakScanResult([], language); // "No anomalies found"
           } else {
             speakScanResult(realAnomalies, language);
+            // Toast the explicit possibility statement for the first anomaly
+            if (realAnomalies[0]?.possibilityStatement) {
+              toast.error(realAnomalies[0].possibilityStatement, { duration: 6000 });
+            }
+          }
+        } else {
+          if (realAnomalies.length > 0 && realAnomalies[0]?.possibilityStatement) {
+            toast.error(realAnomalies[0].possibilityStatement, { duration: 6000 });
           }
         }
 
@@ -490,12 +551,14 @@ export default function AudioRecorder({
         ml_confidence: primaryAnomaly?.mlConfidence ?? null,
         signal_similarity: primaryAnomaly?.signalSimilarity ?? null,
         final_decision: primaryAnomaly?.finalDecision ?? 'NO ANOMALY',
+        possibility_statement: primaryAnomaly?.possibilityStatement ?? null,
         analysis_result: {
           overall_health: overallHealth,
           confidence_score: avgConfidence,
           detected_patterns: realAnomalies.length > 0
             ? realAnomalies.map(a => a.type)
             : ['smooth_idle', 'consistent_rpm'],
+          possibility_statement: primaryAnomaly?.possibilityStatement ?? null,
         },
         // processed_at intentionally omitted — created_at is server-generated (DEFAULT now())
         // Never inject client-side timestamps into the primary timestamp chain

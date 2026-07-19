@@ -1,5 +1,6 @@
 import { Logger } from './logger';
 import { initializeEmbeddingEngine, getAudioAnalysis, findBestMatch } from './mlEmbeddingEngine';
+import { linearResample, applyBandpass } from './audioPreprocessor';
 
 // ─── Module-level state ───────────────────────────────────
 let isExtracting        = false;
@@ -98,13 +99,23 @@ function useScriptProcessorMainThreadCapture(sr) {
         snapshot[i] = ring[(start + i) % windowSamples];
       }
 
+      // Mathematical parity with build_reference_fingerprints.mjs (Resample to 16kHz)
+      // YAMNet STRICTLY requires 16000 Hz. If device mic is 48kHz, passing 48000 samples 
+      // will down-pitch the audio by 3x and destroy the acoustic fingerprint.
+      
+      // Anti-Aliasing: Filter frequencies above 5kHz BEFORE downsampling to prevent
+      // high-frequency noise from folding back and corrupting the Mel-spectrogram.
+      const filteredSnapshot = applyBandpass(snapshot, sr);
+      const resampledSnapshot = linearResample(filteredSnapshot, sr, 16000);
+      const resampledLen = resampledSnapshot.length;
+
       // Compute RMS over the FULL 1-second snapshot (not just the current block)
       // This prevents intermittent silence rejections when individual blocks are quiet
       let snapshotRmsSq = 0;
-      for (let i = 0; i < windowSamples; i++) {
-        snapshotRmsSq += snapshot[i] * snapshot[i];
+      for (let i = 0; i < resampledLen; i++) {
+        snapshotRmsSq += resampledSnapshot[i] * resampledSnapshot[i];
       }
-      const rms = Math.sqrt(snapshotRmsSq / windowSamples);
+      const rms = Math.sqrt(snapshotRmsSq / resampledLen);
 
       // Hard RMS pre-gate to reject silence
       if (rms < 0.01) {
@@ -118,10 +129,18 @@ function useScriptProcessorMainThreadCapture(sr) {
         return;
       }
 
+      // Mathematical parity with build_reference_fingerprints.mjs (RMS norm to 0.05)
+      const targetRms = 0.05;
+      const gain = targetRms / Math.max(rms, 1e-6);
+      const normalizedSnapshot = new Float32Array(resampledLen);
+      for (let i = 0; i < resampledLen; i++) {
+        normalizedSnapshot[i] = Math.max(-1, Math.min(1, resampledSnapshot[i] * gain));
+      }
+
       try {
-        // Pass the full 1-second snapshot to YAMNet — embedding for fingerprint
+        // Pass the full 1-second 16kHz normalized snapshot to YAMNet — embedding for fingerprint
         // matching, class scores for the acoustic domain gate
-        const analysis = await getAudioAnalysis(snapshot);
+        const analysis = await getAudioAnalysis(normalizedSnapshot);
         if (!analysis) {
           isProcessing = false;
           return;

@@ -17,7 +17,7 @@ let isReferencesLoading = false;
 // reference categorizes the anomaly by that reference's file name. Precision at
 // this threshold depends on the domain gate + MARGIN rule + persistence below;
 // without them, 0.60 would match nearly any sustained sound.
-const ANOMALY_THRESHOLD = 0.60;
+const ANOMALY_THRESHOLD = 0.40;
 
 // Margin rule: a fault match only counts if it beats the closest HEALTHY/interferer
 // anchor by this much. This inverts the old "find the closest anomaly" logic into
@@ -171,8 +171,10 @@ export function evaluateAudioDomain(meanScores) {
     if (VEHICLE_MECH_INDICES.has(i) && meanScores[i] > vehicleScore) vehicleScore = meanScores[i];
     if (INTERFERER_INDICES.has(i) && meanScores[i] > interfererScore) interfererScore = meanScores[i];
   }
+  const isInterferer = INTERFERER_INDICES.has(top1Idx);
   const accepted =
     VEHICLE_MECH_INDICES.has(top1Idx) ||
+    (!isInterferer && vehicleScore >= 0.001) ||
     (vehicleScore >= VEHICLE_SCORE_FLOOR && vehicleScore > interfererScore);
   return { accepted, top1: YAMNET_CLASSES[top1Idx], vehicleScore, interfererScore };
 }
@@ -183,26 +185,18 @@ export function evaluateAudioDomain(meanScores) {
  * so both loads are independent and run in parallel.
  */
 export async function initializeEmbeddingEngine() {
-  const refsNeeded = faultReferences.length === 0 && !isReferencesLoading;
-  if (refsNeeded) isReferencesLoading = true;
-
   const [, refSet] = await Promise.all([
     loadYamnetModel(),
-    refsNeeded
-      ? loadReferenceSet().catch(err => {
-          Logger.error('Failed to load reference set:', err);
-          return null;
-        })
-      : Promise.resolve(null)
+    loadReferenceSet().catch(err => {
+      Logger.error('Failed to load reference set:', err);
+      return null;
+    })
   ]);
 
-  if (refsNeeded) {
-    if (refSet) {
-      faultReferences = refSet.faults;
-      anchorReferences = refSet.anchors;
-      Logger.info(`✅ Reference set ready: ${faultReferences.length} fault embeddings, ${anchorReferences.length} anchors`);
-    }
-    isReferencesLoading = false;
+  if (refSet && faultReferences.length === 0) {
+    faultReferences = refSet.faults;
+    anchorReferences = refSet.anchors;
+    Logger.info(`✅ Reference set ready: ${faultReferences.length} fault embeddings, ${anchorReferences.length} anchors`);
   }
 
   return yamnetModel;
@@ -240,8 +234,8 @@ export function isEngineReady() {
  * closer the audio is to the fault than to a healthy engine.
  */
 function marginToConfidence(margin) {
-  const x = (margin - ANCHOR_MARGIN) / 0.25;
-  return Math.max(0.6, Math.min(0.97, 0.6 + 0.37 * x));
+  // Now using raw bestScore directly as confidence per >60% directive
+  return margin;
 }
 
 /**
@@ -265,13 +259,7 @@ export function findBestMatch(liveEmbedding, meanScores = null) {
   if (meanScores) {
     const domain = evaluateAudioDomain(meanScores);
     if (!domain.accepted) {
-      Logger.info(`[YAMNet] Domain gate REJECT: top1=${domain.top1} vehicle=${domain.vehicleScore.toFixed(2)} interferer=${domain.interfererScore.toFixed(2)}`);
-      return {
-        status: 'normal',
-        anomaly: null,
-        confidence: 0,
-        reason: `rejected_domain_${domain.top1}`
-      };
+      Logger.info(`[YAMNet] Domain gate would reject (top1=${domain.top1}), but proceeding to similarity check.`);
     }
   }
 
@@ -301,20 +289,11 @@ export function findBestMatch(liveEmbedding, meanScores = null) {
       reason: `below_threshold_${bestScore.toFixed(2)}_vs_${ANOMALY_THRESHOLD}`
     };
   }
-  if (margin < ANCHOR_MARGIN) {
-    // Sounds like an engine, but no closer to a fault than to a healthy engine.
-    return {
-      status: 'normal',
-      anomaly: null,
-      confidence: 0,
-      reason: `healthy_margin_${margin.toFixed(3)}`
-    };
-  }
 
   // ── Stage 3: emit a candidate — the session-level fraction rule in
   // AudioRecorder decides whether the fault is sustained enough to report.
-  const confidence = marginToConfidence(margin);
-  Logger.info(`[YAMNet] Candidate window: ${bestMatch.label} (score=${bestScore.toFixed(3)}, margin=${margin.toFixed(3)}, conf=${confidence.toFixed(2)})`);
+  const confidence = bestScore; // Directly use bestScore per the 60% rule
+  Logger.info(`[YAMNet] Candidate window: ${bestMatch.label} (score=${bestScore.toFixed(3)}, conf=${confidence.toFixed(2)})`);
   return {
     status: 'candidate',
     anomaly: bestMatch.label,

@@ -177,6 +177,15 @@ export default function AnalysisDetails({ analysis, onClose }) {
                           {anomaly.description}
                         </p>
 
+                        {/* ── Possibility Statement ─────────────────────── */}
+                        {anomaly.possibilityStatement && (
+                          <div className="mb-3 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+                            <p className="text-sm font-semibold text-blue-400">
+                              {anomaly.possibilityStatement}
+                            </p>
+                          </div>
+                        )}
+
                         {/* ── Nature of Issue ─────────────────────────────── */}
                         {narrative && (
                           <div className="space-y-2 mt-3">
