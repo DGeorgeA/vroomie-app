@@ -1,4 +1,35 @@
-# QA Report — Audio Pipeline v9.2 → v9.3
+# QA Report — Audio Pipeline v9.2 → v9.3 (+ adversarial addendum)
+
+## v9.3 adversarial addendum — BMAD cycle on the human test pattern
+
+Hypothesis (Break): "repeated tap-play testing (2 s clip + pause) dilutes the
+≥50% session fraction and causes live misses." **Refuted by measurement**
+(`scripts/validate_intermittent.mjs`): gap windows fall below the 0.005 silence
+gate and never enter the accepted denominator — intermittent replay detects
+**12/12** (bearing ×2, power steering, serpentine, piston, timing chain at 2 s
+and 4 s gaps).
+
+Real finding (Measure): some healthy vehicles run hot over LONG sessions —
+3 of 20 held-out 60 s healthy clips produced 20–25 margin-positive windows
+(33–42% fraction). Still **0/22 long-session false positives** under the
+shipped rule, but near the line. Decide: every relaxed secondary rule tested
+(absolute-hits 4–8, fraction 0.2–0.3) flags 3/22 healthy sessions → all
+REJECTED; the shipped rule stands unchanged. Documented mitigation path if a
+healthy-FP field report ever arrives: broaden healthy anchor diversity in the
+factory (do NOT touch thresholds).
+
+Instrumentation added: reports now record the device's ACTUAL applied capture
+settings (`session_diagnostics.capture_settings`) — some Android builds force
+noiseSuppression on, which attenuates broadband fault signatures; this is now
+visible in every field report, with a console warning when detected.
+
+Reference-set coverage statement: injector tick and exhaust leak have NO
+reference recordings in the `anomaly-patterns` bucket and therefore cannot be
+detected or validated until samples are uploaded (the factory ingests them
+automatically).
+
+---
+
 
 ## v9.3 addendum — level-invariance + device-rate capture (P0 recheck)
 

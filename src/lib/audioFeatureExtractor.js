@@ -45,6 +45,12 @@ function rmsNormalize(pcm, target = 0.05) {
 export function getActiveMediaStream()   { return mediaStream; }
 export function getActiveAudioContext()  { return audioContext; }
 
+// Actual constraints the DEVICE applied (not what we requested) — some Android
+// builds silently ignore noiseSuppression:false, which guts broadband fault
+// signatures. Recorded into every report's session_diagnostics.
+let appliedCaptureSettings = null;
+export function getCaptureSettings() { return appliedCaptureSettings; }
+
 export async function startExtraction(callback) {
   if (isExtracting) {
     Logger.warn('Extraction already running.');
@@ -63,6 +69,23 @@ export async function startExtraction(callback) {
     mediaStream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
     });
+
+    try {
+      const track = mediaStream.getAudioTracks()[0];
+      const s = track && track.getSettings ? track.getSettings() : {};
+      appliedCaptureSettings = {
+        sampleRate: s.sampleRate ?? null,
+        echoCancellation: s.echoCancellation ?? null,
+        noiseSuppression: s.noiseSuppression ?? null,
+        autoGainControl: s.autoGainControl ?? null
+      };
+      Logger.info(`🎚️ Applied capture settings: ${JSON.stringify(appliedCaptureSettings)}`);
+      if (appliedCaptureSettings.noiseSuppression === true) {
+        Logger.warn('⚠️ Device is FORCING noise suppression — broadband fault signatures may be attenuated on this hardware.');
+      }
+    } catch (e) {
+      appliedCaptureSettings = null;
+    }
 
     // Capture at the DEVICE's native rate and resample to 16 kHz in code.
     // Forcing a 16 kHz context on a mic stream is a known iOS Safari failure

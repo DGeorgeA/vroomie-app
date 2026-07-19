@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import { Mic, Square, Bug, Lock, Sparkles } from "lucide-react";
 import GlassButton from "../ui/GlassButton";
 import { toast } from "sonner";
-import { startExtraction, stopExtraction, getActiveMediaStream, getActiveAudioContext } from "@/lib/audioFeatureExtractor";
+import { startExtraction, stopExtraction, getActiveMediaStream, getActiveAudioContext, getCaptureSettings } from "@/lib/audioFeatureExtractor";
 import { startMotionCapture, stopMotionCapture } from "@/lib/motionDetector";
 import { buildReadableLabel, resetMatchState } from "@/lib/audioMatchingEngine"; // Legacy fallback if needed
 import { clearContinuousAlert, speakScanResult, speakUnableToDetect } from "@/lib/voiceFeedback";
@@ -576,6 +576,7 @@ export default function AudioRecorder({
             accepted,
             rejected: rejections,
             candidate_windows: sessionCandidateWindowsRef.current,
+            capture_settings: getCaptureSettings(),
             engine_build: 'v9.3'
           },
         },
