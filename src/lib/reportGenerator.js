@@ -2,6 +2,7 @@ import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 import { format } from 'date-fns';
 import { getDiagnosticMetadata } from './diagnosticDictionary';
+import { getFaultNarrative } from './audioMatchingEngine';
 
 export function generatePDFReport(vehicleId, historyData, aggregatedTrends) {
   const doc = new jsPDF();
@@ -78,7 +79,7 @@ export function generatePDFReport(vehicleId, historyData, aggregatedTrends) {
     
     if (session.anomalies_detected && session.anomalies_detected.length > 0) {
       session.anomalies_detected.forEach(anom => {
-        historyBody.push([ time, status, anom.type, anom.severity.toUpperCase(), confidence ]);
+        historyBody.push([ time, status, anom.type || 'Unknown', (anom.severity || 'unknown').toUpperCase(), confidence ]);
       });
     } else {
       historyBody.push([ time, status, "None", "N/A", confidence ]);
@@ -156,11 +157,8 @@ export function generateSingleEntryPDFReport(entryData) {
   const hasAnomalies = entryData.anomalies_detected && entryData.anomalies_detected.length > 0;
   const primaryAnomaly = hasAnomalies ? entryData.anomalies_detected[0] : null;
 
-  const renderPage = (currencyType, isFirstPage) => {
-    if (!isFirstPage) {
-      doc.addPage();
-    }
-    
+  const renderPage = () => {
+
     // --- HEADER ---
     doc.setFillColor(25, 25, 25);
     doc.rect(0, 0, 210, 40, 'F');
@@ -173,7 +171,7 @@ export function generateSingleEntryPDFReport(entryData) {
     doc.setTextColor(200, 200, 200);
     doc.setFontSize(12);
     doc.setFont("helvetica", "italic");
-    doc.text(`Analysis Type: Single Event Report (${currencyType} Costing)`, 105, 28, { align: "center" });
+    doc.text(`Analysis Type: Single Event Acoustic Report`, 105, 28, { align: "center" });
 
     // --- 1. TIMESTAMP & 2. STATUS ---
     doc.setTextColor(0, 0, 0);
@@ -208,18 +206,24 @@ export function generateSingleEntryPDFReport(entryData) {
     
     if (hasAnomalies) {
       doc.text(`Anomaly Name: ${primaryAnomaly.type}`, 14, 88);
-      doc.text(`Severity Level: ${primaryAnomaly.severity.toUpperCase()}`, 14, 94);
-      if (primaryAnomaly.description) {
+      doc.text(`Severity Level: ${(primaryAnomaly.severity || 'unknown').toUpperCase()}`, 14, 94);
+      // Noise-discounted possibility statement — the headline finding
+      if (primaryAnomaly.statement) {
+        const stmt = doc.splitTextToSize(primaryAnomaly.statement, 180);
+        doc.text(stmt, 14, 100);
+      } else if (primaryAnomaly.description) {
         doc.text(`Description: ${primaryAnomaly.description}`, 14, 100);
       }
     } else {
       doc.text(`Anomaly Name: None`, 14, 88);
       doc.text(`Severity Level: N/A`, 14, 94);
     }
-    
-    doc.text(`Network Confidence: ${entryData.confidence_score ? entryData.confidence_score.toFixed(1) + '%' : 'N/A'}`, 14, 110);
-    if (hasAnomalies && primaryAnomaly.matchedFile) {
-        doc.text(`Matched Reference: ${primaryAnomaly.matchedFile}`, 14, 116);
+
+    doc.text(`Match Confidence: ${entryData.confidence_score ? entryData.confidence_score.toFixed(1) + '%' : 'N/A'}`, 14, 112);
+    // sourceFile is the field the detection engine actually writes
+    const matchedRef = hasAnomalies ? (primaryAnomaly.sourceFile || primaryAnomaly.matchedFile) : null;
+    if (matchedRef) {
+      doc.text(`Matched Reference: ${matchedRef}`, 14, 118);
     }
 
     // --- 5. SIGNAL DIAGNOSTICS & FIX / COST EST ---
@@ -230,14 +234,18 @@ export function generateSingleEntryPDFReport(entryData) {
     let insightText = "";
     if (hasAnomalies) {
       const sev = primaryAnomaly.severity;
-      const dict = getDiagnosticMetadata(primaryAnomaly.type);
-      
-      const costStr = currencyType === 'USD' ? `$${dict.usd}` : `₹${dict.inr.toLocaleString()}`;
-      
+      // Prefer the clinical narrative (full label coverage); fall back to the
+      // legacy dictionary. NOTE: cost estimates were deliberately purged from
+      // diagnosticDictionary to remove liability — never interpolate dict.usd /
+      // dict.inr here again (doing so threw and killed the PDF export).
+      const narrative = getFaultNarrative(primaryAnomaly.type);
+      const fixText = narrative?.fix || getDiagnosticMetadata(primaryAnomaly.type).fix;
+      const natureText = narrative?.nature ? `\n\nNature of Issue: ${narrative.nature}` : '';
+
       if (sev === 'critical' || sev === 'high') {
-        insightText = `SUGGESTED ACTION: IMMEDIATE CHECK REQUIRED.\nThis acoustic signature strongly correlates with severe engine breakdown.\n\nRecommended Fix: ${dict.fix}\nEstimated Cost: ${costStr}`;
+        insightText = `SUGGESTED ACTION: IMMEDIATE CHECK REQUIRED.\nThis acoustic signature strongly correlates with severe engine breakdown.${natureText}\n\nRecommended Fix: ${fixText}`;
       } else {
-        insightText = `SUGGESTED ACTION: MONITOR / MINOR SERVICE.\nAcoustic anomalies detected but currently operating within secondary margins.\n\nRecommended Fix: ${dict.fix}\nEstimated Cost: ${costStr}`;
+        insightText = `SUGGESTED ACTION: MONITOR / MINOR SERVICE.\nAcoustic anomalies detected but currently operating within secondary margins.${natureText}\n\nRecommended Fix: ${fixText}`;
       }
     } else {
       insightText = "SUGGESTED ACTION: NONE.\nNo acoustic signatures of mechanical failure were matched.\nThe active engine block sounds perfectly healthy within normal operating frequency bands.";
@@ -249,13 +257,9 @@ export function generateSingleEntryPDFReport(entryData) {
     doc.text(splitText, 14, 143);
   };
 
-  // Render Page 1 (USD)
-  renderPage('USD', true);
-  
-  // Render Page 2 (INR)
-  if (hasAnomalies) {
-    renderPage('INR', false);
-  }
+  // Single page — the former two-page split existed only to show USD vs INR
+  // cost estimates, which no longer exist (purged for liability reasons).
+  renderPage();
 
   const fileName = `Vroomie_Report_${safeFilenameTime}.pdf`;
   doc.save(fileName);

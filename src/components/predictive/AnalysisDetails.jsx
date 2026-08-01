@@ -205,8 +205,8 @@ export default function AnalysisDetails({ analysis, onClose }) {
                         {/* ─────────────────────────────────────────────────── */}
 
                         <div className="flex gap-4 text-xs text-gray-500 mt-3">
-                          {anomaly.timestamp && (
-                            <span>Time: {anomaly.timestamp.toFixed(1)}s</span>
+                          {Number.isFinite(Number(anomaly.timestamp)) && (
+                            <span>Time: {Number(anomaly.timestamp).toFixed(1)}s</span>
                           )}
                           {anomaly.frequency_range && (
                             <span>Frequency: {anomaly.frequency_range}</span>

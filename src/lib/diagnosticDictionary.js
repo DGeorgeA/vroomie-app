@@ -28,7 +28,7 @@ export const diagnosticDictionary = {
     fix: "Inspect exhaust mounts and patch muffler leaks"
   },
   "Bearing Fault": {
-    fix: "Replace affected bearing assembly ΓÇö alternator, idler, or tensioner"
+    fix: "Replace affected bearing assembly — alternator, idler, or tensioner"
   },
   "Belt Issue": {
     fix: "Inspect and replace serpentine belt; check tensioner and idler pulleys"
@@ -39,14 +39,33 @@ export const diagnosticDictionary = {
  * Retrieves the diagnostic intelligence parameters.
  */
 export function getDiagnosticMetadata(anomalyName) {
-  const normalized = Object.keys(diagnosticDictionary).find(
-    k => k.toLowerCase() === anomalyName?.toLowerCase()
-  );
-  
-  if (normalized) {
-    return diagnosticDictionary[normalized];
+  if (!anomalyName) {
+    return { fix: "General inspection of associated engine block / electronic subsystems" };
   }
-  
+  // Exact match first. Engine labels are derived from reference file names
+  // ("BearingAlternator", "Timing chain rattle high") and never equalled these
+  // human-written keys, so an exact-only lookup always fell through to the
+  // generic text. Fall back to separator-insensitive LONGEST partial match.
+  const exact = Object.keys(diagnosticDictionary).find(
+    k => k.toLowerCase() === anomalyName.toLowerCase()
+  );
+  if (exact) return diagnosticDictionary[exact];
+
+  const norm = (s) => s.toLowerCase().replace(/[^a-z]/g, '');
+  const target = norm(anomalyName);
+  let bestKey = null;
+  let bestLen = -1;
+  for (const k of Object.keys(diagnosticDictionary)) {
+    // Match on the key's significant words in any order (e.g. "Alternator
+    // Bearing Fault" <-> "BearingAlternator")
+    const words = k.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+    if (words.length && words.every(w => target.includes(w))) {
+      const kn = norm(k);
+      if (kn.length > bestLen) { bestLen = kn.length; bestKey = k; }
+    }
+  }
+  if (bestKey) return diagnosticDictionary[bestKey];
+
   return {
     fix: "General inspection of associated engine block / electronic subsystems"
   };

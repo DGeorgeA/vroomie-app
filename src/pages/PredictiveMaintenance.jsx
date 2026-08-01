@@ -258,7 +258,7 @@ export default function PredictiveMaintenance() {
   };
 
   const handleAnomalyDetected = (anomaly) => {
-    toast.warning(`${anomaly.severity.toUpperCase()} anomaly detected!`, {
+    toast.warning(`${(anomaly?.severity || 'detected').toUpperCase()} anomaly detected!`, {
       description: anomaly.type,
       duration: 5000,
     });

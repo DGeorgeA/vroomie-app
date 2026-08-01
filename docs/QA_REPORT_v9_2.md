@@ -1,4 +1,52 @@
-# QA Report — Audio Pipeline v9.2 → v9.4 (+ adversarial addendum)
+# QA Report — Audio Pipeline v9.2 → v9.5 (+ adversarial addendum)
+
+## v9.5 addendum — full-app audit (detection was fine; the REPORT layer was broken)
+
+Exhaustive per-file audit (`scripts/audit_all_bucket_files.mjs`) ran EVERY one
+of the 55 bucket WAVs through the exact shipped decision path in the
+speaker→room→mic channel:
+
+**Detected: 54/55 (98.2%).** Per class: alternator_bearing_critical 1/1,
+BearingAlternator 1/1, intake_leak 1/1, **power-steering combined 44/44**,
+misfire 1/1, MotorStarter 1/1, Piston 1/1, PowerSteeringPump 1/1,
+RockerArmAndValve 1/1, SerpentineBelt 1/1, timing_chain 1/1,
+water_pump 0/1 (the synthetic sine tone QC rejects — needs a real recording).
+
+So detection against the bucket was already correct. The audit instead exposed
+**eight defects in the report/display layer** — the part the user actually
+reads — including a hard crash:
+
+| # | Defect | Impact | Status |
+|---|---|---|---|
+| 1 | `renderPage('INR')` interpolated `dict.inr.toLocaleString()`, but cost fields were purged from `diagnosticDictionary` | **TypeError thrown for EVERY anomaly report → `doc.save()` never ran → vet PDF export 100% broken whenever a fault was found** (healthy reports exported fine) | FIXED |
+| 2 | `getFaultNarrative` used first-match | Combined power-steering label (44/55 files) was hijacked by the shorter `SerpentineBelt` key → **wrong repair advice for the largest class** | FIXED (longest-match) |
+| 3 | `alternator bearing noise` (v9.4 label) had no narrative | Report showed the anomaly with no Nature/Fix guidance | FIXED |
+| 4 | `getDiagnosticMetadata` was exact-match only | No engine label ever matched → PDF always printed the generic fallback fix | FIXED (word-set + longest match) |
+| 5 | PDF read `primaryAnomaly.matchedFile`; engine writes `sourceFile` | "Matched Reference" never appeared | FIXED |
+| 6 | PDF omitted the possibility statement | Headline finding missing from the shareable report | FIXED |
+| 7 | Unguarded `.toUpperCase()` / `.toFixed()` on optional anomaly fields (4 sites) | Crash rendering history/details for legacy records written by older engine versions | FIXED (defensive) |
+| 8 | Mojibake (`Γ£à`, `Γ¥ù`, `ΓÜá∩╕Å`, `ΓÇó`, `ΓÇö`) | Corrupted glyphs in history badges and dictionary | FIXED |
+
+Crash proof (real modules, Node): the old PDF expression throws for **12/12**
+emittable labels; the new expression resolves specific repair guidance for
+**12/12 with zero generic fallbacks**.
+
+Regression guards added to `scripts/qa_unit_tests.mjs`: narrative coverage for
+every artifact label, longest-match correctness for the combined label, a
+comment-stripped crash guard forbidding `dict.inr`/`dict.usd`, single-page
+assertion, `sourceFile`/statement presence, and a mojibake check. Full suite
+passes; build clean; production bundle boots with zero console errors.
+
+No detection constants, anchors, or the artifact were modified in v9.5 —
+detection behaviour is byte-identical to v9.4.
+
+**Known remaining limitation:** `water_pump_failure_critical.wav` is a
+synthetic sine tone and stays undetectable by design (accepting tones would let
+alarm beeps and test tones flag as faults). Upload a real water-pump recording
+and re-run the factory to enable that class.
+
+---
+
 
 ## v9.4 addendum — real-world sample detection (YouTube alternator bearing)
 

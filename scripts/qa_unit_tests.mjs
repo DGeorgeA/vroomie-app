@@ -71,6 +71,69 @@ check('motion annotation applies only to sessions WITH anomalies',
 check('motion telemetry stored in analysis_result',
   recorderSrc.includes('vibration_rms'));
 
+// ─── QA-2b: report/narrative coverage for EVERY emittable label ─────────────
+{
+  const art = JSON.parse(fs.readFileSync(path.join(ROOT, 'public', 'fingerprints_v9.json'), 'utf8'));
+  const labels = [...new Set(art.faults.map(f => f.label))];
+  const ameSrc = fs.readFileSync(path.join(ROOT, 'src', 'lib', 'audioMatchingEngine.js'), 'utf8');
+  const narrativeKeys = [...ameSrc.matchAll(/^  '([^']+)':/gm)].map(m => m[1]);
+  const SEV = new Set(['critical', 'high', 'medium', 'low']);
+  const readable = (raw) => {
+    let p = raw.split('_');
+    if (p.length > 1 && SEV.has(p[p.length - 1])) p.pop();
+    p = p.filter((w, i) => i === 0 || w !== p[i - 1]);
+    return p.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+  };
+  const norm = (s) => s.toLowerCase().replace(/[_\s]+/g, '');
+  // mirrors the shipped LONGEST-match resolver
+  const resolve = (raw) => {
+    if (narrativeKeys.includes(raw)) return raw;
+    const target = norm(raw);
+    let bestKey = null, bestLen = -1;
+    for (const k of narrativeKeys) {
+      const kn = norm(k);
+      if (kn === target) return k;
+      if (target.includes(kn) || kn.includes(target)) {
+        if (kn.length > bestLen) { bestLen = kn.length; bestKey = k; }
+      }
+    }
+    return bestKey;
+  };
+  const missing = labels.filter(l => !resolve(readable(l)));
+  check('every artifact label resolves to a repair narrative', missing.length === 0,
+    missing.length ? 'missing: ' + missing.join(', ') : `${labels.length} labels covered`);
+  // The combined power-steering label must NOT be hijacked by the shorter
+  // "SerpentineBelt" key (first-match bug: wrong repair advice, largest class)
+  const combined = labels.find(l => l.toLowerCase().includes('power steering or low oil'));
+  if (combined) {
+    check('combined power-steering label maps to its OWN narrative (longest match)',
+      resolve(readable(combined)) === 'Issue_with_Power_steering_or_low_oil_or_serpentine_belt',
+      `resolved -> ${resolve(readable(combined))}`);
+  }
+  check('longest-match resolver is the shipped implementation',
+    ameSrc.includes('LONGEST match wins') && ameSrc.includes('bestLen'));
+}
+
+// ─── QA-2c: PDF report regression guards ────────────────────────────────────
+{
+  const rg = fs.readFileSync(path.join(ROOT, 'src', 'lib', 'reportGenerator.js'), 'utf8');
+  // dict.inr/.usd were purged from diagnosticDictionary; interpolating them
+  // threw a TypeError and killed doc.save() for EVERY anomaly report.
+  // Strip comments so the guard tests CODE, not the note explaining the bug.
+  const rgCode = rg.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  check('PDF export never interpolates purged cost fields (crash guard)',
+    !/dict\.(inr|usd)/.test(rgCode));
+  check('PDF export renders a single page (no duplicate cost pages)',
+    !/renderPage\(['"]INR/.test(rgCode));
+  check('PDF uses sourceFile for the matched reference',
+    rg.includes('primaryAnomaly.sourceFile'));
+  check('PDF includes the possibility statement',
+    rg.includes('primaryAnomaly.statement'));
+  const dd = fs.readFileSync(path.join(ROOT, 'src', 'lib', 'diagnosticDictionary.js'), 'utf8');
+  check('diagnostic dictionary has no mojibake', !dd.includes('ΓÇö'));
+  check('diagnostic lookup falls back beyond exact match', dd.includes('bestLen'));
+}
+
 // ─── QA-3: possibility statements from real benchmark measurements ─────────
 const measPath = path.join(ROOT, 'scratch', 'bench_measurements.json');
 if (fs.existsSync(measPath)) {

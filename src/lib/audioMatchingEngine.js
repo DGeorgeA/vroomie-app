@@ -12,7 +12,7 @@
  *   - Anything < 0.80 strictly returns normal ("No anomalies found").
  */
 
-import { Logger } from './logger';
+import { Logger } from './logger.js';
 
 // ── Fault Nature Library — enriched clinical descriptions (NO cost estimates) ─
 export const FAULT_NATURE_LIBRARY = {
@@ -23,6 +23,10 @@ export const FAULT_NATURE_LIBRARY = {
   'BearingAlternator': {
     nature: 'Severe alternator bearing degradation with high kurtosis in the 4–10 kHz band, indicating metal-on-metal contact within the bearing races. Unaddressed, this leads to total alternator seizure and stranded vehicle.',
     fix: 'Replace the alternator immediately. Do not operate the vehicle under high electrical load (A/C, headlights) until repaired.',
+  },
+  'alternator_bearing_noise': {
+    nature: 'A rhythmic growl or rumble from the alternator, characteristic of a worn front or rear bearing. The noise typically rises and falls with engine speed and is loudest with electrical accessories switched on. Left unrepaired, the bearing eventually seizes, shredding the drive belt and stopping the charging system.',
+    fix: 'Spin the alternator pulley by hand with the belt removed and check for roughness or play. Replace the alternator bearings or the complete unit, and inspect the drive belt and tensioner for damage caused by the failing bearing.',
   },
   'water_pump_failure_critical': {
     nature: 'The water pump impeller blade or shaft bearing is failing, causing irregular coolant flow. Insufficient circulation leads to localised hot spots in the cylinder head. If unresolved, this causes head gasket failure and engine overheating within minutes of temperature exceedance.',
@@ -72,17 +76,27 @@ export const FAULT_NATURE_LIBRARY = {
  */
 export function getFaultNarrative(rawLabel) {
   if (!rawLabel) return null;
-  // Try exact match first, then separator-insensitive partial match — anomaly
+  // Exact match first, then separator-insensitive partial match — anomaly
   // labels are space-separated ("alternator bearing fault critical") while
   // library keys keep the source file's underscores.
   if (FAULT_NATURE_LIBRARY[rawLabel]) return FAULT_NATURE_LIBRARY[rawLabel];
   const norm = (s) => s.toLowerCase().replace(/[_\s]+/g, '');
   const target = norm(rawLabel);
-  const key = Object.keys(FAULT_NATURE_LIBRARY).find(k => {
+
+  // LONGEST match wins, never first-found: the combined power-steering label
+  // contains "serpentinebelt" as a substring, so a first-match scan handed it
+  // the SerpentineBelt narrative and hid its own (wrong repair advice for the
+  // largest reference class).
+  let bestKey = null;
+  let bestLen = -1;
+  for (const k of Object.keys(FAULT_NATURE_LIBRARY)) {
     const kn = norm(k);
-    return target.includes(kn) || kn.includes(target);
-  });
-  return key ? FAULT_NATURE_LIBRARY[key] : null;
+    if (kn === target) return FAULT_NATURE_LIBRARY[k];
+    if (target.includes(kn) || kn.includes(target)) {
+      if (kn.length > bestLen) { bestLen = kn.length; bestKey = k; }
+    }
+  }
+  return bestKey ? FAULT_NATURE_LIBRARY[bestKey] : null;
 }
 
 

@@ -135,10 +135,10 @@ export default function AnalysisHistory({
                     <p className="text-orange-100 font-medium text-sm flex items-center gap-2">
                       <TrendingUp className="w-3.5 h-3.5 text-orange-400" /> {trend.name}
                     </p>
-                    <p className="text-xs text-gray-400 mt-0.5">Caught {trend.count}x ΓÇó Status: <span className="text-gray-300 font-medium">{trend.trend}</span></p>
+                    <p className="text-xs text-gray-400 mt-0.5">Caught {trend.count}x • Status: <span className="text-gray-300 font-medium">{trend.trend}</span></p>
                   </div>
                   <div className={`px-2 py-1 rounded-md text-xs font-bold border ${getSeverityColor(trend.highestSeverity)}`}>
-                    {trend.highestSeverity.toUpperCase()}
+                    {(trend.highestSeverity || 'unknown').toUpperCase()}
                   </div>
                 </div>
               </GlassCard>
@@ -164,16 +164,16 @@ export default function AnalysisHistory({
           
           let cardBorder = 'border-green-500/10';
           let badgeClass = "bg-green-500/20 text-green-400 border-green-500/30";
-          let badgeText = "Γ£à NO ANOMALY DETECTED";
+          let badgeText = "✅ NO ANOMALY DETECTED";
           
           if (dominantStatus === 'anomaly') {
              cardBorder = 'border-red-500/20 bg-red-900/5';
              badgeClass = getSeverityColor(anomalies[0]?.severity);
-             badgeText = `Γ¥ù ANOMALY DETECTED: ${anomalies[0]?.type.toUpperCase()}`;
+             badgeText = `❗ ANOMALY DETECTED: ${(anomalies[0]?.type || 'Unknown').toUpperCase()}`;
           } else if (dominantStatus === 'potential_anomaly') {
              cardBorder = 'border-yellow-500/20 bg-yellow-900/5';
              badgeClass = "bg-yellow-500/20 text-yellow-400 border-yellow-500/30";
-             badgeText = `ΓÜá∩╕Å POTENTIAL ANOMALY: ${anomalies[0]?.type.toUpperCase()}`;
+             badgeText = `⚠️ POTENTIAL ANOMALY: ${(anomalies[0]?.type || 'Unknown').toUpperCase()}`;
           }
           
           return (
@@ -237,7 +237,7 @@ export default function AnalysisHistory({
                             }
                           })()}
                         </p>
-                        <span className="text-zinc-600">ΓÇó</span>
+                        <span className="text-zinc-600">•</span>
                         <div className="flex items-center gap-1.5 text-zinc-400 font-medium">
                           <Activity className="w-4 h-4 text-yellow-500/80" /> 
                           {(analysis.confidence_score || 0).toFixed(1)}% Confidence
