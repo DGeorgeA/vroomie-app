@@ -271,6 +271,12 @@ export default function AudioRecorder({
           } else {
             toast.error("Failed to start the audio engine. Ensure your device has a working microphone.");
           }
+
+          // Session ended with no result — same convention as the abort paths
+          // in stopRecording. Lets the parent clear per-session state (e.g. the
+          // Ethanol Check's armed flag) instead of leaking it into the user's
+          // next manual recording.
+          if (onRecordingComplete) onRecordingComplete(null);
         });
 
     } catch (error) {

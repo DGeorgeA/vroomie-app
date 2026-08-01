@@ -89,7 +89,7 @@ export function screenForEthanolIndicators(anomalies) {
 export function buildEthanolScreeningCopy(result) {
   if (result.hasIndicators) {
     return {
-      heading: 'POSSIBLE INDICATORS DETECTED',
+      heading: 'POSSIBLE RELEVANT INDICATOR(S) DETECTED',
       lead: result.indicators.length === 1
         ? 'Observed sound pattern:'
         : 'Observed sound patterns:',
