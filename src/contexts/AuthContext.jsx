@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { onAuthStateChange, getCurrentUser } from '../services/authService';
 import { isProUser, getSubscription } from '../services/subscriptionService';
 import { setProStatus } from '../lib/featureGate';
+import { getUserRole, ROLE_ADMIN, ROLE_USER } from '../services/roleService';
 
 const AuthContext = createContext(null);
 
@@ -16,6 +17,10 @@ export function AuthProvider({ children }) {
   const [isPro, setIsPro] = useState(false);
   const [subscription, setSubscription] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Server-authoritative role. Starts at 'user' and only ever becomes 'admin'
+  // if public.user_roles says so (RLS-protected). Cleared on sign-out so a
+  // second account signing into the same browser inherits nothing.
+  const [role, setRole] = useState(ROLE_USER);
 
   async function refreshSubscription(userId) {
     if (!userId) {
@@ -44,6 +49,9 @@ export function AuthProvider({ children }) {
       setUser(currentUser);
       if (currentUser) {
         await refreshSubscription(currentUser.id);
+        setRole(await getUserRole(currentUser.id));
+      } else {
+        setRole(ROLE_USER);
       }
       setLoading(false);
     });
@@ -55,10 +63,12 @@ export function AuthProvider({ children }) {
       
       if (sessionUser) {
         await refreshSubscription(sessionUser.id);
+        setRole(await getUserRole(sessionUser.id));
       } else {
         setIsPro(false);
         setProStatus(false);
         setSubscription(null);
+        setRole(ROLE_USER); // no residual privileges after sign-out
       }
     });
 
@@ -72,6 +82,10 @@ export function AuthProvider({ children }) {
     isPro,
     subscription,
     loading,
+    role,
+    // Convenience for conditional UI ONLY — never for authorization. Every
+    // privileged write is rejected server-side by RLS regardless of this flag.
+    isAdmin: role === ROLE_ADMIN,
     refreshSubscription: () => user ? refreshSubscription(user.id) : Promise.resolve()
   };
 

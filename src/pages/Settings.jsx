@@ -5,6 +5,7 @@ import { signOut } from '@/services/authService';
 import { useSettingsStore, LANGUAGE_OPTIONS, SENSITIVITY_CONFIG } from '@/store/settingsStore';
 import { setDetectionMode } from '@/lib/detectionMode';
 import { canAccess } from '@/lib/featureGate';
+import EthanolAdminSetting from '@/components/ethanol/EthanolAdminSetting';
 import { toast } from 'sonner';
 import {
   User, Bell, Volume2, Shield, CreditCard,
@@ -422,6 +423,9 @@ export default function Settings() {
       </SettingsCard>
 
       {/* ══ DEVELOPER OPTIONS ══════════════════════════════════════════════ */}
+      {/* ══ ADMIN ONLY — renders null (no wrapper, no spacing) for users ═══ */}
+      <EthanolAdminSetting />
+
       <SectionHeader title="Developer Options" />
       <SettingsCard>
         {/* Validation Menu Toggle */}

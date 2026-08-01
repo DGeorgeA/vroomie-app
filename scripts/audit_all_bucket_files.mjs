@@ -210,7 +210,18 @@ const listRes = await fetch(LIST_URL, {
   body: JSON.stringify({ prefix: '', limit: 500, sortBy: { column: 'name', order: 'asc' } })
 });
 let wavs = (await listRes.json()).map(o => o.name).filter(n => n.toLowerCase().endsWith('.wav'));
-if (process.env.SAMPLE) { const seen = new Set(); wavs = wavs.filter(n => { const k = n.replace(/_d+.wav$/i, ''); if (seen.has(k)) return false; seen.add(k); return true; }); }
+// Mirrors EXCLUDED_REFERENCES in build_reference_fingerprints.mjs — these files
+// are deliberately not part of the reference set, so they are NOT detection
+// failures. Keep the two lists in sync.
+const EXCLUDED_REFERENCES = new Set(['water_pump_failure_critical.wav']);
+for (const n of wavs.filter(n => EXCLUDED_REFERENCES.has(n))) {
+  console.log(`  SKIP ${n} (explicitly excluded from the reference set)`);
+}
+wavs = wavs.filter(n => !EXCLUDED_REFERENCES.has(n));
+if (process.env.SAMPLE) {
+  const seen = new Set();
+  wavs = wavs.filter(n => { const k = n.replace(/_\d+\.wav$/i, ''); if (seen.has(k)) return false; seen.add(k); return true; });
+}
 console.log(`[Audit] bucket: ${wavs.length} wav files — testing ALL through speaker-replay channel\n`);
 
 const results = [];

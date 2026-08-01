@@ -1,4 +1,5 @@
 import React, { useState, useCallback } from "react";
+import { useEthanolFeature } from "@/contexts/EthanolFeatureContext";
 
 /**
  * VroomieLogo — Real mascot image with premium micro-interaction.
@@ -12,6 +13,10 @@ import React, { useState, useCallback } from "react";
  */
 export default function VroomieLogo({ size = "md", onClick }) {
   const [pulsing, setPulsing] = useState(false);
+  // Golden ethanol sash — a pure OVERLAY. The original logo asset is never
+  // modified, so when the feature is disabled the mark renders exactly as
+  // before with no layout or spacing residue.
+  const { enabled: ethanolEnabled } = useEthanolFeature();
 
   const sizes = {
     sm: 32,
@@ -71,6 +76,37 @@ export default function VroomieLogo({ size = "md", onClick }) {
           filter: drop-shadow(0 2px 6px rgba(0,0,0,0.55));
           transition: filter 0.2s ease;
         }
+        /* ── Ethanol golden sash (overlay only — removable with zero residue) ── */
+        .vroomie-sash {
+          position: absolute;
+          left: 50%;
+          bottom: 4%;
+          transform: translateX(-50%) rotate(-14deg);
+          transform-origin: center;
+          pointer-events: none;
+          white-space: nowrap;
+          border-radius: 2px;
+          background: linear-gradient(180deg, #fde68a 0%, #f2c14a 38%, #c8901d 72%, #8a5f0d 100%);
+          box-shadow: 0 1px 3px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.6);
+          border-top: 1px solid rgba(255,255,255,0.5);
+          color: #4a2f05;
+          font-weight: 800;
+          letter-spacing: 0.04em;
+          text-transform: uppercase;
+          line-height: 1;
+          text-align: center;
+          overflow: hidden;
+        }
+        .vroomie-sash::after {
+          /* restrained metallic sheen */
+          content: "";
+          position: absolute;
+          inset: 0;
+          background: linear-gradient(105deg, transparent 35%, rgba(255,255,255,0.55) 50%, transparent 65%);
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .vroomie-logo-wrap.pulsing img { animation: none; }
+        }
       `}</style>
 
       <div
@@ -90,6 +126,20 @@ export default function VroomieLogo({ size = "md", onClick }) {
           height={px}
           draggable={false}
         />
+        {ethanolEnabled && (
+          <span
+            className="vroomie-sash"
+            aria-hidden="true"
+            style={{
+              // Scales with the mark; text only where it stays legible.
+              fontSize: Math.max(4, Math.round(px * 0.105)),
+              padding: `${Math.max(1, Math.round(px * 0.035))}px ${Math.max(2, Math.round(px * 0.09))}px`,
+              maxWidth: px * 1.28,
+            }}
+          >
+            {px >= 64 ? 'Ethanol Check' : px >= 40 ? 'Ethanol' : 'E'}
+          </span>
+        )}
       </div>
     </>
   );

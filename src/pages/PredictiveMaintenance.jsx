@@ -7,6 +7,10 @@ import AudioRecorder from "../components/predictive/AudioRecorder";
 import AnalysisHistory from "../components/predictive/AnalysisHistory";
 import AnalysisDetails from "../components/predictive/AnalysisDetails";
 import CustomerFeedback, { FeedbackModal } from "../components/feedback/CustomerFeedback";
+import EthanolGoldenTicket from "../components/ethanol/EthanolGoldenTicket";
+import EthanolResultModal from "../components/ethanol/EthanolResultModal";
+import { useEthanolFeature } from "@/contexts/EthanolFeatureContext";
+import { screenForEthanolIndicators } from "@/lib/ethanolScreening";
 import { toast } from 'sonner';
 import { LANGUAGES } from '@/utils/voice';
 import { supabase } from '../lib/supabase';
@@ -23,6 +27,40 @@ export default function PredictiveMaintenance() {
 
   // Voice & Language State — default English (US)
   const [language, setLanguage] = useState('en-US');
+
+  // ─── Ethanol Contamination Check (optional, globally flagged) ─────────────
+  // Purely additive: reads the anomaly results the core engine already
+  // produced. Nothing here touches capture, inference or classification.
+  const { enabled: ethanolEnabled } = useEthanolFeature();
+  const [showEthanolTicket, setShowEthanolTicket] = useState(false);
+  const [ethanolTicketDismissed, setEthanolTicketDismissed] = useState(false);
+  const [ethanolResult, setEthanolResult] = useState(null);
+
+  useEffect(() => {
+    // Offer the ticket once per session, only while globally enabled.
+    if (ethanolEnabled && !ethanolTicketDismissed) {
+      const t = setTimeout(() => setShowEthanolTicket(true), 1200);
+      return () => clearTimeout(t);
+    }
+    // Disabling mid-session tears the promo down immediately — no residue.
+    if (!ethanolEnabled) {
+      setShowEthanolTicket(false);
+      setEthanolResult(null);
+    }
+  }, [ethanolEnabled, ethanolTicketDismissed]);
+
+  const dismissEthanolTicket = useCallback(() => {
+    setShowEthanolTicket(false);
+    setEthanolTicketDismissed(true); // never re-prompt this session
+  }, []);
+
+  const runEthanolCheck = useCallback(() => {
+    setShowEthanolTicket(false);
+    setEthanolTicketDismissed(true);
+    // Screen the most recent completed analysis — existing results only.
+    const latest = analyses && analyses.length > 0 ? analyses[0] : null;
+    setEthanolResult(screenForEthanolIndicators(latest?.anomalies_detected || []));
+  }, [analyses]);
 
   // ─── Post-recording feedback popup ────────────────────────────────
   // Trigger: recording stops → 5s of NO interaction → show modal
@@ -411,6 +449,26 @@ export default function PredictiveMaintenance() {
             />
           )}
         </AnimatePresence>
+
+        {/* ── Ethanol Contamination Check (renders nothing when disabled) ── */}
+        {ethanolEnabled && (
+          <>
+            <EthanolGoldenTicket
+              open={showEthanolTicket}
+              onCheckNow={runEthanolCheck}
+              onDismiss={dismissEthanolTicket}
+            />
+            <EthanolResultModal
+              open={!!ethanolResult}
+              result={ethanolResult}
+              onClose={() => setEthanolResult(null)}
+              onViewReport={() => {
+                setEthanolResult(null);
+                if (analyses && analyses.length > 0) setSelectedAnalysis(analyses[0]);
+              }}
+            />
+          </>
+        )}
 
         {/* How It Works */}
         <motion.div

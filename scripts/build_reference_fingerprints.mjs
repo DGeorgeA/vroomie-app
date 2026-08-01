@@ -46,6 +46,13 @@ const MAX_CHUNKS_SINGLE = 3;
 const MAX_CHUNKS_LOCAL = 8;
 const SYNTH_CLASSES = new Set(['Sine wave', 'Harmonic', 'Chirp tone', 'Sound effect', 'Theremin', 'Tuning fork', 'Sidetone', 'Dial tone', 'Synthesizer', 'Pulse']);
 
+// Explicitly excluded bucket references. water_pump_failure_critical.wav is a
+// synthetic sine tone, not a recording of a water pump — QC already rejects it,
+// but listing it here makes the exclusion intentional and stops it being
+// reported as a detection "failure" in audits. Replace the bucket file with a
+// real recording and delete this entry to enable the class.
+const EXCLUDED_REFERENCES = new Set(['water_pump_failure_critical.wav']);
+
 // ─── class map (for QC) ─────────────────────────────────────────────
 const csv = fs.readFileSync(path.join(__dirname, 'yamnet_class_map.csv'), 'utf8');
 const CLASSES = csv.trim().split('\n').slice(1).map(raw => {
@@ -233,8 +240,10 @@ const listRes = await fetch(LIST_URL, {
   headers: { apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}`, 'Content-Type': 'application/json' },
   body: JSON.stringify({ prefix: '', limit: 500 })
 });
-const wavs = (await listRes.json()).map(o => o.name).filter(n => n.toLowerCase().endsWith('.wav'));
-console.log(`[Factory] Bucket: ${wavs.length} WAVs`);
+const allWavs = (await listRes.json()).map(o => o.name).filter(n => n.toLowerCase().endsWith('.wav'));
+const wavs = allWavs.filter(n => !EXCLUDED_REFERENCES.has(n));
+console.log(`[Factory] Bucket: ${allWavs.length} WAVs (${allWavs.length - wavs.length} explicitly excluded)`);
+for (const n of allWavs) if (EXCLUDED_REFERENCES.has(n)) console.log(`[Factory] EXCLUDED ${n} (see EXCLUDED_REFERENCES)`);
 
 const faults = [];
 const qcLog = [];
