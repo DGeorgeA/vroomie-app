@@ -1,4 +1,43 @@
-# QA Report — Audio Pipeline v9.2 → v9.5 (+ adversarial addendum)
+# QA Report — Audio Pipeline v9.2 → v9.6 (+ adversarial addendum)
+
+## v9.6 — divergence resolution + measured operating point
+
+A parallel workspace pushed 5 commits (5fc93b0…c8afc7f) that loosened the
+detection gates while chasing the same "not detecting" complaint:
+`ANOMALY_THRESHOLD` 0.60→0.40, `SESSION_FRACTION` 0.45→0.10,
+`SESSION_MIN_ACCEPTED` 4→1 (an anomaly on a single 900 ms window), plus removal
+of family-vote aggregation, the native-rate AudioContext (iOS silence bug), and
+the 0.005 quiet-capture RMS gate.
+
+Measured on held-out data — that configuration **misdiagnoses 20% of healthy
+vehicles**:
+
+| Config | Healthy FP | Interferer FP | Fault recall |
+|---|---|---|---|
+| Their config (τ .40, 1 window, frac .10) | **7/35 = 20%** | 0/9 | 36/47 = 77% |
+| Prior validated (τ .60, ≥4 win, frac .45) | 0/35 | 0/9 | 32/47 = 68% |
+| **Shipped v9.6 (τ .45, margin .04, ≥3 win, frac .45)** | **0/35** | **0/9** | **34/47 = 72%** |
+
+The v9.6 point was found by grid search over τ × margin × fraction × min-windows,
+selecting maximum recall subject to zero healthy and zero interferer false
+positives. It beats the previous validated config on recall (+4pp) *and* keeps
+zero false alarms. Their commits are preserved in history (non-destructive
+merge); their `linearResample`/RMS-normalisation work reached the same
+level-invariance conclusion independently and is retained in spirit.
+
+Deliberately NOT adopted: the silence-abort bypass
+(`isMostlySilence && realAnomalies.length === 0`) — unvalidated and on the
+original "silence → Power Steering" complaint path; and always-on `phoneBand`
+for live audio, since the factory applies it to only one of six augmentation
+variants (it is not parity, and was outside the measured grid).
+
+Bucket acceptance at the shipped v9.6 constants: **54/55 files detected**
+(`scripts/audit_all_bucket_files.mjs`), only `water_pump_failure_critical.wav`
+(synthetic sine tone) missing. QA now asserts the operating point itself, so a
+future loosening cannot land silently.
+
+---
+
 
 ## v9.5 addendum — full-app audit (detection was fine; the REPORT layer was broken)
 

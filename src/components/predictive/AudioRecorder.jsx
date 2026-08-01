@@ -38,13 +38,14 @@ export default function AudioRecorder({
   // confirmed when >= 45% of gate-accepted windows are candidates for the same
   // fault FAMILY (fault_type), min 4 accepted windows. 0.45 is the measured
   // zero-false-positive floor (0.40 flags a held-out healthy startup session;
-  // worst 60 s healthy session measures 41.7% total candidates).
+  // worst 60 s healthy session measures 41.7% total candidates). v9.6: min 3
+  // windows (was 4) per the measured optimum grid — still 0 healthy FP.
   const sessionCandidatesRef = useRef(new Map()); // label -> {hits, severity, confSum, firstSeen}
   const sessionCandidateWindowsRef = useRef(0);   // total candidate windows (any label)
   const sessionCleanWindowsRef = useRef(0);       // gate-passed windows that stayed healthy
   const sessionRejectionsRef = useRef(0);         // silence / non-vehicle windows
   const SESSION_FRACTION = 0.45;
-  const SESSION_MIN_ACCEPTED = 4;
+  const SESSION_MIN_ACCEPTED = 3;
   const motionResultRef = useRef(null); // vehicle-vibration verdict for this session
   const sessionNoRefsRef = useRef(false); // reference artifact failed to load
 
@@ -589,7 +590,7 @@ export default function AudioRecorder({
             rejected: rejections,
             candidate_windows: sessionCandidateWindowsRef.current,
             capture_settings: getCaptureSettings(),
-            engine_build: 'v9.5'
+            engine_build: 'v9.6'
           },
         },
         // processed_at intentionally omitted — created_at is server-generated (DEFAULT now())

@@ -12,12 +12,14 @@ let faultReferences = [];   // augmented fault embeddings from the static artifa
 let anchorReferences = [];  // healthy + interferer anchor embeddings
 let isReferencesLoading = false;
 
-// Cosine Similarity Threshold for anomaly detection (0.0 to 1.0)
-// 0.60 per product requirement (2026-07-07): a >= 60% match against any bucket
-// reference categorizes the anomaly by that reference's file name. Precision at
-// this threshold depends on the domain gate + MARGIN rule + persistence below;
-// without them, 0.60 would match nearly any sustained sound.
-const ANOMALY_THRESHOLD = 0.60;
+// Cosine similarity threshold (0.0–1.0) for a window to be eligible.
+// 0.45: the measured optimum. Grid search over (threshold × margin × session
+// fraction × min-windows) on held-out data found τ=0.45 / margin=0.04 /
+// fraction=0.45 / min 3 windows maximises recall (72%) at ZERO healthy-vehicle
+// and ZERO interferer false positives. Precision comes from the domain gate +
+// margin + session fraction — never from this threshold alone (a bare 0.45
+// with single-window triggering measures 20% false positives on healthy cars).
+const ANOMALY_THRESHOLD = 0.45;
 
 // Margin rule: a fault match only counts if it beats the closest HEALTHY/interferer
 // anchor by this much. This inverts the old "find the closest anomaly" logic into
@@ -26,10 +28,11 @@ const ANOMALY_THRESHOLD = 0.60;
 // Windows that qualify are emitted as status 'candidate'; the SESSION decision
 // (>= 50% of accepted windows agreeing on one fault, min 4 windows) is applied
 // by AudioRecorder at stop. Calibrated on held-out data by
-// scripts/benchmark_discrimination.mjs + scripts/rule_explorer.mjs (v9.1 gate):
+// scripts/benchmark_discrimination.mjs + scripts/rule_explorer.mjs.
+// v9.6 measured optimum (τ=0.45, margin=0.04, fraction=0.45, min 3 windows):
 // healthy FP 0/35, interferer FP 0/9 (speech/TV/music/noise/fan/tone),
-// held-out raw fault recall 14/36, bucket reference replay 10/11.
-const ANCHOR_MARGIN = 0.05;
+// combined fault recall 34/47 = 72%, bucket file audit 54/55.
+const ANCHOR_MARGIN = 0.04;
 
 // ─── Acoustic domain gate ─────────────────────────────────────────────────────
 // YAMNet embeddings of ANY two audible sounds (speech, music, engines) routinely

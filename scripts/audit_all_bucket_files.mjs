@@ -19,7 +19,7 @@ import * as tf from '@tensorflow/tfjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const SR = 16000, WIN = SR;
-const TAU = 0.60, MARGIN = 0.05, FRACTION = 0.45, MIN_ACCEPTED = 4;
+const TAU = 0.45, MARGIN = 0.04, FRACTION = 0.45, MIN_ACCEPTED = 3;
 const SESSION_SEC = 12;
 const BUCKET = 'https://bdldmkhcdtlqxaopxlam.supabase.co/storage/v1/object/public/anomaly-patterns/';
 const LIST_URL = 'https://bdldmkhcdtlqxaopxlam.supabase.co/storage/v1/object/list/anomaly-patterns';
@@ -209,7 +209,8 @@ const listRes = await fetch(LIST_URL, {
   headers: { apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}`, 'Content-Type': 'application/json' },
   body: JSON.stringify({ prefix: '', limit: 500, sortBy: { column: 'name', order: 'asc' } })
 });
-const wavs = (await listRes.json()).map(o => o.name).filter(n => n.toLowerCase().endsWith('.wav'));
+let wavs = (await listRes.json()).map(o => o.name).filter(n => n.toLowerCase().endsWith('.wav'));
+if (process.env.SAMPLE) { const seen = new Set(); wavs = wavs.filter(n => { const k = n.replace(/_d+.wav$/i, ''); if (seen.has(k)) return false; seen.add(k); return true; }); }
 console.log(`[Audit] bucket: ${wavs.length} wav files — testing ALL through speaker-replay channel\n`);
 
 const results = [];

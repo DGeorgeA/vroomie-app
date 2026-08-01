@@ -52,9 +52,9 @@ function biquadFilter(signal, b0, b1, b2, a1, a2) {
   return out;
 }
 
-export function applyBandpass(signal, sampleRate = TARGET_SR) {
-  // High-pass at 50Hz
-  const fHP = 50;
+export function applyPhoneBand(signal, sampleRate = TARGET_SR) {
+  // High-pass at 100Hz
+  const fHP = 100;
   const wHP = 2 * Math.PI * fHP / sampleRate;
   const cosHP = Math.cos(wHP);
   const sinHP = Math.sin(wHP);
@@ -68,8 +68,8 @@ export function applyBandpass(signal, sampleRate = TARGET_SR) {
   
   let filtered = biquadFilter(signal, hp_b0, hp_b1, hp_b2, hp_a1, hp_a2);
   
-  // Low-pass at 5000Hz
-  const fLP = 5000;
+  // Low-pass at 7000Hz
+  const fLP = 7000;
   const wLP = 2 * Math.PI * fLP / sampleRate;
   const cosLP = Math.cos(wLP);
   const sinLP = Math.sin(wLP);

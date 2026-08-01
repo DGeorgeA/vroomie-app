@@ -16,18 +16,36 @@ const check = (name, cond, detail = '') => {
 };
 
 // ─── QA-1a: marginToConfidence mapping ──────────────────────────────────────
-// Replicates the engine formula; the source-text check below guards drift.
-const ANCHOR_MARGIN = 0.05;
+// Reads the qualifying margin FROM SOURCE so the test can never drift out of
+// sync with the shipped constant (it silently did when margin 0.05 -> 0.04).
+const engineSrcEarly = fs.readFileSync(path.join(ROOT, 'src', 'lib', 'mlEmbeddingEngine.js'), 'utf8');
+const marginMatch = engineSrcEarly.match(/const ANCHOR_MARGIN\s*=\s*([\d.]+)/);
+const ANCHOR_MARGIN = marginMatch ? parseFloat(marginMatch[1]) : NaN;
+check('ANCHOR_MARGIN is parseable from engine source', Number.isFinite(ANCHOR_MARGIN), `= ${ANCHOR_MARGIN}`);
 const marginToConfidence = (m) => Math.max(0.70, Math.min(0.97, 0.70 + 1.08 * (m - ANCHOR_MARGIN)));
-check('possibility at qualifying margin (0.05) is exactly 70%', marginToConfidence(0.05) === 0.70);
-check('possibility at decisive margin (0.30) saturates at 97%', marginToConfidence(0.30) === 0.97);
+check('possibility at the qualifying margin is exactly 70%', marginToConfidence(ANCHOR_MARGIN) === 0.70);
+check('possibility at decisive margin (+0.25) saturates at 97%', marginToConfidence(ANCHOR_MARGIN + 0.25) === 0.97);
 check('possibility never below 70% for any confirmed anomaly', marginToConfidence(-1) === 0.70 && marginToConfidence(0) === 0.70);
 check('possibility never above 97%', marginToConfidence(5) === 0.97);
 check('mapping is monotonic', marginToConfidence(0.10) > marginToConfidence(0.05) && marginToConfidence(0.20) > marginToConfidence(0.10));
 
-const engineSrc = fs.readFileSync(path.join(ROOT, 'src', 'lib', 'mlEmbeddingEngine.js'), 'utf8');
-check('engine source contains the tested formula constants',
-  engineSrc.includes('0.70 + 1.08 * (margin - ANCHOR_MARGIN)') && engineSrc.includes('const ANCHOR_MARGIN = 0.05'));
+const engineSrc = engineSrcEarly;
+check('engine uses the tested confidence formula',
+  engineSrc.includes('0.70 + 1.08 * (margin - ANCHOR_MARGIN)'));
+// Guard the measured operating point: loosening these without re-running the
+// grid is what produced a 20% false-positive rate on healthy vehicles.
+check('detection operating point matches the measured optimum',
+  /const ANOMALY_THRESHOLD\s*=\s*0\.45/.test(engineSrc) && ANCHOR_MARGIN === 0.04,
+  `threshold/margin = ${(engineSrc.match(/ANOMALY_THRESHOLD\s*=\s*([\d.]+)/) || [])[1]}/${ANCHOR_MARGIN}`);
+{
+  const rec = fs.readFileSync(path.join(ROOT, 'src', 'components', 'predictive', 'AudioRecorder.jsx'), 'utf8');
+  const frac = parseFloat((rec.match(/SESSION_FRACTION\s*=\s*([\d.]+)/) || [])[1]);
+  const minW = parseInt((rec.match(/SESSION_MIN_ACCEPTED\s*=\s*(\d+)/) || [])[1], 10);
+  check('session rule matches the measured optimum (>=45% of >=3 windows)',
+    frac === 0.45 && minW === 3, `fraction=${frac} minWindows=${minW}`);
+  check('family (fault_type) vote aggregation is active',
+    rec.includes('familyKey') && rec.includes('faultType'));
+}
 
 // ─── QA-1b: possibility statement format ────────────────────────────────────
 const recorderSrc = fs.readFileSync(path.join(ROOT, 'src', 'components', 'predictive', 'AudioRecorder.jsx'), 'utf8');
