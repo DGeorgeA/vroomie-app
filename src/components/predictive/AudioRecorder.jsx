@@ -20,7 +20,11 @@ export default function AudioRecorder({
   onAnalyserReady,
   vehicleId,
   isAnalyzing = false,
-  language = 'en-US'
+  language = 'en-US',
+  // Optional: lets a parent trigger the EXISTING start/stop flow (used by the
+  // Ethanol Check's "Check Now"). Purely additive — the recording pipeline,
+  // UI and session logic are identical regardless of who initiates it.
+  onRegisterControls = null
 }) {
   const [isRecording, setIsRecording] = useState(false);
   // Ref mirrors isRecording so callbacks (timers, async) never capture stale state
@@ -470,6 +474,19 @@ export default function AudioRecorder({
     }
   }, []); // no deps — reads from isRecordingRef instead of stale isRecording
 
+  // Expose the EXISTING start/stop to the parent (Ethanol "Check Now").
+  // Registered every render so the callbacks are never stale; consumers hold
+  // them in a ref. This adds no new pipeline — same buttons, same session.
+  useEffect(() => {
+    if (onRegisterControls) {
+      onRegisterControls({
+        start: () => { if (!isRecordingRef.current && !isAnalyzing) startRecording(); },
+        stop: () => { if (isRecordingRef.current) stopRecording(); },
+        isRecording: () => isRecordingRef.current,
+      });
+    }
+  });
+
   const handleAudioUpload = async (blob) => {
     try {
       const activeMode = getDetectionMode();
@@ -590,7 +607,7 @@ export default function AudioRecorder({
             rejected: rejections,
             candidate_windows: sessionCandidateWindowsRef.current,
             capture_settings: getCaptureSettings(),
-            engine_build: 'v9.6'
+            engine_build: 'v9.7'
           },
         },
         // processed_at intentionally omitted — created_at is server-generated (DEFAULT now())

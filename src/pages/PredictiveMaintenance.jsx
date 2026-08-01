@@ -54,12 +54,36 @@ export default function PredictiveMaintenance() {
     setEthanolTicketDismissed(true); // never re-prompt this session
   }, []);
 
+  // Handle to the recorder's EXISTING start/stop (registered by AudioRecorder).
+  const recorderControlsRef = useRef(null);
+  // Armed = the session that completes next should receive the ethanol
+  // interpretation. Ref (not state) so handleRecordingComplete never sees a
+  // stale closure.
+  const ethanolArmedRef = useRef(false);
+
+  // CHECK NOW → run the EXISTING recording flow (same mic, same waveform,
+  // same pipeline, same Stop button), then interpret the finished result.
   const runEthanolCheck = useCallback(() => {
     setShowEthanolTicket(false);
     setEthanolTicketDismissed(true);
-    // Screen the most recent completed analysis — existing results only.
-    const latest = analyses && analyses.length > 0 ? analyses[0] : null;
-    setEthanolResult(screenForEthanolIndicators(latest?.anomalies_detected || []));
+    const controls = recorderControlsRef.current;
+    if (controls && !controls.isRecording()) {
+      ethanolArmedRef.current = true;
+      controls.start(); // synchronous with the Check Now tap — gesture intact
+      toast.info('Ethanol Check started', {
+        description: 'Recording with the standard Vroomie engine — press Stop when done.',
+        duration: 5000,
+      });
+    } else if (controls && controls.isRecording()) {
+      // A session is already running — interpret it when it finishes.
+      ethanolArmedRef.current = true;
+      toast.info('Ethanol Check will use the recording in progress.');
+    } else {
+      // Recorder not mounted (should not happen on this page) — fall back to
+      // screening the most recent completed analysis rather than doing nothing.
+      const latest = analyses && analyses.length > 0 ? analyses[0] : null;
+      setEthanolResult(screenForEthanolIndicators(latest?.anomalies_detected || []));
+    }
   }, [analyses]);
 
   // ─── Post-recording feedback popup ────────────────────────────────
@@ -220,13 +244,29 @@ export default function PredictiveMaintenance() {
     setIsRecording(false);
     setAnalyser(null);
     setAudioContext(null);
-    
+
+    // Was this session initiated (or adopted) by the Ethanol Check?
+    const ethanolSession = ethanolArmedRef.current;
+    ethanolArmedRef.current = false;
+
     if (result && result.id) {
       setAnalyses(prev => {
         if (prev.some(r => r.id === result.id)) return prev;
         return [result, ...prev];
       });
-      setSelectedAnalysis(result);
+      if (ethanolSession) {
+        // Ethanol flow: interpret the finished CORE result. The screening is a
+        // pure consumer — the anomaly classification above is untouched.
+        setEthanolResult(screenForEthanolIndicators(result.anomalies_detected || []));
+      } else {
+        setSelectedAnalysis(result);
+      }
+    } else if (ethanolSession) {
+      // Session aborted (silence / no vehicle audio / engine error) — the
+      // recorder already toasted the specific reason.
+      toast.info('Ethanol Check could not complete', {
+        description: 'The recording produced no analysable vehicle audio. Please try again.',
+      });
     }
 
     // ── Inactivity-based feedback popup ────────────────────────────────────
@@ -413,9 +453,11 @@ export default function PredictiveMaintenance() {
                   <AudioRecorder
                     vehicleId={selectedVehicle?.id || 'guest-vehicle'}
                     onRecordingComplete={handleRecordingComplete}
+                    onRegisterControls={(c) => { recorderControlsRef.current = c; }}
                     onRecordingStart={handleRecordingStart}
                     onAnalyserReady={handleAnalyserReady}
                     language={language}
+                    onRegisterControls={(controls) => { recorderControlsRef.current = controls; }}
                   />
                 </div>
               </div>
