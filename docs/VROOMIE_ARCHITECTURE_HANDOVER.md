@@ -24,7 +24,7 @@ Vroomie records engine audio through a phone microphone and identifies mechanica
 | Metric | Value |
 |---|---|
 | Bucket reference files detected (played at mic) | **54 / 55** |
-| Healthy-vehicle false positives | **0 / 35** |
+| Healthy-vehicle false positives | **9 / 140 (6.4%)** — see correction below |
 | Interferer false positives (speech, TV, music, noise, fan, tone) | **0 / 9** |
 | Held-out real-world fault recall | **34 / 47 (72%)** |
 | Long-session (60 s) healthy false positives | **0 / 22** |
@@ -33,6 +33,17 @@ Vroomie records engine audio through a phone microphone and identifies mechanica
 The single non-detected file is `water_pump_failure_critical.wav`, which is a synthetic sine tone, not a recording. It is explicitly excluded by design (see §5.9).
 
 **Core architectural principle:** detection asks *"is this closer to a known fault than to a healthy engine?"* — never *"which fault is closest?"*. That distinction is the entire reason the system stopped hallucinating. See §3.3.
+
+> **CORRECTION (RCA, Prompt 2/3).** An earlier revision of this document reported
+> "0 / 35 healthy false positives". That figure was measured on a **stride
+> sample** — 15 of ~132 available held-out idle clips, plus 10 startup and 10
+> brakes — selected by `pickOdd(dir, n)` in `benchmark_discrimination.mjs`. A
+> sparse clean sample is **not** a false-positive rate. Sweeping *every*
+> held-out healthy clip (`scripts/rca_healthy_fp_sweep.mjs`, 140 clips, shipped
+> operating point) measures **9 / 140 = 6.4%**. Eight of the nine are absorbed
+> by `power_steering`, which is 58.8% of the reference set — dataset dominance,
+> not a threshold problem. Treat 6.4% as the real baseline and never quote a
+> stride sample as a rate again.
 
 ---
 
@@ -342,7 +353,8 @@ Before merging any change to detection:
 
 - [ ] `node scripts/qa_unit_tests.mjs` passes
 - [ ] `node scripts/qa_ethanol_feature.mjs` passes
-- [ ] `node scripts/benchmark_discrimination.mjs` → healthy FP still 0/35, interferer FP still 0/9
+- [ ] `node scripts/rca_healthy_fp_sweep.mjs` → healthy FP no worse than the 9/140 baseline (sweeps EVERY held-out clip; do **not** substitute a stride sample)
+- [ ] `node scripts/benchmark_discrimination.mjs` → interferer FP still 0/9
 - [ ] `node scripts/audit_all_bucket_files.mjs` → still ≥54 detected
 - [ ] `npm run build` clean
 - [ ] Browser E2E with injected audio produces a correct flagged report
