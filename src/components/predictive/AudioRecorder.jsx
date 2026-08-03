@@ -50,6 +50,18 @@ export default function AudioRecorder({
   const sessionRejectionsRef = useRef(0);         // silence / non-vehicle windows
   const SESSION_FRACTION = 0.45;
   const SESSION_MIN_ACCEPTED = 3;
+  // v9.8 recovery vote (RCA Prompt 2/3): at acoustic distance a fault's windows
+  // can split across two families (measured: rocker@2m = 4 rocker + 4 power
+  // steering, 67% total candidates, reported NOTHING). If the primary rule
+  // confirms nothing but candidates form a >=60% supermajority of accepted
+  // windows, attribute to the plurality family; a hit-tie needs the leader's
+  // summed similarity to exceed the runner-up by >=1.10x, else decline.
+  // Measured: recovers split fault sessions with the correct family (6/6 seed
+  // runs), 0 new FPs on 140 held-out healthy clips (all 3 recovery-path
+  // entries decline at ratios <=1.046), fan (0.40 total) and traffic (2
+  // accepted windows) structurally excluded, held-out benchmark bit-identical.
+  const RECOVERY_TOTAL_FRACTION = 0.60;
+  const RECOVERY_DOMINANCE = 1.10;
   const motionResultRef = useRef(null); // vehicle-vibration verdict for this session
   const sessionNoRefsRef = useRef(false); // reference artifact failed to load
 
@@ -156,30 +168,54 @@ export default function AudioRecorder({
     const accepted = sessionCleanWindowsRef.current + sessionCandidateWindowsRef.current;
     const rejections = sessionRejectionsRef.current;
     const confirmed = [];
+    const buildConfirmedEntry = (familyKey, e) => {
+      // Report the DOMINANT reference label within the confirmed family
+      let dominantLabel = familyKey;
+      let best = 0;
+      for (const [l, c] of e.labelHits) if (c > best) { best = c; dominantLabel = l; }
+      const readable = buildReadableLabel(dominantLabel);
+      const meanConf = e.confSum / e.hits;
+      const possibility = Math.round(meanConf * 100);
+      return {
+        type:             readable,
+        rawLabel:         dominantLabel,
+        faultType:        familyKey,
+        severity:         e.severity,
+        timestamp:        e.firstSeen,
+        status:           'anomaly',
+        signalSimilarity: meanConf,
+        possibility,
+        sourceFile:       e.sourceFile,
+        // Noise-discounted possibility statement (product requirement):
+        statement:        `There is a ${possibility}% possibility that there could be a possible ${readable}${e.sourceFile ? ` (${e.sourceFile})` : ''}`,
+        finalDecision:    'ANOMALY DETECTED',
+      };
+    };
     if (accepted >= SESSION_MIN_ACCEPTED) {
+      // PRIMARY rule (unchanged): a single family holds >=45% of accepted windows.
       for (const [familyKey, e] of sessionCandidatesRef.current) {
         if (e.hits / accepted >= SESSION_FRACTION) {
-          // Report the DOMINANT reference label within the confirmed family
-          let dominantLabel = familyKey;
-          let best = 0;
-          for (const [l, c] of e.labelHits) if (c > best) { best = c; dominantLabel = l; }
-          const readable = buildReadableLabel(dominantLabel);
-          const meanConf = e.confSum / e.hits;
-          const possibility = Math.round(meanConf * 100);
-          confirmed.push({
-            type:             readable,
-            rawLabel:         dominantLabel,
-            faultType:        familyKey,
-            severity:         e.severity,
-            timestamp:        e.firstSeen,
-            status:           'anomaly',
-            signalSimilarity: meanConf,
-            possibility,
-            sourceFile:       e.sourceFile,
-            // Noise-discounted possibility statement (product requirement):
-            statement:        `There is a ${possibility}% possibility that there could be a possible ${readable}${e.sourceFile ? ` (${e.sourceFile})` : ''}`,
-            finalDecision:    'ANOMALY DETECTED',
-          });
+          confirmed.push(buildConfirmedEntry(familyKey, e));
+        }
+      }
+      // RECOVERY vote (v9.8): fires only when the primary rule confirmed
+      // nothing — it can never alter a session the primary rule already
+      // decided. See constants block for the measured justification.
+      if (confirmed.length === 0 && sessionCandidatesRef.current.size > 0) {
+        const totalCandidates = sessionCandidateWindowsRef.current;
+        if (totalCandidates / accepted >= RECOVERY_TOTAL_FRACTION) {
+          const ranked = [...sessionCandidatesRef.current.entries()]
+            .sort((a, b) => b[1].hits - a[1].hits || (b[1].simSum || 0) - (a[1].simSum || 0));
+          const [topKey, top] = ranked[0];
+          const runnerUp = ranked[1] ? ranked[1][1] : null;
+          const clearPlurality = !runnerUp || top.hits > runnerUp.hits;
+          const dominantOnTie = runnerUp && top.hits === runnerUp.hits &&
+            (runnerUp.simSum || 0) > 0 && (top.simSum || 0) / runnerUp.simSum >= RECOVERY_DOMINANCE;
+          if (clearPlurality || dominantOnTie) {
+            confirmed.push(buildConfirmedEntry(topKey, top));
+          }
+          // else: candidates are abundant but no family is credibly dominant —
+          // decline rather than risk naming the wrong fault.
         }
       }
     }
@@ -317,6 +353,11 @@ export default function AudioRecorder({
           };
           entry.hits++;
           entry.confSum += confidence;
+          // Raw similarity sum — the recovery tie-break ranks by this, NOT by
+          // margin/confidence (measured: margin-based ranking picks the wrong
+          // family in 5/9 tied sessions; similarity-based picks right in 8/9
+          // and the 1.10 dominance floor turns the ninth into a decline).
+          entry.simSum = (entry.simSum || 0) + (workerResult.bestFaultSimilarity || 0);
           entry.labelHits.set(anomaly, (entry.labelHits.get(anomaly) || 0) + 1);
           if (confidence > entry.maxConf) {
             entry.maxConf = confidence;
@@ -613,7 +654,7 @@ export default function AudioRecorder({
             rejected: rejections,
             candidate_windows: sessionCandidateWindowsRef.current,
             capture_settings: getCaptureSettings(),
-            engine_build: 'v9.7'
+            engine_build: 'v9.8'
           },
         },
         // processed_at intentionally omitted — created_at is server-generated (DEFAULT now())

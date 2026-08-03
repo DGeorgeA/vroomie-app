@@ -146,13 +146,21 @@ function runSession(pcm) {
     for (const a of ANCH) { const c = cosine(emb, a); if (c > ba) ba = c; }
     const margin = bf - ba;
     if (margin > worstMargin) { worstMargin = margin; worstFamily = bfam; }
-    if (bf >= TAU && margin >= MARGIN) votes.set(bfam, (votes.get(bfam) || 0) + 1);
+    if (bf >= TAU && margin >= MARGIN) {
+      const v = votes.get(bfam) || { hits: 0, marginSum: 0 };
+      v.hits++; v.marginSum += margin;
+      votes.set(bfam, v);
+    }
   }
   let fam = null, frac = 0;
   if (accepted >= MIN_ACCEPTED) {
-    for (const [f, h] of votes) { const r = h / accepted; if (r >= FRACTION && r > frac) { fam = f; frac = r; } }
+    for (const [f, v] of votes) { const r = v.hits / accepted; if (r >= FRACTION && r > frac) { fam = f; frac = r; } }
   }
-  return { accepted, confirmedFamily: fam, fraction: +frac.toFixed(3), worstMargin: +worstMargin.toFixed(4), worstFamily };
+  const votesOut = {};
+  let totalCandidates = 0;
+  for (const [f, v] of votes) { votesOut[f] = { hits: v.hits, marginSum: +v.marginSum.toFixed(4) }; totalCandidates += v.hits; }
+  return { accepted, confirmedFamily: fam, fraction: +frac.toFixed(3), worstMargin: +worstMargin.toFixed(4), worstFamily,
+           votes: votesOut, totalCandidates };
 }
 
 const DIRS = [

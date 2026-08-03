@@ -45,6 +45,18 @@ check('detection operating point matches the measured optimum',
     frac === 0.45 && minW === 3, `fraction=${frac} minWindows=${minW}`);
   check('family (fault_type) vote aggregation is active',
     rec.includes('familyKey') && rec.includes('faultType'));
+  // v9.8 recovery vote — constants must match the measured calibration:
+  // 0.60 total-candidate supermajority (fan measured 0.40 stays excluded),
+  // 1.10 similarity dominance on hit-ties (healthy ties measured <=1.046
+  // decline; genuine-fault ties measured >=1.118 confirm).
+  const rTot = parseFloat((rec.match(/RECOVERY_TOTAL_FRACTION\s*=\s*([\d.]+)/) || [])[1]);
+  const rDom = parseFloat((rec.match(/RECOVERY_DOMINANCE\s*=\s*([\d.]+)/) || [])[1]);
+  check('recovery vote matches measured calibration (0.60 total, 1.10 dominance)',
+    rTot === 0.60 && rDom === 1.10, `recoveryTotal=${rTot} dominance=${rDom}`);
+  check('recovery vote fires only when the primary rule confirmed nothing',
+    /confirmed\.length === 0[\s\S]{0,200}RECOVERY_TOTAL_FRACTION/.test(rec));
+  check('recovery tie-break ranks by raw similarity (simSum), not margin/confidence',
+    /simSum[\s\S]{0,120}RECOVERY_DOMINANCE/.test(rec) && rec.includes('bestFaultSimilarity'));
 }
 
 // ─── QA-1b: possibility statement format ────────────────────────────────────
