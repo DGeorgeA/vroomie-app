@@ -563,6 +563,46 @@ export default function AudioRecorder({
         avgConfidence
       } = computeSessionOutcome();
 
+      // ── Abort telemetry: persist EVERY aborted session as a status:'rejected'
+      // row (hidden from history UIs, which filter this status out). Field
+      // failures previously left ZERO remote evidence — "Unable to detect"
+      // reports could not be diagnosed without physical access to the device.
+      // Fire-and-forget: persistence must never delay or break the abort UX.
+      const persistAbortDiagnostics = (abortReason) => {
+        try {
+          const bd = sessionRejectBreakdownRef.current;
+          const heardAs = [...bd.domainTop1.entries()]
+            .sort((a, b) => b[1] - a[1]).slice(0, 5)
+            .map(([cls, n]) => `${cls} x${n}`);
+          supabase.from('analyses').insert({
+            vehicle_id: vehicleId || null,
+            duration_seconds: recordingTimeRef.current,
+            status: 'rejected',
+            confidence_score: 0,
+            anomalies_detected: [],
+            detection_mode: getDetectionMode(),
+            final_decision: 'ABORTED',
+            analysis_result: {
+              aborted: true,
+              abort_reason: abortReason,
+              session_diagnostics: {
+                windows_analyzed: accepted + rejections,
+                accepted,
+                rejected: rejections,
+                rejected_silence: bd.silence,
+                rejected_domain: bd.domain,
+                domain_heard_as: heardAs,
+                capture_settings: getCaptureSettings(),
+                engine_build: 'v9.9'
+              }
+            }
+          }).then(({ error }) => {
+            if (error) console.warn('[Vroomie] Abort telemetry not persisted:', error.message);
+            else console.log('[Vroomie] Abort telemetry persisted for remote diagnosis.');
+          });
+        } catch (e) { console.warn('[Vroomie] Abort telemetry failed:', e.message); }
+      };
+
       // ── Engine-health gate: if NOTHING was analyzed (YAMNet never loaded,
       // session too short) or the reference artifact failed to load, a report
       // would be fabricated from zero evidence — abort with a specific error
@@ -570,12 +610,14 @@ export default function AudioRecorder({
       if (accepted + rejections === 0) {
         console.error('[Vroomie] Zero windows analyzed — model not ready or session too short. Aborting report.');
         toast.error("The audio engine could not analyze this session. Record for at least 10 seconds and check your connection.", { duration: 6000 });
+        persistAbortDiagnostics('zero_windows_analyzed');
         if (onRecordingComplete) onRecordingComplete(null);
         return;
       }
       if (sessionNoRefsRef.current && accepted === 0) {
         console.error('[Vroomie] Reference dataset failed to load — aborting report.');
         toast.error("Fault reference data failed to load. Check your connection and try again.", { duration: 6000 });
+        persistAbortDiagnostics('reference_artifact_failed_to_load');
         if (onRecordingComplete) onRecordingComplete(null);
         return;
       }
@@ -594,6 +636,7 @@ export default function AudioRecorder({
           description: `${why} (${bd.silence} quiet / ${bd.domain} non-vehicle of ${rejections + accepted} windows)`,
           duration: 8000,
         });
+        persistAbortDiagnostics('mostly_rejected_non_vehicle');
         if (onRecordingComplete) onRecordingComplete(null);
         return;
       }
