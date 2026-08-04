@@ -38,8 +38,14 @@ const PEAK_FACTOR = 1.6;    // peak must exceed its band's mean by this factor
 const FANOUT = 6;           // targets paired per anchor peak
 const DT_MIN = 1, DT_MAX = 48, DF_MAX = 160;
 
-// Decision thresholds — BOTH must hold (see measured operating point above).
-export const MIN_COHERENT_SCORE = 400;
+// Decision thresholds — BOTH must hold. Recalibrated against the SHIPPED
+// 9-ref index (scripts/review_constellation_shipped.mjs): worst negative over
+// 115 healthy clips + speech/music/fan/traffic = score 443 / normalized 0.040;
+// weakest passing positive condition = score 621 / normalized 0.06. 600/0.05
+// keeps every historically passing capture condition while restoring >=1.4x
+// headroom on both criteria (the original 400 floor was BREACHED by a healthy
+// brakes clip at 443 — raw score alone was never separable).
+export const MIN_COHERENT_SCORE = 600;
 export const MIN_NORMALIZED_SCORE = 0.05;
 /** Rolling listen window. Shazam-like: identify from a few seconds of audio. */
 export const LISTEN_SECONDS = 5;
@@ -202,8 +208,14 @@ export function matchHashes(fp) {
     if (local > bestScore) { secondScore = bestScore; bestScore = local; bestId = refId; }
     else if (local > secondScore) secondScore = local;
   }
-  const normalized = bestScore / fp.h.length;
   const ref = bestId >= 0 ? refs[bestId] : null;
+  // Length-corrected normalization (pre-ship review F2): divide by the SMALLER
+  // of query and reference hash counts. Dividing by query hashes alone makes a
+  // reference shorter than the listen window structurally unable to reach the
+  // threshold — measured: a genuine replay of a 1.5 s reference capped at
+  // 0.035 against a 0.05 requirement.
+  const denom = Math.max(1, Math.min(fp.h.length, ref && ref.hash_count ? ref.hash_count : fp.h.length));
+  const normalized = bestScore / denom;
   return {
     matched: !!ref && bestScore >= MIN_COHERENT_SCORE && normalized >= MIN_NORMALIZED_SCORE,
     score: bestScore, secondScore, normalized, ref,

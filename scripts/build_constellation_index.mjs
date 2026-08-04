@@ -27,7 +27,12 @@ const BUCKET = 'https://bdldmkhcdtlqxaopxlam.supabase.co/storage/v1/object/publi
 const LIST_URL = 'https://bdldmkhcdtlqxaopxlam.supabase.co/storage/v1/object/list/anomaly-patterns';
 const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJkbGRta2hjZHRscXhhb3B4bGFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjM4NDMwNDYsImV4cCI6MjA3OTQxOTA0Nn0.v3lbUrwF6ZDPn-z8NYE01h7Fs1cTa1TAxQlTAsY3xbU';
 const EXCLUDED = new Set(['water_pump_failure_critical.wav']);   // synthetic tone
-const MAX_PS_REPRESENTATIVES = 4;
+// Pre-ship review (scripts/review_constellation_shipped.mjs) measured that
+// 1.5 s references CANNOT pass their own replay (PS_10 looped: 385/0.035 vs
+// 400/0.05) and their dense near-duplicate hashes inflated the worst healthy
+// negative from 237 to 443. References shorter than this are excluded; the
+// embedding path covers those files (measured DETECTED in the v9.9 matrix).
+const MIN_REF_SECONDS = 4.0;
 
 function decodeWav(buf) {
   let pos = 12, fmt = null, off = 0, len = 0;
@@ -83,12 +88,19 @@ let indexed = 0;
 function addReference(name, pcm16, sourceFile) {
   const id = refs.length;
   if (id > 4095) { console.warn('reference id overflow — skipping', name); return; }
+  if (pcm16.length / SR < MIN_REF_SECONDS) {
+    console.log(`  SKIP ${name} (${(pcm16.length / SR).toFixed(1)}s < ${MIN_REF_SECONDS}s minimum — see review note)`);
+    return;
+  }
   const fp = computeConstellationHashes(pcm16);
   if (fp.h.length === 0) { console.warn(`  ${name}: no hashes, skipped`); return; }
   let maxT = 0;
   for (let i = 0; i < fp.t.length; i++) if (fp.t[i] > maxT) maxT = fp.t[i];
   if (maxT > 0xfffff) { console.warn(`  ${name}: too long to pack, skipped`); return; }
-  refs.push({ ...deriveMeta(name), source_file: sourceFile });
+  // hash_count ships in the artifact: the runtime normalizes coherent score by
+  // min(queryHashes, refHashes) so shorter references are not structurally
+  // unable to reach the normalized threshold.
+  refs.push({ ...deriveMeta(name), source_file: sourceFile, hash_count: fp.h.length });
   for (let i = 0; i < fp.h.length; i++) pairs.push({ h: fp.h[i], packed: (id << 20) | fp.t[i] });
   indexed++;
   console.log(`  ${name.padEnd(44)} ${(pcm16.length / SR).toFixed(1)}s  hashes=${fp.h.length}`);
@@ -114,7 +126,6 @@ try {
     body: JSON.stringify({ prefix: '', limit: 200, sortBy: { column: 'name', order: 'asc' } }),
   });
   const wavs = (await res.json()).filter(o => /\.wav$/i.test(o.name)).map(o => o.name);
-  let psCount = 0;
   for (const name of wavs) {
     if (EXCLUDED.has(name)) { console.log(`  SKIP ${name} (excluded)`); continue; }
     const meta = deriveMeta(name);
@@ -122,7 +133,9 @@ try {
     // Skip classes already covered by a 10 s original, except keep a few PS
     // representatives (that family has genuinely distinct recordings).
     if (covered.has(meta.fault_type) && !isPS) continue;
-    if (isPS) { if (psCount >= MAX_PS_REPRESENTATIVES) continue; psCount++; }
+    // PS bucket variants are 1.5 s — all fall below MIN_REF_SECONDS and are
+    // covered by the 10 s PowerSteeringPump reference + the embedding path.
+    if (isPS) continue;
     try {
       const buf = Buffer.from(await (await fetch(BUCKET + encodeURIComponent(name))).arrayBuffer());
       const { pcm, rate } = decodeWav(buf);
