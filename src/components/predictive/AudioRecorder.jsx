@@ -67,6 +67,8 @@ export default function AudioRecorder({
   // Per-stage rejection breakdown for field diagnosability of
   // "Unable to detect" aborts: {silence, domain, domainTop1: Map<class,count>}
   const sessionRejectBreakdownRef = useRef({ silence: 0, domain: 0, domainTop1: new Map() });
+  // Shazam-style fingerprint hit for this session (null until one fires).
+  const fingerprintHitRef = useRef(null);
 
   // Vehicle-vibration verdict is an ANNOTATION, not a hard gate: controlled
   // bench tests (reference samples replayed at a stationary phone) must still
@@ -194,7 +196,36 @@ export default function AudioRecorder({
         finalDecision:    'ANOMALY DETECTED',
       };
     };
-    if (accepted >= SESSION_MIN_ACCEPTED) {
+    // ── Shazam fast path wins outright ──────────────────────────────────────
+    // A coherent fingerprint match identified the exact reference recording.
+    // It is independent of (and far stricter than) the window-fraction rule, so
+    // it is reported directly and is NOT subject to the domain-gate abort —
+    // the audio was positively identified, so "unable to detect" would be
+    // plainly wrong. Confidence is fixed high because the coherence test
+    // already cleared a 2.5x margin over every measured negative.
+    const fpHit = fingerprintHitRef.current;
+    if (fpHit) {
+      const readable = buildReadableLabel(fpHit.anomaly);
+      const possibility = 97;
+      confirmed.push({
+        type:             readable,
+        rawLabel:         fpHit.anomaly,
+        faultType:        fpHit.faultType,
+        severity:         fpHit.severity,
+        timestamp:        fpHit.firstSeen,
+        status:           'anomaly',
+        signalSimilarity: possibility / 100,
+        possibility,
+        sourceFile:       fpHit.sourceFile,
+        matchMethod:      'acoustic_fingerprint',
+        fingerprintScore: fpHit.score,
+        listenSeconds:    fpHit.listenSeconds,
+        statement:        `There is a ${possibility}% possibility that there could be a possible ${readable}${fpHit.sourceFile ? ` (${fpHit.sourceFile})` : ''}`,
+        finalDecision:    'ANOMALY DETECTED',
+      });
+    }
+
+    if (!fpHit && accepted >= SESSION_MIN_ACCEPTED) {
       // PRIMARY rule (unchanged): a single family holds >=45% of accepted windows.
       for (const [familyKey, e] of sessionCandidatesRef.current) {
         if (e.hits / accepted >= SESSION_FRACTION) {
@@ -250,6 +281,7 @@ export default function AudioRecorder({
       sessionRejectionsRef.current = 0;
       sessionNoRefsRef.current = false;
       sessionRejectBreakdownRef.current = { silence: 0, domain: 0, domainTop1: new Map() };
+      fingerprintHitRef.current = null;   // must not leak into the next session
 
       isRecordingRef.current = true;   // ← update ref FIRST (used by async callbacks)
       setIsRecording(true);            // ← triggers waveform BURST immediately
@@ -339,6 +371,36 @@ export default function AudioRecorder({
         const severity   = workerResult.severity    || 'medium';
         const rms        = workerResult.rms         || features.rms || 0;
         const reason     = workerResult.reason      || '';
+
+        // ── Shazam-style fingerprint hit ────────────────────────────────────
+        // A coherent constellation match identifies the exact reference
+        // recording being replayed. Time-offset coherence is a far stronger
+        // condition than similarity (measured: worst positive 2.5x above the
+        // worst of 115 healthy clips + all interferers), so this confirms the
+        // session immediately rather than waiting for the window-fraction rule.
+        if (status === 'fingerprint_match' && anomaly) {
+          if (!fingerprintHitRef.current) {
+            fingerprintHitRef.current = {
+              anomaly,
+              faultType: workerResult.faultType || anomaly,
+              severity: workerResult.severity || 'high',
+              sourceFile: workerResult.sourceFile || null,
+              score: workerResult.score,
+              normalized: workerResult.normalized,
+              listenSeconds: workerResult.listenSeconds,
+              firstSeen: recordingTimeRef.current,
+            };
+            const readable = buildReadableLabel(anomaly);
+            toast.success(`Identified: ${readable}`, {
+              description: `Acoustic fingerprint matched in ${workerResult.listenSeconds}s — finalising your report.`,
+              duration: 6000,
+            });
+            // Finalise straight away: this is the Shazam behaviour — identify
+            // and report, rather than making the user wait out the session.
+            if (isRecordingRef.current) stopRecording();
+          }
+          return;
+        }
 
         if (status === 'normal' && reason.startsWith('rejected_')) {
           sessionRejectionsRef.current++;
@@ -486,7 +548,9 @@ export default function AudioRecorder({
         const { confirmed: realAnomalies, isMostlyRejected: isMostlySilence } = computeSessionOutcome();
 
         if (isVoiceAlertsEnabled) {
-          if (isMostlySilence) {
+          // A fingerprint identification means the audio WAS identified — never
+          // announce "unable to detect" over a positive result.
+          if (!fingerprintHitRef.current && isMostlySilence) {
             speakUnableToDetect(language);
           } else if (realAnomalies.length === 0) {
             speakScanResult([], language); // "No anomalies found"
@@ -593,7 +657,7 @@ export default function AudioRecorder({
                 rejected_domain: bd.domain,
                 domain_heard_as: heardAs,
                 capture_settings: getCaptureSettings(),
-                engine_build: 'v9.9'
+                engine_build: 'v10.0'
               }
             }
           }).then(({ error }) => {
@@ -607,14 +671,18 @@ export default function AudioRecorder({
       // session too short) or the reference artifact failed to load, a report
       // would be fabricated from zero evidence — abort with a specific error
       // instead of publishing a fake-HEALTHY result.
-      if (accepted + rejections === 0) {
+      // A fingerprint identification bypasses every abort gate below: the
+      // recording WAS identified, so no "could not analyze" message applies.
+      const hasFingerprintHit = !!fingerprintHitRef.current;
+
+      if (!hasFingerprintHit && accepted + rejections === 0) {
         console.error('[Vroomie] Zero windows analyzed — model not ready or session too short. Aborting report.');
         toast.error("The audio engine could not analyze this session. Record for at least 10 seconds and check your connection.", { duration: 6000 });
         persistAbortDiagnostics('zero_windows_analyzed');
         if (onRecordingComplete) onRecordingComplete(null);
         return;
       }
-      if (sessionNoRefsRef.current && accepted === 0) {
+      if (!hasFingerprintHit && sessionNoRefsRef.current && accepted === 0) {
         console.error('[Vroomie] Reference dataset failed to load — aborting report.');
         toast.error("Fault reference data failed to load. Check your connection and try again.", { duration: 6000 });
         persistAbortDiagnostics('reference_artifact_failed_to_load');
@@ -622,7 +690,7 @@ export default function AudioRecorder({
         return;
       }
 
-      if (isMostlySilence) {
+      if (!hasFingerprintHit && isMostlySilence) {
         // Tell the user (and the console) WHICH stage rejected the audio —
         // "try again" without a why is undiagnosable from the field.
         const bd = sessionRejectBreakdownRef.current;
@@ -723,7 +791,7 @@ export default function AudioRecorder({
             rejected: rejections,
             candidate_windows: sessionCandidateWindowsRef.current,
             capture_settings: getCaptureSettings(),
-            engine_build: 'v9.9'
+            engine_build: 'v10.0'
           },
         },
         // processed_at intentionally omitted — created_at is server-generated (DEFAULT now())

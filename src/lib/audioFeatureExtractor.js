@@ -1,5 +1,6 @@
 import { Logger } from './logger';
 import { initializeEmbeddingEngine, getAudioAnalysis, findBestMatch } from './mlEmbeddingEngine';
+import { loadConstellationIndex, createRollingMatcher, isIndexReady } from './constellationMatcher';
 
 // ─── Module-level state ───────────────────────────────────
 let isExtracting        = false;
@@ -8,6 +9,10 @@ let mediaStreamSource   = null;
 let mediaStream         = null;
 let scriptProcessor     = null;
 let onFeaturesCallback  = null;
+// Shazam-style fast path: rolling fingerprint listener. Additive — it never
+// suppresses the embedding pipeline, and a missing index simply disables it.
+let rollingMatcher      = null;
+let constellationFired  = false;
 
 const TARGET_SR = 16000;
 const SCRIPT_BUFFER_SIZE = 4096;
@@ -59,12 +64,27 @@ export async function startExtraction(callback) {
 
   isExtracting       = true;
   onFeaturesCallback = callback;
+  constellationFired = false;
+  rollingMatcher     = null;
 
   Logger.info('🎤 [START] Requesting microphone and loading YAMNet...');
 
   try {
     // Eagerly load YAMNet
     await initializeEmbeddingEngine();
+
+    // Fingerprint index loads in parallel and NEVER blocks capture: if it is
+    // unavailable the session simply runs on the embedding pipeline alone.
+    loadConstellationIndex()
+      .then(ok => {
+        if (ok && isExtracting) {
+          rollingMatcher = createRollingMatcher();
+          Logger.info('[Constellation] fingerprint index ready — fast path armed');
+        } else if (!ok) {
+          Logger.warn('[Constellation] index unavailable — embedding path only');
+        }
+      })
+      .catch(() => { /* fail safe: fast path stays disabled */ });
 
     mediaStream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
@@ -183,6 +203,39 @@ function useScriptProcessorMainThreadCapture(sr) {
         // Without (2), quiet phone-mic captures embed differently from the
         // loudness-normalized references and similarity collapses.
         const pcm16k = resampleTo16k(snapshot, sr);
+
+        // ── Shazam-style fast path ──────────────────────────────────────────
+        // Fingerprint the rolling listen window BEFORE the embedding work. A
+        // coherent hash match identifies the exact reference recording being
+        // replayed and reports in <= 5 s. Fed the un-normalized 16 kHz audio:
+        // constellation peaks are relative maxima, so they are already
+        // level-invariant and normalization would only add rounding.
+        if (rollingMatcher && !constellationFired) {
+          rollingMatcher.push(pcm16k);
+          try {
+            const cm = rollingMatcher.tryMatch();
+            if (cm && cm.matched && onFeaturesCallback) {
+              constellationFired = true;   // report once per session
+              Logger.info(`[Constellation] MATCH ${cm.ref.label} score=${cm.score} norm=${cm.normalized.toFixed(3)} after ${rollingMatcher.secondsBuffered().toFixed(1)}s`);
+              onFeaturesCallback({
+                _workerResult: {
+                  status: 'fingerprint_match',
+                  anomaly: cm.ref.label,
+                  faultType: cm.ref.fault_type,
+                  severity: cm.ref.severity || 'high',
+                  sourceFile: cm.ref.source_file,
+                  score: cm.score,
+                  normalized: cm.normalized,
+                  listenSeconds: +rollingMatcher.secondsBuffered().toFixed(1),
+                },
+                rms,
+              });
+            }
+          } catch (fpErr) {
+            Logger.warn('[Constellation] match failed, continuing with embedding path:', fpErr?.message);
+          }
+        }
+
         const normalized = rmsNormalize(pcm16k, 0.05);
         const analysis = await getAudioAnalysis(normalized);
         if (!analysis) {
@@ -229,6 +282,8 @@ function useScriptProcessorMainThreadCapture(sr) {
 
 export function stopExtraction() {
   isExtracting = false;
+  rollingMatcher = null;
+  constellationFired = false;
 
   if (scriptProcessor) {
     scriptProcessor.disconnect();
