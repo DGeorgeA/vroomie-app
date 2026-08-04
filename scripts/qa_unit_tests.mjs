@@ -38,6 +38,16 @@ check('detection operating point matches the measured optimum',
   /const ANOMALY_THRESHOLD\s*=\s*0\.45/.test(engineSrc) && ANCHOR_MARGIN === 0.04,
   `threshold/margin = ${(engineSrc.match(/ANOMALY_THRESHOLD\s*=\s*([\d.]+)/) || [])[1]}/${ANCHOR_MARGIN}`);
 {
+  // v9.9 speaker-coloration rescue: constants must match the measured boundary
+  // (29/70 vetoed fault windows recovered, 0/108 speech/music admitted).
+  const wf = parseFloat((engineSrc.match(/WEAK_INTERFERER_VEHICLE_FLOOR\s*=\s*([\d.]+)/) || [])[1]);
+  const wc = parseFloat((engineSrc.match(/WEAK_INTERFERER_CEILING\s*=\s*([\d.]+)/) || [])[1]);
+  check('speaker-rescue gate clause matches measured boundary (0.02 floor, 0.30 ceiling)',
+    wf === 0.02 && wc === 0.30, `floor=${wf} ceiling=${wc}`);
+  check('speaker-rescue clause requires BOTH vehicle evidence AND weak interferer',
+    /isInterferer\s*&&\s*vehicleScore\s*>=\s*WEAK_INTERFERER_VEHICLE_FLOOR\s*&&[\s\S]{0,40}interfererScore\s*<=\s*WEAK_INTERFERER_CEILING/.test(engineSrc));
+}
+{
   const rec = fs.readFileSync(path.join(ROOT, 'src', 'components', 'predictive', 'AudioRecorder.jsx'), 'utf8');
   const frac = parseFloat((rec.match(/SESSION_FRACTION\s*=\s*([\d.]+)/) || [])[1]);
   const minW = parseInt((rec.match(/SESSION_MIN_ACCEPTED\s*=\s*(\d+)/) || [])[1], 10);

@@ -64,6 +64,9 @@ export default function AudioRecorder({
   const RECOVERY_DOMINANCE = 1.10;
   const motionResultRef = useRef(null); // vehicle-vibration verdict for this session
   const sessionNoRefsRef = useRef(false); // reference artifact failed to load
+  // Per-stage rejection breakdown for field diagnosability of
+  // "Unable to detect" aborts: {silence, domain, domainTop1: Map<class,count>}
+  const sessionRejectBreakdownRef = useRef({ silence: 0, domain: 0, domainTop1: new Map() });
 
   // Vehicle-vibration verdict is an ANNOTATION, not a hard gate: controlled
   // bench tests (reference samples replayed at a stationary phone) must still
@@ -246,6 +249,7 @@ export default function AudioRecorder({
       sessionCleanWindowsRef.current = 0;
       sessionRejectionsRef.current = 0;
       sessionNoRefsRef.current = false;
+      sessionRejectBreakdownRef.current = { silence: 0, domain: 0, domainTop1: new Map() };
 
       isRecordingRef.current = true;   // ← update ref FIRST (used by async callbacks)
       setIsRecording(true);            // ← triggers waveform BURST immediately
@@ -339,6 +343,17 @@ export default function AudioRecorder({
         if (status === 'normal' && reason.startsWith('rejected_')) {
           sessionRejectionsRef.current++;
           if (reason === 'rejected_no_references') sessionNoRefsRef.current = true;
+          // Field diagnosability: keep a per-stage breakdown so an
+          // "Unable to detect" abort can say WHICH stage rejected the audio
+          // (silence gate vs domain gate) and what YAMNet heard.
+          if (reason === 'rejected_silence') {
+            sessionRejectBreakdownRef.current.silence++;
+          } else if (reason.startsWith('rejected_domain_')) {
+            sessionRejectBreakdownRef.current.domain++;
+            const cls = reason.slice('rejected_domain_'.length);
+            const m = sessionRejectBreakdownRef.current.domainTop1;
+            m.set(cls, (m.get(cls) || 0) + 1);
+          }
         } else if (status === 'normal' && reason !== '') {
           // gate-passed window that resolved healthy (below threshold / healthy margin)
           sessionCleanWindowsRef.current++;
@@ -566,8 +581,19 @@ export default function AudioRecorder({
       }
 
       if (isMostlySilence) {
-        console.warn(`[Vroomie] Audio rejected (non-vehicle). Rejections: ${rejections}/${rejections + accepted}. Aborting report publish.`);
-        toast.error("Unable to detect vehicle audio. Please try again.", { duration: 4000 });
+        // Tell the user (and the console) WHICH stage rejected the audio —
+        // "try again" without a why is undiagnosable from the field.
+        const bd = sessionRejectBreakdownRef.current;
+        const topHeard = [...bd.domainTop1.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+        console.warn(`[Vroomie] Audio rejected (non-vehicle). Rejections: ${rejections}/${rejections + accepted} ` +
+          `(silence: ${bd.silence}, non-vehicle: ${bd.domain}; heard as: ${topHeard.map(([c, n]) => `${c}x${n}`).join(', ') || 'n/a'}). Aborting report publish.`);
+        const why = bd.silence > bd.domain
+          ? 'The recording was mostly too quiet — increase playback volume or move the phone closer.'
+          : `The audio was heard as ${topHeard.length ? topHeard[0][0] : 'non-vehicle sound'} rather than a vehicle.`;
+        toast.error("Unable to detect vehicle audio. Please try again.", {
+          description: `${why} (${bd.silence} quiet / ${bd.domain} non-vehicle of ${rejections + accepted} windows)`,
+          duration: 8000,
+        });
         if (onRecordingComplete) onRecordingComplete(null);
         return;
       }
@@ -654,7 +680,7 @@ export default function AudioRecorder({
             rejected: rejections,
             candidate_windows: sessionCandidateWindowsRef.current,
             capture_settings: getCaptureSettings(),
-            engine_build: 'v9.8'
+            engine_build: 'v9.9'
           },
         },
         // processed_at intentionally omitted — created_at is server-generated (DEFAULT now())

@@ -89,6 +89,16 @@ const VEHICLE_SCORE_FLOOR = 0.03;
 // fault recordings score ≤ 0.09 on interferer classes; speech/TV/music 0.17–1.0.
 const GENERIC_INTERFERER_CEILING = 0.15;
 
+// v9.9 speaker-coloration rescue boundary (field "Unable to detect" RCA,
+// scripts/rca_gate_boundary.mjs). Real-speaker playback shifts YAMNet top-1 to
+// Speech/Applause/Bell on several genuine fault recordings; windows carrying
+// BOTH a weak interferer top-1 AND mechanical evidence may pass to matching.
+// Measured plane: 70 vetoed reference windows vs 108 real-speech/music windows
+// — this boundary recovers 29 and admits 0 (speech: intf 0.47–0.98, veh ≈0.001;
+// recovered faults: veh 0.02–0.05, intf ≤0.30).
+const WEAK_INTERFERER_VEHICLE_FLOOR = 0.02;
+const WEAK_INTERFERER_CEILING = 0.30;
+
 
 /**
  * Loads the YAMNet model only. No fingerprint loading.
@@ -191,8 +201,20 @@ export function evaluateAudioDomain(meanScores) {
     // Generic acoustics (White noise, Sine wave, Explosion, …): pass to the
     // margin matcher, but only when speech/music/TV evidence is negligible.
     (!isInterferer && interfererScore < GENERIC_INTERFERER_CEILING) ||
-    // Interferer top-1: only an overwhelmingly dominant mechanical signature passes.
-    (vehicleScore >= VEHICLE_SCORE_FLOOR && vehicleScore > interfererScore);
+    // Interferer top-1: an overwhelmingly dominant mechanical signature passes.
+    (vehicleScore >= VEHICLE_SCORE_FLOOR && vehicleScore > interfererScore) ||
+    // v9.9 SPEAKER-COLORATION RESCUE (field failure, measured): playback
+    // through a real speaker shifts YAMNet toward Speech/Applause/Bell, and
+    // the hard interferer-top-1 veto was discarding windows that ALSO carried
+    // vehicle evidence (MotorStarter through a phone speaker: 12/12 windows
+    // "Speech", 0 accepted -> "Unable to detect"). Accept WEAK interferer
+    // top-1 when mechanical evidence coexists. Boundary measured on 70 vetoed
+    // reference windows vs 108 real-speech/music windows: recovers 29,
+    // admits 0 — real speech scores 0.47-0.98 (>> 0.30 ceiling) with vehicle
+    // evidence ~0.001 (<< 0.02 floor). The margin matcher + anchors + session
+    // rule remain behind this gate as further defenses.
+    (isInterferer && vehicleScore >= WEAK_INTERFERER_VEHICLE_FLOOR &&
+     interfererScore <= WEAK_INTERFERER_CEILING);
   return { accepted, top1: YAMNET_CLASSES[top1Idx], vehicleScore, interfererScore };
 }
 

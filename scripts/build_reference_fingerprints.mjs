@@ -173,6 +173,36 @@ function speakerReplay(pcm) {
   return out;
 }
 
+/**
+ * v9.9 harsh phone/laptop-speaker channel (field "Unable to detect" RCA).
+ * The gentle speakerReplay above underestimates real playback: measured, a
+ * real-speaker chain shifts YAMNet toward Speech/Applause/Bell and drops
+ * similarity ~0.10 per distance doubling. This variant matches the validated
+ * simulation from scripts/rca_gate_boundary.mjs: narrow 400–4500 Hz band,
+ * +6 dB resonance at 1.2 kHz, tanh driver compression, close desk reflection.
+ * Embedding references through the SAME channel the live audio experiences is
+ * what keeps cosine similarity high for real speaker playback.
+ */
+function phoneSpeakerHarsh(pcm) {
+  const bp = (sig, hpHz, lpHz, q) => {
+    const hw = 2 * Math.PI * hpHz / SR, ha = Math.sin(hw) / q, hc = Math.cos(hw);
+    let a0 = 1 + ha;
+    let s2 = biquad(sig, (1 + hc) / 2 / a0, -(1 + hc) / a0, (1 + hc) / 2 / a0, -2 * hc / a0, (1 - ha) / a0);
+    const lw = 2 * Math.PI * lpHz / SR, la = Math.sin(lw) / q, lc = Math.cos(lw);
+    a0 = 1 + la;
+    return biquad(s2, (1 - lc) / 2 / a0, (1 - lc) / a0, (1 - lc) / 2 / a0, -2 * lc / a0, (1 - la) / a0);
+  };
+  let s = bp(pcm, 400, 4500, 0.9);
+  const w = 2 * Math.PI * 1200 / SR, alpha = Math.sin(w) / (2 * 1.2), A = Math.pow(10, 6 / 40);
+  const a0 = 1 + alpha / A;
+  s = biquad(s, (1 + alpha * A) / a0, (-2 * Math.cos(w)) / a0, (1 - alpha * A) / a0, (-2 * Math.cos(w)) / a0, (1 - alpha / A) / a0);
+  for (let i = 0; i < s.length; i++) s[i] = Math.tanh(s[i] * 3.0) / 3.0;
+  const d1 = Math.floor(SR * 0.008);
+  const out = new Float32Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s[i] + 0.35 * (i > d1 ? s[i - d1] : 0);
+  return out;
+}
+
 // ─── YAMNet ─────────────────────────────────────────────────────────
 console.log('[Factory] Loading YAMNet…');
 const model = await tf.loadGraphModel('https://tfhub.dev/google/tfjs-model/yamnet/tfjs/1', { fromTFHub: true });
@@ -275,6 +305,7 @@ for (const name of wavs) {
         ['rate-', rateShift(base, 0.98)],
         ['echo', rmsNormalize(roomEcho(base))],
         ['speaker', rmsNormalize(speakerReplay(base))],
+        ['phonespk', rmsNormalize(phoneSpeakerHarsh(base))],
       ];
       for (const [vname, w] of variants) {
         faults.push({ ...meta, source_file: name, variant: vname, q: quantize(embed(w)) });
@@ -318,6 +349,7 @@ if (fs.existsSync(LOCAL_REF_DIR)) {
           ['rate-', rateShift(base, 0.98)],
           ['echo', rmsNormalize(roomEcho(base))],
         ['speaker', rmsNormalize(speakerReplay(base))],
+        ['phonespk', rmsNormalize(phoneSpeakerHarsh(base))],
         ];
         for (const [vname, w] of variants) {
           faults.push({ ...meta, source_file: name, variant: vname, q: quantize(embed(w)) });
@@ -414,6 +446,42 @@ for (const f of ['speech_news', 'speech_conversation', 'speech_narration', 'spee
     music[i] = 0.08 * (Math.sin(2 * Math.PI * 261.6 * t) + Math.sin(2 * Math.PI * 329.6 * t) + 0.5 * Math.sin(2 * Math.PI * 523.2 * t));
   }
   anchors.push({ kind: 'interferer', source: 'synthmusic', q: quantize(embed(music)) });
+  // Traffic rumble — RCA measured traffic reaching a 1.00 candidate fraction
+  // (saved only by the 3-window minimum). This anchor absorbs road rumble at
+  // the margin stage instead of relying on that thin structural margin.
+  {
+    const a = new Float32Array(WIN);
+    let lp = 0;
+    for (let i = 0; i < WIN; i++) {
+      lp = 0.9985 * lp + 0.0015 * (rnd() * 2 - 1);
+      a[i] = lp * 9 + 0.02 * Math.sin(2 * Math.PI * 90 * (i / SR)) * (0.6 + 0.4 * Math.sin(2 * Math.PI * (i / SR) / 3));
+    }
+    anchors.push({ kind: 'interferer', source: 'trafficsim', q: quantize(embed(rmsNormalize(a))) });
+  }
+}
+
+// ─── v9.9 per-family cap (dataset-dominance mitigation) ─────────────
+// Measured: power_steering held 58.8% of all fault embeddings; 8 of 9 healthy
+// false positives were absorbed by it, and harsh speaker coloration pulled
+// other faults' windows INTO it. Even-stride subsampling to a cap preserves
+// file/chunk/variant diversity while flattening the prior.
+const FAMILY_CAP = 100;
+{
+  const byFam = new Map();
+  for (const f of faults) {
+    const k = f.fault_type || f.label;
+    if (!byFam.has(k)) byFam.set(k, []);
+    byFam.get(k).push(f);
+  }
+  const capped = [];
+  for (const [fam, list] of byFam) {
+    if (list.length <= FAMILY_CAP) { capped.push(...list); continue; }
+    const step = list.length / FAMILY_CAP;
+    for (let i = 0; i < FAMILY_CAP; i++) capped.push(list[Math.floor(i * step)]);
+    console.log(`[Factory] family cap: ${fam} ${list.length} -> ${FAMILY_CAP}`);
+  }
+  faults.length = 0;
+  faults.push(...capped);
 }
 
 // ─── Write artifact ─────────────────────────────────────────────────
