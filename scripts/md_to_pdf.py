@@ -16,6 +16,11 @@ import os
 import re
 import sys
 
+# Optional CLI overrides: argv[3]=subtitle line, argv[4]=version tag
+DOC_SUBTITLE = sys.argv[3] if len(sys.argv) > 3 else "Audio Diagnostics Architecture<br/>&amp; Engineering Handover"
+DOC_VERSION = sys.argv[4] if len(sys.argv) > 4 else "v9.7"
+DOC_VERSION_LINE = sys.argv[5] if len(sys.argv) > 5 else "Engine version v9.7 &nbsp;·&nbsp; ETHANOL-FEATURE"
+
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4
@@ -161,14 +166,14 @@ def convert(md_path, pdf_path):
     story = [
         Spacer(1, 58 * mm),
         Paragraph("Vroomie", S["title"]),
-        Paragraph("Audio Diagnostics Architecture<br/>&amp; Engineering Handover", S["title"]),
+        Paragraph(DOC_SUBTITLE, S["title"]),
         Spacer(1, 9 * mm),
         HRFlowable(width="42%", thickness=1.1, color=ACCENT, hAlign="CENTER"),
         Spacer(1, 9 * mm),
         Paragraph("Complete technical reference for architects and development "
                   "teams extending the Vroomie audio anomaly-detection system", S["subtitle"]),
         Spacer(1, 26 * mm),
-        Paragraph("Engine version v9.7 &nbsp;·&nbsp; ETHANOL-FEATURE", S["cover_meta"]),
+        Paragraph(DOC_VERSION_LINE, S["cover_meta"]),
         Paragraph("github.com/DGeorgeA/vroomie-app &nbsp;·&nbsp; branch main", S["cover_meta"]),
         Paragraph("Live at vroomie.in", S["cover_meta"]),
         Spacer(1, 14 * mm),
@@ -289,8 +294,8 @@ def convert(md_path, pdf_path):
         canv.setFont(BODY if unicode_ok else "Helvetica", 7.6)
         canv.setFillColor(MUTED)
         canv.drawString(20 * mm, A4[1] - 12.4 * mm,
-                        "Vroomie — Audio Diagnostics Architecture & Engineering Handover")
-        canv.drawRightString(A4[0] - 20 * mm, A4[1] - 12.4 * mm, "v9.7")
+                        "Vroomie — " + DOC_SUBTITLE.replace("<br/>", " ").replace("&amp;", "&"))
+        canv.drawRightString(A4[0] - 20 * mm, A4[1] - 12.4 * mm, DOC_VERSION)
         canv.line(20 * mm, 14 * mm, A4[0] - 20 * mm, 14 * mm)
         canv.drawString(20 * mm, 10 * mm, "Measured results on held-out data")
         canv.drawRightString(A4[0] - 20 * mm, 10 * mm, "Page %d" % doc.page)
@@ -299,7 +304,7 @@ def convert(md_path, pdf_path):
     doc = BaseDocTemplate(pdf_path, pagesize=A4,
                           leftMargin=20 * mm, rightMargin=20 * mm,
                           topMargin=20 * mm, bottomMargin=19 * mm,
-                          title="Vroomie — Audio Diagnostics Architecture & Engineering Handover",
+                          title="Vroomie — " + DOC_SUBTITLE.replace("<br/>", " ").replace("&amp;", "&"),
                           author="Vroomie Engineering",
                           subject="Architecture, calibration rationale, failure catalogue and runbook")
     frame = Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id="f")
