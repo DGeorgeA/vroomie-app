@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import { Mic, Square, Bug, Lock, Sparkles } from "lucide-react";
 import GlassButton from "../ui/GlassButton";
 import { toast } from "sonner";
-import { startExtraction, stopExtraction, getActiveMediaStream, getActiveAudioContext, getCaptureSettings } from "@/lib/audioFeatureExtractor";
+import { startExtraction, stopExtraction, getActiveMediaStream, getActiveAudioContext, getCaptureSettings, getBestFingerprint } from "@/lib/audioFeatureExtractor";
 import { startMotionCapture, stopMotionCapture } from "@/lib/motionDetector";
 import { buildReadableLabel, resetMatchState } from "@/lib/audioMatchingEngine"; // Legacy fallback if needed
 import { clearContinuousAlert, speakScanResult, speakUnableToDetect } from "@/lib/voiceFeedback";
@@ -723,7 +723,8 @@ export default function AudioRecorder({
                 rejected_domain: bd.domain,
                 domain_heard_as: heardAs,
                 capture_settings: getCaptureSettings(),
-                engine_build: 'v10.1'
+                best_fingerprint: getBestFingerprint(),
+                engine_build: 'v10.2'
               }
             }
           }).then(({ error }) => {
@@ -766,9 +767,13 @@ export default function AudioRecorder({
         const why = bd.silence > bd.domain
           ? 'The recording was mostly too quiet — increase playback volume or move the phone closer.'
           : `The audio was heard as ${topHeard.length ? topHeard[0][0] : 'non-vehicle sound'} rather than a vehicle.`;
+        const bfp = getBestFingerprint();
+        const fpNote = bfp && bfp.score > 0
+          ? ` · closest fingerprint ${bfp.label || '?'} ${bfp.score}/600`
+          : ' · no fingerprint evidence';
         toast.error("Unable to detect vehicle audio. Please try again.", {
-          description: `${why} (${bd.silence} quiet / ${bd.domain} non-vehicle of ${rejections + accepted} windows)`,
-          duration: 8000,
+          description: `${why} (${bd.silence} quiet / ${bd.domain} non-vehicle of ${rejections + accepted} windows)${fpNote}`,
+          duration: 9000,
         });
         persistAbortDiagnostics('mostly_rejected_non_vehicle');
         if (onRecordingComplete) onRecordingComplete(null);
@@ -857,7 +862,8 @@ export default function AudioRecorder({
             rejected: rejections,
             candidate_windows: sessionCandidateWindowsRef.current,
             capture_settings: getCaptureSettings(),
-            engine_build: 'v10.1'
+            best_fingerprint: getBestFingerprint(),
+            engine_build: 'v10.2'
           },
         },
         // processed_at intentionally omitted — created_at is server-generated (DEFAULT now())

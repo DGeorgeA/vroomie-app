@@ -13,6 +13,10 @@ let onFeaturesCallback  = null;
 // suppresses the embedding pipeline, and a missing index simply disables it.
 let rollingMatcher      = null;
 let constellationFired  = false;
+// Best fingerprint evidence seen this session, even when it never cleared
+// threshold. Recorded into session_diagnostics so a failed field session
+// shows HOW CLOSE the fingerprint got instead of just 'nothing matched'.
+let bestFingerprint     = { score: 0, normalized: 0, label: null };
 
 const TARGET_SR = 16000;
 const SCRIPT_BUFFER_SIZE = 4096;
@@ -55,6 +59,7 @@ export function getActiveAudioContext()  { return audioContext; }
 // signatures. Recorded into every report's session_diagnostics.
 let appliedCaptureSettings = null;
 export function getCaptureSettings() { return appliedCaptureSettings; }
+export function getBestFingerprint() { return bestFingerprint; }
 
 export async function startExtraction(callback) {
   if (isExtracting) {
@@ -66,6 +71,7 @@ export async function startExtraction(callback) {
   onFeaturesCallback = callback;
   constellationFired = false;
   rollingMatcher     = null;
+  bestFingerprint    = { score: 0, normalized: 0, label: null };
 
   Logger.info('🎤 [START] Requesting microphone and loading YAMNet...');
 
@@ -181,6 +187,51 @@ function useScriptProcessorMainThreadCapture(sr) {
       }
       const rms = Math.sqrt(snapshotRmsSq / windowSamples);
 
+      // Resample FIRST so the fingerprint fast path sees every window — see below.
+      const pcm16kRaw = resampleTo16k(snapshot, sr);
+
+      // ── Shazam-style fast path (fed BEFORE the silence gate) ─────────────
+      // Constellation peaks are relative spectral maxima, so matching is
+      // level-invariant: a quiet-but-present recording still fingerprints.
+      // Field telemetry showed quiet/distant playback being discarded by the
+      // gates before it ever reached the matcher, so this runs first.
+      if (rollingMatcher && !constellationFired) {
+        rollingMatcher.push(pcm16kRaw);
+        try {
+          const cm = rollingMatcher.tryMatch();
+          if (cm) {
+            if (cm.score > bestFingerprint.score) {
+              bestFingerprint = {
+                score: cm.score,
+                normalized: +(cm.normalized || 0).toFixed(3),
+                label: cm.ref ? cm.ref.label : null,
+              };
+            }
+            if (cm.matched && onFeaturesCallback) {
+              constellationFired = true;
+              Logger.info(`[Constellation] MATCH ${cm.ref.label} score=${cm.score} norm=${cm.normalized.toFixed(3)} after ${rollingMatcher.secondsBuffered().toFixed(1)}s`);
+              onFeaturesCallback({
+                _workerResult: {
+                  status: 'fingerprint_match',
+                  anomaly: cm.ref.label,
+                  faultType: cm.ref.fault_type,
+                  severity: cm.ref.severity || 'high',
+                  sourceFile: cm.ref.source_file,
+                  score: cm.score,
+                  normalized: cm.normalized,
+                  listenSeconds: +rollingMatcher.secondsBuffered().toFixed(1),
+                },
+                rms,
+              });
+              isProcessing = false;
+              return;
+            }
+          }
+        } catch (fpErr) {
+          Logger.warn('[Constellation] match failed, continuing with embedding path:', fpErr?.message);
+        }
+      }
+
       // Hard RMS pre-gate to reject silence. 0.005 (was 0.01): phone mics with
       // AGC disabled capture quietly; level is equalized by normalization below,
       // so the gate only needs to exclude true silence.
@@ -202,40 +253,7 @@ function useScriptProcessorMainThreadCapture(sr) {
         //   2. RMS-normalize to the SAME 0.05 target used for every reference
         // Without (2), quiet phone-mic captures embed differently from the
         // loudness-normalized references and similarity collapses.
-        const pcm16k = resampleTo16k(snapshot, sr);
-
-        // ── Shazam-style fast path ──────────────────────────────────────────
-        // Fingerprint the rolling listen window BEFORE the embedding work. A
-        // coherent hash match identifies the exact reference recording being
-        // replayed and reports in <= 5 s. Fed the un-normalized 16 kHz audio:
-        // constellation peaks are relative maxima, so they are already
-        // level-invariant and normalization would only add rounding.
-        if (rollingMatcher && !constellationFired) {
-          rollingMatcher.push(pcm16k);
-          try {
-            const cm = rollingMatcher.tryMatch();
-            if (cm && cm.matched && onFeaturesCallback) {
-              constellationFired = true;   // report once per session
-              Logger.info(`[Constellation] MATCH ${cm.ref.label} score=${cm.score} norm=${cm.normalized.toFixed(3)} after ${rollingMatcher.secondsBuffered().toFixed(1)}s`);
-              onFeaturesCallback({
-                _workerResult: {
-                  status: 'fingerprint_match',
-                  anomaly: cm.ref.label,
-                  faultType: cm.ref.fault_type,
-                  severity: cm.ref.severity || 'high',
-                  sourceFile: cm.ref.source_file,
-                  score: cm.score,
-                  normalized: cm.normalized,
-                  listenSeconds: +rollingMatcher.secondsBuffered().toFixed(1),
-                },
-                rms,
-              });
-            }
-          } catch (fpErr) {
-            Logger.warn('[Constellation] match failed, continuing with embedding path:', fpErr?.message);
-          }
-        }
-
+        const pcm16k = pcm16kRaw;
         const normalized = rmsNormalize(pcm16k, 0.05);
         const analysis = await getAudioAnalysis(normalized);
         if (!analysis) {
