@@ -22,7 +22,7 @@ let bestFingerprint     = { score: 0, normalized: 0, label: null };
 // seconds of the session (a measured cause of intermittent detection).
 let pendingFeed         = [];
 let pendingFeedSamples  = 0;
-const PENDING_FEED_CAP  = TARGET_SR * 6;
+const PENDING_FEED_CAP  = 16000 * 6;  // 6 s @ 16 kHz — literal: TARGET_SR is declared below
 
 const TARGET_SR = 16000;
 const SCRIPT_BUFFER_SIZE = 4096;
