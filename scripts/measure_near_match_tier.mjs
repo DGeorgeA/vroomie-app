@@ -23,7 +23,11 @@ import * as tf from '@tensorflow/tfjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const SR = 16000, WIN = SR;
-const TAU = 0.45, MARGIN = 0.04, NEAR_MARGIN = 0.02, FRACTION = 0.45, MIN_ACCEPTED = 3;
+const TAU = 0.45, MARGIN = 0.04, FRACTION = 0.45, MIN_ACCEPTED = 3;
+// Parameterized by the offline sweep: the only corner with ZERO added healthy
+// false alarms on the 35-session benchmark was near=0.02 at fraction 0.85.
+const NEAR_MARGIN = parseFloat(process.env.NEAR_MARGIN || '0.02');
+const NEAR_FRACTION = parseFloat(process.env.NEAR_FRACTION || '0.85');
 const BUCKET = 'https://bdldmkhcdtlqxaopxlam.supabase.co/storage/v1/object/public/anomaly-patterns/';
 const DATASET = path.resolve(ROOT, '..', 'audio_files', 'Kaggle_dataset', 'archive', 'car diagnostics dataset');
 const TESTAUDIO = path.join(ROOT, 'scratch', 'testaudio');
@@ -138,7 +142,7 @@ function run(pcm) {
     for (const f of fams) {
       const h = (full.get(f) || 0) + (near.get(f) || 0);
       const fr = h / accepted;
-      if (fr >= FRACTION && fr > possibleFrac) { possible = f; possibleFrac = fr; }
+      if (fr >= NEAR_FRACTION && fr > possibleFrac) { possible = f; possibleFrac = fr; }
     }
   }
   return { accepted, confirmed, possible, possibleFrac: +possibleFrac.toFixed(2) };

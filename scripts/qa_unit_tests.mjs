@@ -67,6 +67,20 @@ check('detection operating point matches the measured optimum',
     /confirmed\.length === 0[\s\S]{0,200}RECOVERY_TOTAL_FRACTION/.test(rec));
   check('recovery tie-break ranks by raw similarity (simSum), not margin/confidence',
     /simSum[\s\S]{0,120}RECOVERY_DOMINANCE/.test(rec) && rec.includes('bestFaultSimilarity'));
+  // v10.1 NEAR tier — the ONLY swept corner with zero added false alarms
+  // (0/140 held-out healthy, 0/8 interferers). A looser fraction cost 7/35.
+  const nearFrac = parseFloat((rec.match(/NEAR_SESSION_FRACTION\s*=\s*([\d.]+)/) || [])[1]);
+  const nearMargin = parseFloat((engineSrc.match(/NEAR_ANCHOR_MARGIN\s*=\s*([\d.]+)/) || [])[1]);
+  check('near-match tier matches the measured-safe corner (margin 0.02, fraction 0.85)',
+    nearMargin === 0.02 && nearFrac === 0.85, `nearMargin=${nearMargin} nearFraction=${nearFrac}`);
+  check('near tier fires only after primary AND recovery confirmed nothing',
+    /confirmed\.length === 0 && sessionNearRef/.test(rec));
+  check('near tier is capped at medium severity (never escalates health to critical)',
+    /matchMethod:\s*'near_match'/.test(rec) && /severity:\s*'medium'/.test(rec));
+  check('near tier possibility stays strictly below the 70% confirmed floor',
+    /Math\.max\(65, Math\.min\(69/.test(rec));
+  check('near band windows still count as CLEAN (primary rule unchanged)',
+    /sessionCleanWindowsRef\.current\+\+;[\s\S]{0,260}nearFaultType/.test(rec));
 }
 
 // ─── QA-1b: possibility statement format ────────────────────────────────────

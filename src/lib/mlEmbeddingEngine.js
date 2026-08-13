@@ -34,6 +34,16 @@ const ANOMALY_THRESHOLD = 0.45;
 // combined fault recall 34/47 = 72%, bucket file audit 54/55.
 const ANCHOR_MARGIN = 0.04;
 
+// v10.1 NEAR band floor. Windows with margin in [NEAR_ANCHOR_MARGIN,
+// ANCHOR_MARGIN) are still CLEAN for every existing rule — they only make a
+// low-confidence "possible" verdict available when that band dominates a
+// session (>=85% of accepted windows, enforced in AudioRecorder).
+// Parameter sweep over near ∈ {0.015..0.03} × fraction ∈ {0.45..0.85}
+// (scripts/measure_near_match_tier.mjs): 0.02 @ 0.85 is the only corner that
+// recovers a held-out fault while adding ZERO false alarms — 0/140 held-out
+// healthy clips and 0/8 interferers. The looser 0.45 fraction cost 7/35.
+const NEAR_ANCHOR_MARGIN = 0.02;
+
 // ─── Acoustic domain gate ─────────────────────────────────────────────────────
 // YAMNet embeddings of ANY two audible sounds (speech, music, engines) routinely
 // exceed 0.75 cosine similarity, so similarity alone cannot tell "TV dialogue"
@@ -351,11 +361,21 @@ export function findBestMatch(liveEmbedding, meanScores = null) {
   }
   if (margin < ANCHOR_MARGIN) {
     // Sounds like an engine, but no closer to a fault than to a healthy engine.
+    // v10.1: windows in the NEAR band still count as CLEAN (status/reason and
+    // therefore the primary rule are unchanged bit-for-bit) but carry the
+    // family and margin so the session can offer a low-confidence "possible"
+    // verdict when — and only when — the band overwhelmingly dominates.
+    // Sweep-measured: near>=0.02 at a 0.85 session fraction adds 0 false
+    // alarms over 140 held-out healthy clips and 0 over the interferer suite.
     return {
       status: 'normal',
       anomaly: null,
       confidence: 0,
-      reason: `healthy_margin_${margin.toFixed(3)}`
+      reason: `healthy_margin_${margin.toFixed(3)}`,
+      nearFaultType: margin >= NEAR_ANCHOR_MARGIN ? (bestMatch.fault_type || bestMatch.label) : null,
+      nearLabel: margin >= NEAR_ANCHOR_MARGIN ? bestMatch.label : null,
+      nearMargin: margin >= NEAR_ANCHOR_MARGIN ? margin : 0,
+      nearSourceFile: margin >= NEAR_ANCHOR_MARGIN ? (bestMatch.source_file || null) : null,
     };
   }
 

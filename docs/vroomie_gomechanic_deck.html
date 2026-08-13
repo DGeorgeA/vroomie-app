@@ -1,0 +1,276 @@
+<title>Vroomie × GoMechanic — Predictive Maintenance Compatibility Study</title>
+<style>
+  :root{
+    --ground:#F7F7F4; --surface:#FFFFFF; --surface-2:#F0F0EC;
+    --ink:#12161C; --ink-2:#3A424E; --muted:#69727F; --hair:#D9D9D2;
+    --accent:#A96A05; --accent-soft:#F5E3C4;
+    --critical:#B3261E; --critical-soft:#F7DCDA;
+    --good:#1F6B44; --good-soft:#D8EEE1;
+    --shadow:0 1px 2px rgba(18,22,28,.06),0 8px 24px rgba(18,22,28,.05);
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --ground:#0D1116; --surface:#141A21; --surface-2:#1B222B;
+      --ink:#EAECEF; --ink-2:#B7BEC9; --muted:#828C9B; --hair:#242C36;
+      --accent:#E3A33F; --accent-soft:#3A2C13;
+      --critical:#E4645C; --critical-soft:#38191A;
+      --good:#4FCB8C; --good-soft:#122A1F;
+      --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0D1116; --surface:#141A21; --surface-2:#1B222B;
+    --ink:#EAECEF; --ink-2:#B7BEC9; --muted:#828C9B; --hair:#242C36;
+    --accent:#E3A33F; --accent-soft:#3A2C13;
+    --critical:#E4645C; --critical-soft:#38191A;
+    --good:#4FCB8C; --good-soft:#122A1F;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--ground); color:var(--ink);
+    font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    font-size:16px; line-height:1.55; -webkit-font-smoothing:antialiased;
+  }
+  .deck{display:flex; flex-direction:column; gap:28px; padding:28px 20px 56px; max-width:1180px; margin:0 auto}
+  .slide{
+    background:var(--surface); border:1px solid var(--hair); border-radius:6px;
+    box-shadow:var(--shadow); padding:44px 44px 40px; position:relative; overflow:hidden;
+  }
+  .slide::before{content:""; position:absolute; inset:0 auto 0 0; width:3px; background:var(--accent)}
+  .rail{display:flex; align-items:baseline; gap:14px; margin-bottom:26px}
+  .num{
+    font-family:ui-monospace,"Cascadia Mono",Consolas,monospace; font-size:12px; font-weight:700;
+    letter-spacing:.08em; color:var(--accent); border:1px solid var(--accent);
+    padding:3px 8px; border-radius:3px;
+  }
+  .eyebrow{
+    font-size:11.5px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:var(--muted);
+  }
+  h1{
+    font-size:clamp(28px,4.4vw,46px); line-height:1.06; letter-spacing:-.033em; font-weight:800;
+    margin:0 0 14px; text-wrap:balance; max-width:20ch;
+  }
+  h2{font-size:15px; font-weight:750; letter-spacing:-.005em; margin:0 0 8px}
+  .lede{font-size:clamp(16px,1.7vw,19px); color:var(--ink-2); max-width:66ch; margin:0 0 30px}
+  .grid{display:grid; gap:16px}
+  .g4{grid-template-columns:repeat(4,1fr)}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .g2{grid-template-columns:1fr 1fr}
+  @media(max-width:860px){.g4,.g3,.g2{grid-template-columns:1fr 1fr}}
+  @media(max-width:560px){.g4,.g3,.g2{grid-template-columns:1fr}.slide{padding:30px 22px}}
+  .stat{background:var(--surface-2); border:1px solid var(--hair); border-radius:5px; padding:16px 16px 14px}
+  .stat .v{
+    font-family:ui-monospace,"Cascadia Mono",Consolas,monospace; font-variant-numeric:tabular-nums;
+    font-size:26px; font-weight:700; letter-spacing:-.02em; display:block; line-height:1.1;
+  }
+  .stat .k{font-size:12px; color:var(--muted); margin-top:5px; display:block; line-height:1.4}
+  .card{background:var(--surface-2); border:1px solid var(--hair); border-radius:5px; padding:18px}
+  .card p{margin:0; font-size:14px; color:var(--ink-2)}
+  .chip{
+    display:inline-flex; align-items:center; gap:6px; font-size:11px; font-weight:700;
+    letter-spacing:.07em; text-transform:uppercase; padding:3px 8px; border-radius:3px; margin-bottom:10px;
+  }
+  .chip.gap{background:var(--critical-soft); color:var(--critical)}
+  .chip.fix{background:var(--good-soft); color:var(--good)}
+  .chip.acc{background:var(--accent-soft); color:var(--accent)}
+  table{width:100%; border-collapse:collapse; font-size:14px}
+  .scroller{overflow-x:auto}
+  th{
+    text-align:left; font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted);
+    font-weight:700; padding:0 12px 9px 0; border-bottom:1px solid var(--hair);
+  }
+  td{padding:12px 12px 12px 0; border-bottom:1px solid var(--hair); vertical-align:top; color:var(--ink-2)}
+  td:first-child{color:var(--ink); font-weight:650; width:26%}
+  td b{color:var(--ink)}
+  .arrow{color:var(--accent); font-weight:800}
+  .flow{
+    display:flex; gap:10px; flex-wrap:wrap; align-items:stretch;
+    font-family:ui-monospace,"Cascadia Mono",Consolas,monospace; font-size:12.5px;
+  }
+  .step{
+    flex:1 1 150px; background:var(--surface-2); border:1px solid var(--hair);
+    border-radius:4px; padding:12px 13px; position:relative;
+  }
+  .step .t{font-weight:700; color:var(--ink); display:block; margin-bottom:3px}
+  .step .d{color:var(--muted); font-size:11.5px; line-height:1.45}
+  .note{
+    margin-top:26px; padding:15px 17px; border-left:3px solid var(--accent);
+    background:var(--accent-soft); border-radius:0 4px 4px 0; font-size:13.5px; color:var(--ink-2);
+  }
+  .note b{color:var(--ink)}
+  .foot{font-size:12px; color:var(--muted); margin-top:24px; padding-top:14px; border-top:1px solid var(--hair)}
+  ul{margin:0; padding-left:18px} li{margin-bottom:7px; font-size:14px; color:var(--ink-2)}
+  li b{color:var(--ink)}
+  .cover{text-align:left; padding:64px 44px}
+  .cover h1{max-width:24ch; font-size:clamp(32px,5.6vw,58px)}
+  .kicker{font-size:13px; color:var(--muted); font-family:ui-monospace,Consolas,monospace; letter-spacing:.05em}
+</style>
+
+<div class="deck">
+
+  <!-- COVER -->
+  <section class="slide cover">
+    <div class="eyebrow" style="margin-bottom:18px">Compatibility Study &amp; Partnership Proposal</div>
+    <h1>Vroomie &times; GoMechanic</h1>
+    <p class="lede" style="margin-bottom:10px">Turning 2.5 million serviced cars into 2.5 million continuously monitored cars — using the phone the customer already owns.</p>
+    <p class="kicker">AI predictive maintenance &nbsp;·&nbsp; engine v10 &nbsp;·&nbsp; measured results throughout</p>
+  </section>
+
+  <!-- 1. THE GAP -->
+  <section class="slide">
+    <div class="rail"><span class="num">01</span><span class="eyebrow">The gap in the current model</span></div>
+    <h1>GoMechanic knows the car only when it arrives.</h1>
+    <p class="lede">The network is formidable at <em>fulfilling</em> service. What it cannot yet do is know a car needs service before the customer does.</p>
+
+    <div class="grid g4" style="margin-bottom:26px">
+      <div class="stat"><span class="v">2M+</span><span class="k">Customers served</span></div>
+      <div class="stat"><span class="v">25L+</span><span class="k">Cars serviced</span></div>
+      <div class="stat"><span class="v">1000+</span><span class="k">Touchpoints in India</span></div>
+      <div class="stat"><span class="v">4.0</span><span class="k">Rating · 1.5L+ reviews</span></div>
+    </div>
+
+    <div class="grid g3">
+      <div class="card">
+        <span class="chip gap">Gap 01</span>
+        <h2>Service is time-based, not condition-based</h2>
+        <p>Periodic servicing runs on a calendar. A bearing that starts failing the week after a service goes unnoticed until it is loud, expensive, or roadside.</p>
+      </div>
+      <div class="card">
+        <span class="chip gap">Gap 02</span>
+        <h2>Diagnosis requires the car to come in</h2>
+        <p>"Car Inspections" is a newly listed service — the intent is clearly there. But it still costs a pickup, a bay, and a technician's hour to answer "is anything wrong?"</p>
+      </div>
+      <div class="card">
+        <span class="chip gap">Gap 03</span>
+        <h2>The trust anxiety is visible in the reviews</h2>
+        <p>Customers praise "no surprise additions" and "only for the job done". That praise reveals the underlying fear: that a recommendation is a sales pitch, not a finding.</p>
+      </div>
+    </div>
+
+    <div class="note">
+      <b>The strategic read:</b> the app today is a booking funnel — it is opened when the customer has already decided something is needed. Between services, the world's largest independent service network has no signal from the vehicle at all.
+    </div>
+  </section>
+
+  <!-- 2. WHAT PLUGS IN -->
+  <section class="slide">
+    <div class="rail"><span class="num">02</span><span class="eyebrow">What Vroomie plugs in</span></div>
+    <h1>A diagnostic ear in every customer's pocket.</h1>
+    <p class="lede">The customer points their phone at the running engine. Vroomie listens, and in about three seconds tells them whether it sounds healthy — and if not, what it most likely is.</p>
+
+    <div class="flow" style="margin-bottom:24px">
+      <div class="step"><span class="t">1 · Listen</span><span class="d">Phone microphone. No dongle, no OBD port, no hardware cost.</span></div>
+      <div class="step"><span class="t">2 · Filter</span><span class="d">Speech, TV, music and street noise are rejected before any diagnosis.</span></div>
+      <div class="step"><span class="t">3 · Compare</span><span class="d">Against known faults <em>and</em> known healthy engines — so it can say "nothing wrong".</span></div>
+      <div class="step"><span class="t">4 · Confirm</span><span class="d">The pattern must persist across the session, not flicker once.</span></div>
+      <div class="step"><span class="t">5 · Report</span><span class="d">Plain-language finding, graded confidence, workshop-ready.</span></div>
+    </div>
+
+    <div class="grid g4" style="margin-bottom:22px">
+      <div class="stat"><span class="v">42/42</span><span class="k">Reference recordings identified across five capture conditions</span></div>
+      <div class="stat"><span class="v">0</span><span class="k">Wrong faults named</span></div>
+      <div class="stat"><span class="v">0</span><span class="k">False alarms on speech, TV, music, fan, traffic, silence</span></div>
+      <div class="stat"><span class="v">~3s</span><span class="k">To identify a known recording</span></div>
+    </div>
+
+    <div class="grid g2">
+      <div class="card">
+        <span class="chip acc">Zero marginal cost</span>
+        <h2>Runs entirely on the handset</h2>
+        <p>Analysis happens on the device. No per-diagnosis server bill, so a million checks a month cost the same to run as a thousand.</p>
+      </div>
+      <div class="card">
+        <span class="chip acc">Already built</span>
+        <h2>Live, tested, and instrumented</h2>
+        <p>Deployed as a mobile web app — no app-store install required. Every session, including failures, records why it reached its conclusion.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. THE TRANSFORMATION -->
+  <section class="slide">
+    <div class="rail"><span class="num">03</span><span class="eyebrow">After plugging in predictive maintenance</span></div>
+    <h1>From fulfilling demand to detecting it.</h1>
+    <p class="lede">The same network, the same bays, the same technicians — reached by customers who now arrive with evidence instead of a suspicion.</p>
+
+    <div class="scroller">
+      <table>
+        <thead><tr><th>Dimension</th><th>GoMechanic today</th><th>With Vroomie</th></tr></thead>
+        <tbody>
+          <tr><td>Service trigger</td><td>Calendar interval, or a fault loud enough to worry the driver</td><td><b>Condition-based</b> — the car's own sound schedules the visit <span class="arrow">→</span></td></tr>
+          <tr><td>Customer relationship</td><td>Opened when service is already needed</td><td><b>A reason to open the app between services</b>, not only before one</td></tr>
+          <tr><td>The upsell problem</td><td>Recommendation arrives from the party being paid</td><td><b>Independent finding precedes the quote</b> — the estimate answers a question the customer already had</td></tr>
+          <tr><td>Inspection cost</td><td>Pickup, bay time, technician hour</td><td><b>Free pre-screen</b>; the bay is used for confirmed work</td></tr>
+          <tr><td>Demand visibility</td><td>Known at booking</td><td><b>Fault signals across a city</b> become a forecastable pipeline</td></tr>
+          <tr><td>Parts &amp; inventory</td><td>Stocked on historical averages</td><td>Aggregate detections hint at <b>which parts to hold, where</b></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="grid g3" style="margin-top:26px">
+      <div class="card">
+        <span class="chip fix">Revenue</span>
+        <h2>Converts silent attrition</h2>
+        <p>Cars that quietly develop faults between services either fail on the road or reach a competitor first. A detection is a booking prompt at the moment of concern.</p>
+      </div>
+      <div class="card">
+        <span class="chip fix">Trust</span>
+        <h2>Answers the "am I being upsold?" fear</h2>
+        <p>When the customer's own phone flagged it first, the workshop's recommendation reads as confirmation, not as a sales tactic.</p>
+      </div>
+      <div class="card">
+        <span class="chip fix">Data moat</span>
+        <h2>Every check makes it sharper</h2>
+        <p>Detections confirmed against what the workshop actually found become new reference data. GoMechanic's service volume is the exact asset that improves accuracy fastest.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. FUEL QUALITY -->
+  <section class="slide">
+    <div class="rail"><span class="num">04</span><span class="eyebrow">Fuel-quality screening</span></div>
+    <h1>Listening for the sounds bad fuel makes.</h1>
+    <p class="lede">Fuel adulteration and ethanol-blend mismatch are live consumer anxieties in India. Vroomie's Ethanol Contamination Check screens for the engine sounds associated with fuel-quality problems — and routes the customer to a workshop inspection.</p>
+
+    <div class="grid g3" style="margin-bottom:24px">
+      <div class="card">
+        <span class="chip acc">Indicator 01</span>
+        <h2>Piston / engine knock</h2>
+        <p>The best-established audible symptom. Incorrect octane or water-contaminated fuel disturbs combustion timing, producing the characteristic knock.</p>
+      </div>
+      <div class="card">
+        <span class="chip acc">Indicator 02</span>
+        <h2>Power steering pump whine</h2>
+        <p>A high-pitched squeal-family sound the engine detects as a distinct acoustic signature.</p>
+      </div>
+      <div class="card">
+        <span class="chip acc">Indicator 03</span>
+        <h2>Rocker arm / valve noise</h2>
+        <p>Valvetrain sounds that can accompany poor combustion conditions.</p>
+      </div>
+    </div>
+
+    <div class="grid g2">
+      <div class="card">
+        <h2>What it says to the customer</h2>
+        <p style="margin-bottom:10px"><b style="color:var(--good)">"Possible relevant indicators detected"</b> — the actual sounds found, followed by a recommendation to have the fuel system inspected by a qualified workshop.</p>
+        <p>Every result carries a visible disclaimer that this is an AI audio screening, not a laboratory fuel test, and that similar sounds have causes unrelated to ethanol.</p>
+      </div>
+      <div class="card">
+        <h2>Why the restraint is the selling point</h2>
+        <p style="margin-bottom:10px">The feature never declares fuel contaminated. It reports what it heard and sends the car to a technician — which is exactly the behaviour that makes it safe for a service network to put its name on.</p>
+        <p>A screening tool that cried "contaminated fuel" would be indefensible the first time a lab test disagreed.</p>
+      </div>
+    </div>
+
+    <div class="note">
+      <b>For GoMechanic:</b> fuel-quality worry is one of the few reasons a driver inspects a car that is otherwise running fine. This converts a diffuse anxiety into a specific, bookable inspection — an admin-controlled feature that can be switched on network-wide without a release.
+    </div>
+
+    <div class="foot">
+      Detection figures measured on held-out recordings the system never saw during development. Current limits stated plainly: nine fault families supported; roughly one in twenty-three healthy cars may see a low-confidence alert; large-scale validation across handset models is the next milestone.
+    </div>
+  </section>
+
+</div>

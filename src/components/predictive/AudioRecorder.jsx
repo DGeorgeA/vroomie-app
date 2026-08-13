@@ -69,6 +69,12 @@ export default function AudioRecorder({
   const sessionRejectBreakdownRef = useRef({ silence: 0, domain: 0, domainTop1: new Map() });
   // Shazam-style fingerprint hit for this session (null until one fires).
   const fingerprintHitRef = useRef(null);
+  // v10.1 NEAR band tally: family -> {hits, marginSum, sourceFile, labelHits}.
+  // Only consulted when the primary AND recovery rules confirmed nothing.
+  const sessionNearRef = useRef(new Map());
+  // Measured-safe operating point (see mlEmbeddingEngine NEAR_ANCHOR_MARGIN):
+  // 85% of accepted windows must sit in the near band for ONE family.
+  const NEAR_SESSION_FRACTION = 0.85;
 
   // Vehicle-vibration verdict is an ANNOTATION, not a hard gate: controlled
   // bench tests (reference samples replayed at a stationary phone) must still
@@ -252,6 +258,47 @@ export default function AudioRecorder({
           // decline rather than risk naming the wrong fault.
         }
       }
+
+      // ── v10.1 NEAR-MATCH tier (65-69%, "verification required") ──────────
+      // Last resort: nothing confirmed, but one family's windows sat in the
+      // near band for >=85% of the session. Reported as POSSIBLE, never as a
+      // confirmed fault, and capped at severity 'medium' so overall health
+      // becomes 'warning' rather than 'critical'.
+      // Measured cost at this operating point: 0 added false alarms across
+      // 140 held-out healthy clips and the full interferer suite.
+      if (confirmed.length === 0 && sessionNearRef.current.size > 0) {
+        let nk = null, ne = null, bestFrac = 0;
+        for (const [k, e] of sessionNearRef.current) {
+          const frac = e.hits / accepted;
+          if (frac >= NEAR_SESSION_FRACTION && frac > bestFrac) { bestFrac = frac; nk = k; ne = e; }
+        }
+        if (ne) {
+          let dominantLabel = nk;
+          let best = 0;
+          for (const [l, c] of ne.labelHits) if (c > best) { best = c; dominantLabel = l; }
+          const readable = buildReadableLabel(dominantLabel);
+          // Map the near band [0.02, 0.04) onto 65-69% — strictly below the
+          // 70% floor the confirmed band starts at, so the two never blur.
+          const meanMargin = ne.marginSum / ne.hits;
+          const possibility = Math.max(65, Math.min(69,
+            Math.round(65 + ((meanMargin - 0.02) / 0.02) * 4)));
+          confirmed.push({
+            type:             readable,
+            rawLabel:         dominantLabel,
+            faultType:        nk,
+            severity:         'medium',   // never escalates overall health to critical
+            timestamp:        ne.firstSeen,
+            status:           'anomaly',
+            signalSimilarity: possibility / 100,
+            possibility,
+            sourceFile:       ne.sourceFile,
+            matchMethod:      'near_match',
+            isPossibleOnly:   true,
+            statement:        `There is a ${possibility}% possibility that there could be a possible ${readable}${ne.sourceFile ? ` (${ne.sourceFile})` : ''} — this is a low-confidence indication and requires verification by a qualified workshop`,
+            finalDecision:    'POSSIBLE — VERIFICATION REQUIRED',
+          });
+        }
+      }
     }
     const totalWindows = accepted + rejections;
     const isMostlyRejected = totalWindows > 0 && rejections / totalWindows > 0.5;
@@ -282,6 +329,7 @@ export default function AudioRecorder({
       sessionNoRefsRef.current = false;
       sessionRejectBreakdownRef.current = { silence: 0, domain: 0, domainTop1: new Map() };
       fingerprintHitRef.current = null;   // must not leak into the next session
+      sessionNearRef.current = new Map();
 
       isRecordingRef.current = true;   // ← update ref FIRST (used by async callbacks)
       setIsRecording(true);            // ← triggers waveform BURST immediately
@@ -419,6 +467,24 @@ export default function AudioRecorder({
         } else if (status === 'normal' && reason !== '') {
           // gate-passed window that resolved healthy (below threshold / healthy margin)
           sessionCleanWindowsRef.current++;
+          // v10.1: additionally tally NEAR-band windows. This does NOT change
+          // the window's clean classification or any existing count — it only
+          // enables the low-confidence "possible" verdict below.
+          if (workerResult.nearFaultType) {
+            const nk = workerResult.nearFaultType;
+            const ne = sessionNearRef.current.get(nk) || {
+              hits: 0, marginSum: 0, sourceFile: null, bestMargin: 0,
+              firstSeen: recordingTimeRef.current, labelHits: new Map()
+            };
+            ne.hits++;
+            ne.marginSum += workerResult.nearMargin || 0;
+            ne.labelHits.set(workerResult.nearLabel || nk, (ne.labelHits.get(workerResult.nearLabel || nk) || 0) + 1);
+            if ((workerResult.nearMargin || 0) > ne.bestMargin) {
+              ne.bestMargin = workerResult.nearMargin || 0;
+              ne.sourceFile = workerResult.nearSourceFile || ne.sourceFile;
+            }
+            sessionNearRef.current.set(nk, ne);
+          }
         } else if (status === 'candidate' && anomaly) {
           sessionCandidateWindowsRef.current++;
           // Aggregate by fault FAMILY (faultType) — sibling references of the
@@ -657,7 +723,7 @@ export default function AudioRecorder({
                 rejected_domain: bd.domain,
                 domain_heard_as: heardAs,
                 capture_settings: getCaptureSettings(),
-                engine_build: 'v10.0'
+                engine_build: 'v10.1'
               }
             }
           }).then(({ error }) => {
@@ -791,7 +857,7 @@ export default function AudioRecorder({
             rejected: rejections,
             candidate_windows: sessionCandidateWindowsRef.current,
             capture_settings: getCaptureSettings(),
-            engine_build: 'v10.0'
+            engine_build: 'v10.1'
           },
         },
         // processed_at intentionally omitted — created_at is server-generated (DEFAULT now())
