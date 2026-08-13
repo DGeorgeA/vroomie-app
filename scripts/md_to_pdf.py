@@ -20,6 +20,8 @@ import sys
 DOC_SUBTITLE = sys.argv[3] if len(sys.argv) > 3 else "Audio Diagnostics Architecture<br/>&amp; Engineering Handover"
 DOC_VERSION = sys.argv[4] if len(sys.argv) > 4 else "v9.7"
 DOC_VERSION_LINE = sys.argv[5] if len(sys.argv) > 5 else "Engine version v9.7 &nbsp;·&nbsp; ETHANOL-FEATURE"
+DOC_BLURB = sys.argv[6] if len(sys.argv) > 6 else ("Complete technical reference for architects and development "
+                                                  "teams extending the Vroomie audio anomaly-detection system")
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
@@ -170,8 +172,7 @@ def convert(md_path, pdf_path):
         Spacer(1, 9 * mm),
         HRFlowable(width="42%", thickness=1.1, color=ACCENT, hAlign="CENTER"),
         Spacer(1, 9 * mm),
-        Paragraph("Complete technical reference for architects and development "
-                  "teams extending the Vroomie audio anomaly-detection system", S["subtitle"]),
+        Paragraph(DOC_BLURB, S["subtitle"]),
         Spacer(1, 26 * mm),
         Paragraph(DOC_VERSION_LINE, S["cover_meta"]),
         Paragraph("github.com/DGeorgeA/vroomie-app &nbsp;·&nbsp; branch main", S["cover_meta"]),
