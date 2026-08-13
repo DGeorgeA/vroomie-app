@@ -105,6 +105,52 @@
   .cover{text-align:left; padding:64px 44px}
   .cover h1{max-width:24ch; font-size:clamp(32px,5.6vw,58px)}
   .kicker{font-size:13px; color:var(--muted); font-family:ui-monospace,Consolas,monospace; letter-spacing:.05em}
+
+  @media print{
+    @page{ size:A4 landscape; margin:7mm; }
+    html,body{ background:#fff !important; }
+    :root{
+      --ground:#FFFFFF; --surface:#FFFFFF; --surface-2:#F5F5F1;
+      --ink:#12161C; --ink-2:#39414D; --muted:#5F6874; --hair:#CFCFC8;
+      --accent:#A2650B; --accent-soft:#F7E9CE;
+      --critical:#A81E17; --critical-soft:#F8E0DE;
+      --good:#1B5F3C; --good-soft:#DCEFE3;
+      --shadow:none;
+    }
+    .deck{ gap:0; padding:0; max-width:none; }
+    .slide{
+      break-after:page; page-break-after:always; break-inside:avoid;
+      border:none; border-radius:0; box-shadow:none; padding:11mm 13mm 8mm;
+      height:190mm; overflow:hidden;
+    }
+    .slide:last-child{ break-after:auto; page-break-after:auto; }
+    .slide::before{ width:2.2mm; }
+    /* print viewport is narrow — restore the intended column counts */
+    .g4{ grid-template-columns:repeat(4,1fr) !important; }
+    .g3{ grid-template-columns:repeat(3,1fr) !important; }
+    .g2{ grid-template-columns:1fr 1fr !important; }
+    .grid{ gap:11px !important; margin-bottom:14px !important; }
+    .cover{ padding:52mm 12mm; height:190mm; }
+    .rail{ margin-bottom:16px; }
+    h1{ font-size:27pt; margin-bottom:9px; max-width:32ch; }
+    .cover h1{ font-size:40pt; }
+    .lede{ font-size:12.6pt; margin-bottom:16px; max-width:90ch; }
+    .stat{ padding:12px 13px 11px; }
+    .stat .v{ font-size:19pt; } .stat .k{ font-size:9pt; margin-top:4px; }
+    .card{ padding:13px 14px; }
+    .card p{ font-size:10.2pt; line-height:1.45; }
+    h2{ font-size:11.4pt; margin-bottom:6px; }
+    .chip{ font-size:8.2pt; padding:3px 7px; margin-bottom:8px; }
+    td, th{ font-size:10pt; }
+    td{ padding:8px 10px 8px 0; } th{ padding:0 10px 7px 0; }
+    .flow{ gap:9px; } .step{ padding:11px 12px; }
+    .step .t{ font-size:10pt; } .step .d{ font-size:8.8pt; line-height:1.4; }
+    .note{ font-size:10.2pt; margin-top:15px; padding:12px 14px; }
+    .foot{ font-size:8.4pt; margin-top:14px; padding-top:10px; }
+    .eyebrow{ font-size:9pt; } .num{ font-size:9.4pt; padding:3px 7px; }
+    .kicker{ font-size:11pt; }
+    *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  }
 </style>
 
 <div class="deck">
@@ -121,7 +167,7 @@
   <section class="slide">
     <div class="rail"><span class="num">01</span><span class="eyebrow">The gap in the current model</span></div>
     <h1>GoMechanic knows the car only when it arrives.</h1>
-    <p class="lede">The network is formidable at <em>fulfilling</em> service. What it cannot yet do is know a car needs service before the customer does.</p>
+    <p class="lede">Formidable at <em>fulfilling</em> service. Cannot yet know a car needs service before the customer does.</p>
 
     <div class="grid g4" style="margin-bottom:26px">
       <div class="stat"><span class="v">2M+</span><span class="k">Customers served</span></div>
@@ -134,22 +180,22 @@
       <div class="card">
         <span class="chip gap">Gap 01</span>
         <h2>Service is time-based, not condition-based</h2>
-        <p>Periodic servicing runs on a calendar. A bearing that starts failing the week after a service goes unnoticed until it is loud, expensive, or roadside.</p>
+        <p>A bearing that fails the week after a service goes unnoticed until it is loud, expensive or roadside.</p>
       </div>
       <div class="card">
         <span class="chip gap">Gap 02</span>
         <h2>Diagnosis requires the car to come in</h2>
-        <p>"Car Inspections" is a newly listed service — the intent is clearly there. But it still costs a pickup, a bay, and a technician's hour to answer "is anything wrong?"</p>
+        <p>"Car Inspections" is newly listed — intent is there. But answering <em>"is anything wrong?"</em> still costs a pickup, a bay and a technician hour.</p>
       </div>
       <div class="card">
         <span class="chip gap">Gap 03</span>
         <h2>The trust anxiety is visible in the reviews</h2>
-        <p>Customers praise "no surprise additions" and "only for the job done". That praise reveals the underlying fear: that a recommendation is a sales pitch, not a finding.</p>
+        <p>Customers praise <em>"no surprise additions"</em>, <em>"only for the job done"</em>. That praise names the fear: a recommendation may be a sales pitch, not a finding.</p>
       </div>
     </div>
 
     <div class="note">
-      <b>The strategic read:</b> the app today is a booking funnel — it is opened when the customer has already decided something is needed. Between services, the world's largest independent service network has no signal from the vehicle at all.
+      <b>Net:</b> the app is a booking funnel, opened only once the customer has already decided. Between services the network receives <b>zero signal</b> from the vehicle.
     </div>
   </section>
 
@@ -157,7 +203,7 @@
   <section class="slide">
     <div class="rail"><span class="num">02</span><span class="eyebrow">What Vroomie plugs in</span></div>
     <h1>A diagnostic ear in every customer's pocket.</h1>
-    <p class="lede">The customer points their phone at the running engine. Vroomie listens, and in about three seconds tells them whether it sounds healthy — and if not, what it most likely is.</p>
+    <p class="lede">Point the phone at a running engine. Verdict in ~3 seconds: healthy, or the most likely fault.</p>
 
     <div class="flow" style="margin-bottom:24px">
       <div class="step"><span class="t">1 · Listen</span><span class="d">Phone microphone. No dongle, no OBD port, no hardware cost.</span></div>
@@ -178,12 +224,12 @@
       <div class="card">
         <span class="chip acc">Zero marginal cost</span>
         <h2>Runs entirely on the handset</h2>
-        <p>Analysis happens on the device. No per-diagnosis server bill, so a million checks a month cost the same to run as a thousand.</p>
+        <p>On-device analysis. No per-diagnosis server bill — a million checks cost what a thousand cost.</p>
       </div>
       <div class="card">
         <span class="chip acc">Already built</span>
         <h2>Live, tested, and instrumented</h2>
-        <p>Deployed as a mobile web app — no app-store install required. Every session, including failures, records why it reached its conclusion.</p>
+        <p>Mobile web, no app-store install. Every session — including failures — records why it concluded what it did.</p>
       </div>
     </div>
   </section>
@@ -192,7 +238,7 @@
   <section class="slide">
     <div class="rail"><span class="num">03</span><span class="eyebrow">After plugging in predictive maintenance</span></div>
     <h1>From fulfilling demand to detecting it.</h1>
-    <p class="lede">The same network, the same bays, the same technicians — reached by customers who now arrive with evidence instead of a suspicion.</p>
+    <p class="lede">Same network, same bays, same technicians — reached by customers arriving with evidence instead of suspicion.</p>
 
     <div class="scroller">
       <table>
@@ -212,17 +258,17 @@
       <div class="card">
         <span class="chip fix">Revenue</span>
         <h2>Converts silent attrition</h2>
-        <p>Cars that quietly develop faults between services either fail on the road or reach a competitor first. A detection is a booking prompt at the moment of concern.</p>
+        <p>Cars developing faults between services either fail on the road or reach a competitor first. Each detection is a booking prompt at the moment of concern.</p>
       </div>
       <div class="card">
         <span class="chip fix">Trust</span>
         <h2>Answers the "am I being upsold?" fear</h2>
-        <p>When the customer's own phone flagged it first, the workshop's recommendation reads as confirmation, not as a sales tactic.</p>
+        <p>When the customer's own phone flagged it first, the quote reads as confirmation — not a sales tactic.</p>
       </div>
       <div class="card">
         <span class="chip fix">Data moat</span>
         <h2>Every check makes it sharper</h2>
-        <p>Detections confirmed against what the workshop actually found become new reference data. GoMechanic's service volume is the exact asset that improves accuracy fastest.</p>
+        <p>Detections confirmed against what the workshop found become new training data. GoMechanic's volume is the asset that compounds accuracy fastest.</p>
       </div>
     </div>
   </section>
@@ -231,23 +277,23 @@
   <section class="slide">
     <div class="rail"><span class="num">04</span><span class="eyebrow">Fuel-quality screening</span></div>
     <h1>Listening for the sounds bad fuel makes.</h1>
-    <p class="lede">Fuel adulteration and ethanol-blend mismatch are live consumer anxieties in India. Vroomie's Ethanol Contamination Check screens for the engine sounds associated with fuel-quality problems — and routes the customer to a workshop inspection.</p>
+    <p class="lede">Adulteration and ethanol-blend mismatch are live consumer anxieties in India. Vroomie screens for the engine sounds associated with fuel-quality problems and routes the customer to inspection.</p>
 
     <div class="grid g3" style="margin-bottom:24px">
       <div class="card">
         <span class="chip acc">Indicator 01</span>
         <h2>Piston / engine knock</h2>
-        <p>The best-established audible symptom. Incorrect octane or water-contaminated fuel disturbs combustion timing, producing the characteristic knock.</p>
+        <p>The best-established audible symptom — wrong octane or water-contaminated fuel disturbs combustion timing.</p>
       </div>
       <div class="card">
         <span class="chip acc">Indicator 02</span>
         <h2>Power steering pump whine</h2>
-        <p>A high-pitched squeal-family sound the engine detects as a distinct acoustic signature.</p>
+        <p>Distinct squeal-family acoustic signature.</p>
       </div>
       <div class="card">
         <span class="chip acc">Indicator 03</span>
         <h2>Rocker arm / valve noise</h2>
-        <p>Valvetrain sounds that can accompany poor combustion conditions.</p>
+        <p>Valvetrain sounds accompanying poor combustion.</p>
       </div>
     </div>
 
@@ -265,7 +311,7 @@
     </div>
 
     <div class="note">
-      <b>For GoMechanic:</b> fuel-quality worry is one of the few reasons a driver inspects a car that is otherwise running fine. This converts a diffuse anxiety into a specific, bookable inspection — an admin-controlled feature that can be switched on network-wide without a release.
+      <b>For GoMechanic:</b> fuel worry is one of the few reasons a driver checks a car that is running fine — converting diffuse anxiety into a bookable inspection. Admin-controlled; switchable network-wide without a release.
     </div>
 
     <div class="foot">
