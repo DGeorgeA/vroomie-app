@@ -26,7 +26,16 @@ const OUT = path.join(ROOT, 'public', 'constellation_v1.json');
 const BUCKET = 'https://bdldmkhcdtlqxaopxlam.supabase.co/storage/v1/object/public/anomaly-patterns/';
 const LIST_URL = 'https://bdldmkhcdtlqxaopxlam.supabase.co/storage/v1/object/list/anomaly-patterns';
 const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJkbGRta2hjZHRscXhhb3B4bGFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjM4NDMwNDYsImV4cCI6MjA3OTQxOTA0Nn0.v3lbUrwF6ZDPn-z8NYE01h7Fs1cTa1TAxQlTAsY3xbU';
-const EXCLUDED = new Set(['water_pump_failure_critical.wav']);   // synthetic tone
+const EXCLUDED = new Set([
+  'water_pump_failure_critical.wav',   // synthetic tone, not a recording
+  // Misfire is acoustically an IRREGULAR IDLE, so its fingerprint collides
+  // with rough-but-healthy idling engines: it produced the only two healthy
+  // false fires measured (scores 496-523, sustained across 4 consecutive
+  // attempts, so persistence could not separate them). Excluded from the
+  // fingerprint index only — misfire detection continues via the embedding
+  // path, which discriminates it using healthy anchors.
+  'misfire_detected_medium.wav',
+]);
 // Pre-ship review (scripts/review_constellation_shipped.mjs) measured that
 // 1.5 s references CANNOT pass their own replay (PS_10 looped: 385/0.035 vs
 // 400/0.05) and their dense near-duplicate hashes inflated the worst healthy

@@ -47,6 +47,16 @@ const DT_MIN = 1, DT_MAX = 48, DF_MAX = 160;
 // brakes clip at 443 — raw score alone was never separable).
 export const MIN_COHERENT_SCORE = 600;
 export const MIN_NORMALIZED_SCORE = 0.05;
+// Sustained tier — real-device calibration. Field telemetry showed correct
+// identifications scoring 494-553 (alternator 496/503/514/542, piston 494),
+// i.e. genuine matches sitting just under a threshold derived from simulated
+// audio. Instead of dropping the bar to the worst negative (443, a healthy
+// brakes clip), a lower bar is paired with PERSISTENCE: the same reference must
+// win two consecutive attempts ~0.9 s apart. Random peak alignment does not
+// keep its identity across independent windows; a real replay does.
+export const SUSTAINED_COHERENT_SCORE = 480;
+export const SUSTAINED_NORMALIZED_SCORE = 0.042;
+export const SUSTAINED_REPEATS = 2;
 /** Rolling listen window. Shazam-like: identify from a few seconds of audio. */
 export const LISTEN_SECONDS = 5;
 /** Do not attempt a match before this much audio has accumulated. */
@@ -230,6 +240,8 @@ export function createRollingMatcher() {
   const cap = SR * LISTEN_SECONDS;
   const buf = new Float32Array(cap);
   let filled = 0, write = 0, totalFed = 0;
+  // Persistence state for the sustained tier.
+  let lastRef = null, streak = 0;
   return {
     push(chunk) {
       totalFed += chunk.length;
@@ -247,8 +259,28 @@ export function createRollingMatcher() {
       const lin = new Float32Array(filled);
       const start = (write - filled + cap) % cap;
       for (let i = 0; i < filled; i++) lin[i] = buf[(start + i) % cap];
-      return matchHashes(computeConstellationHashes(lin));
+      const m = matchHashes(computeConstellationHashes(lin));
+
+      // ── sustained tier: lower bar, but identity must persist ────────────
+      const refKey = m.ref ? m.ref.source_file : null;
+      const qualifies = !!m.ref &&
+        m.score >= SUSTAINED_COHERENT_SCORE &&
+        m.normalized >= SUSTAINED_NORMALIZED_SCORE;
+      if (qualifies && refKey === lastRef) {
+        streak += 1;
+      } else if (qualifies) {
+        lastRef = refKey;
+        streak = 1;
+      } else {
+        lastRef = null;
+        streak = 0;
+      }
+      m.streak = streak;
+      m.sustained = qualifies && streak >= SUSTAINED_REPEATS;
+      // `matched` stays the union: an instant strong hit, or a sustained one.
+      m.matched = m.matched || m.sustained;
+      return m;
     },
-    reset() { filled = 0; write = 0; totalFed = 0; },
+    reset() { filled = 0; write = 0; totalFed = 0; lastRef = null; streak = 0; },
   };
 }
