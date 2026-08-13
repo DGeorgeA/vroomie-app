@@ -724,7 +724,7 @@ export default function AudioRecorder({
                 domain_heard_as: heardAs,
                 capture_settings: getCaptureSettings(),
                 best_fingerprint: getBestFingerprint(),
-                engine_build: 'v10.2'
+                engine_build: 'v10.3'
               }
             }
           }).then(({ error }) => {
@@ -863,7 +863,7 @@ export default function AudioRecorder({
             candidate_windows: sessionCandidateWindowsRef.current,
             capture_settings: getCaptureSettings(),
             best_fingerprint: getBestFingerprint(),
-            engine_build: 'v10.2'
+            engine_build: 'v10.3'
           },
         },
         // processed_at intentionally omitted — created_at is server-generated (DEFAULT now())

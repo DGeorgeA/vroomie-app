@@ -17,6 +17,12 @@ let constellationFired  = false;
 // threshold. Recorded into session_diagnostics so a failed field session
 // shows HOW CLOSE the fingerprint got instead of just 'nothing matched'.
 let bestFingerprint     = { score: 0, normalized: 0, label: null };
+// Audio captured BEFORE the index finished loading. Flushed into the matcher
+// the moment it arms, so a slow first fetch no longer costs the opening
+// seconds of the session (a measured cause of intermittent detection).
+let pendingFeed         = [];
+let pendingFeedSamples  = 0;
+const PENDING_FEED_CAP  = TARGET_SR * 6;
 
 const TARGET_SR = 16000;
 const SCRIPT_BUFFER_SIZE = 4096;
@@ -36,6 +42,24 @@ function resampleTo16k(pcm, srIn) {
   return out;
 }
 
+// Variable-length block resampler for the fingerprint feed. resampleTo16k()
+// always emits exactly 1 s; the fast path is fed per audio block instead, so it
+// needs a proportional-length resample.
+function resampleBlockTo16k(block, srIn) {
+  if (srIn === TARGET_SR) return block;
+  const ratio = srIn / TARGET_SR;
+  const outLen = Math.max(1, Math.floor(block.length / ratio));
+  const out = new Float32Array(outLen);
+  const maxIdx = block.length - 1;
+  for (let i = 0; i < outLen; i++) {
+    const x = i * ratio;
+    const l = Math.min(maxIdx, Math.floor(x));
+    const r = Math.min(maxIdx, l + 1);
+    out[i] = block[l] * (1 - (x - l)) + block[r] * (x - l);
+  }
+  return out;
+}
+
 // Identical to the reference factory's loudness normalization — live windows
 // and reference embeddings must see the same input level.
 function rmsNormalize(pcm, target = 0.05) {
@@ -47,6 +71,13 @@ function rmsNormalize(pcm, target = 0.05) {
   const out = new Float32Array(pcm.length);
   for (let i = 0; i < pcm.length; i++) out[i] = Math.max(-1, Math.min(1, pcm[i] * g));
   return out;
+}
+
+// Warm the fingerprint index shortly after this module loads — well before the
+// user presses record. Previously the 1.7 MB fetch only began at startExtraction,
+// so a cold cache meant the fast path armed several seconds into the session.
+if (typeof window !== 'undefined') {
+  setTimeout(() => { loadConstellationIndex().catch(() => {}); }, 1200);
 }
 
 // ─── Public API ───────────────────────────────────────────
@@ -72,6 +103,8 @@ export async function startExtraction(callback) {
   constellationFired = false;
   rollingMatcher     = null;
   bestFingerprint    = { score: 0, normalized: 0, label: null };
+  pendingFeed        = [];
+  pendingFeedSamples = 0;
 
   Logger.info('🎤 [START] Requesting microphone and loading YAMNet...');
 
@@ -141,6 +174,7 @@ function useScriptProcessorMainThreadCapture(sr) {
   let totalSamples = 0;
   let isProcessing = false; // Prevent overlapping async YAMNet calls
   let lastClassifyTime = 0; // Timestamp of last classification attempt
+  let lastFingerprintTry = 0; // fingerprint cadence, independent of YAMNet
 
   scriptProcessor = audioContext.createScriptProcessor(SCRIPT_BUFFER_SIZE, 1, 1);
   
@@ -161,6 +195,73 @@ function useScriptProcessorMainThreadCapture(sr) {
     }
 
     totalSamples += blockSize;
+
+    // ── Shazam fast path: fed EVERY block, independent of YAMNet ───────────
+    // Deliberately outside the `!isProcessing` guard below: when inference runs
+    // slower than the classification cadence the matcher would otherwise be
+    // starved and never reach its minimum listen time. Pushing is a cheap
+    // buffer copy; only tryMatch() (~20 ms) runs on a cadence.
+    if (!constellationFired) {
+      const mono = new Float32Array(blockSize);
+      for (let i = 0; i < blockSize; i++) {
+        mono[i] = numCh > 1 ? (ch0[i] + input.getChannelData(1)[i]) / 2 : ch0[i];
+      }
+      const blk16k = resampleBlockTo16k(mono, sr);
+
+      if (rollingMatcher) {
+        if (pendingFeed.length) {
+          for (const buffered of pendingFeed) rollingMatcher.push(buffered);
+          pendingFeed = [];
+          pendingFeedSamples = 0;
+          Logger.info('[Constellation] flushed pre-arm audio into the matcher');
+        }
+        rollingMatcher.push(blk16k);
+      } else {
+        // index still loading — hold recent audio so nothing is lost
+        pendingFeed.push(blk16k);
+        pendingFeedSamples += blk16k.length;
+        while (pendingFeedSamples > PENDING_FEED_CAP && pendingFeed.length) {
+          pendingFeedSamples -= pendingFeed.shift().length;
+        }
+      }
+
+      const tNow = performance.now();
+      if (rollingMatcher && tNow - lastFingerprintTry >= 900) {
+        lastFingerprintTry = tNow;
+        try {
+          const cm = rollingMatcher.tryMatch();
+          if (cm) {
+            if (cm.score > bestFingerprint.score) {
+              bestFingerprint = {
+                score: cm.score,
+                normalized: +(cm.normalized || 0).toFixed(3),
+                label: cm.ref ? cm.ref.label : null,
+              };
+            }
+            if (cm.matched && onFeaturesCallback) {
+              constellationFired = true;
+              Logger.info(`[Constellation] MATCH ${cm.ref.label} score=${cm.score} norm=${cm.normalized.toFixed(3)} after ${rollingMatcher.secondsBuffered().toFixed(1)}s`);
+              onFeaturesCallback({
+                _workerResult: {
+                  status: 'fingerprint_match',
+                  anomaly: cm.ref.label,
+                  faultType: cm.ref.fault_type,
+                  severity: cm.ref.severity || 'high',
+                  sourceFile: cm.ref.source_file,
+                  score: cm.score,
+                  normalized: cm.normalized,
+                  listenSeconds: +rollingMatcher.secondsBuffered().toFixed(1),
+                },
+                rms: 0,
+              });
+              return;
+            }
+          }
+        } catch (fpErr) {
+          Logger.warn('[Constellation] match failed, continuing with embedding path:', fpErr?.message);
+        }
+      }
+    }
 
     // ── Classification gate: process every ~1 second, AFTER we have at least 1s of data ──
     // Use wall-clock timing instead of fragile modulo arithmetic to ensure classification fires reliably
@@ -187,50 +288,7 @@ function useScriptProcessorMainThreadCapture(sr) {
       }
       const rms = Math.sqrt(snapshotRmsSq / windowSamples);
 
-      // Resample FIRST so the fingerprint fast path sees every window — see below.
       const pcm16kRaw = resampleTo16k(snapshot, sr);
-
-      // ── Shazam-style fast path (fed BEFORE the silence gate) ─────────────
-      // Constellation peaks are relative spectral maxima, so matching is
-      // level-invariant: a quiet-but-present recording still fingerprints.
-      // Field telemetry showed quiet/distant playback being discarded by the
-      // gates before it ever reached the matcher, so this runs first.
-      if (rollingMatcher && !constellationFired) {
-        rollingMatcher.push(pcm16kRaw);
-        try {
-          const cm = rollingMatcher.tryMatch();
-          if (cm) {
-            if (cm.score > bestFingerprint.score) {
-              bestFingerprint = {
-                score: cm.score,
-                normalized: +(cm.normalized || 0).toFixed(3),
-                label: cm.ref ? cm.ref.label : null,
-              };
-            }
-            if (cm.matched && onFeaturesCallback) {
-              constellationFired = true;
-              Logger.info(`[Constellation] MATCH ${cm.ref.label} score=${cm.score} norm=${cm.normalized.toFixed(3)} after ${rollingMatcher.secondsBuffered().toFixed(1)}s`);
-              onFeaturesCallback({
-                _workerResult: {
-                  status: 'fingerprint_match',
-                  anomaly: cm.ref.label,
-                  faultType: cm.ref.fault_type,
-                  severity: cm.ref.severity || 'high',
-                  sourceFile: cm.ref.source_file,
-                  score: cm.score,
-                  normalized: cm.normalized,
-                  listenSeconds: +rollingMatcher.secondsBuffered().toFixed(1),
-                },
-                rms,
-              });
-              isProcessing = false;
-              return;
-            }
-          }
-        } catch (fpErr) {
-          Logger.warn('[Constellation] match failed, continuing with embedding path:', fpErr?.message);
-        }
-      }
 
       // Hard RMS pre-gate to reject silence. 0.005 (was 0.01): phone mics with
       // AGC disabled capture quietly; level is equalized by normalization below,
