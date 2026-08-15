@@ -38,7 +38,7 @@ That was the flaw. The software asked **"which fault does this sound most like?"
 
 Vroomie asks a different question:
 
-> **"Is this closer to a known fault than it is to a healthy engine?"**
+**"Is this closer to a known fault than it is to a healthy engine?"**
 
 The change is small in words and total in effect. Vroomie stores recordings of **healthy** engines alongside the faulty ones. A fault is only reported when the sound is measurably closer to a fault than to any healthy engine — or to speech, music, traffic, or a fan.
 
