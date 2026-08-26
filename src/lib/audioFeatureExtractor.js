@@ -8,6 +8,10 @@ let mediaStreamSource   = null;
 let mediaStream         = null;
 let scriptProcessor     = null;
 let onFeaturesCallback  = null;
+// Detection path this session is running. 'basic' = Path A, 'ml' = Path B
+// (YAMNet embedding match). Recorded so every report states which engine
+// produced it and so the two paths are separable at the routing layer.
+let activeDetectionMode = 'basic';
 
 const TARGET_SR = 16000;
 const SCRIPT_BUFFER_SIZE = 4096;
@@ -51,16 +55,25 @@ export function getActiveAudioContext()  { return audioContext; }
 let appliedCaptureSettings = null;
 export function getCaptureSettings() { return appliedCaptureSettings; }
 
-export async function startExtraction(callback) {
+/** Detection path in use for the current session ('basic' | 'ml'). */
+export function getActiveDetectionMode() { return activeDetectionMode; }
+
+/**
+ * @param {(features: object) => void} callback per-window result sink
+ * @param {'basic'|'ml'} mode detection path for this session. Defaults to
+ *        'basic' so any existing caller keeps today's behaviour exactly.
+ */
+export async function startExtraction(callback, mode = 'basic') {
   if (isExtracting) {
     Logger.warn('Extraction already running.');
     return;
   }
 
-  isExtracting       = true;
-  onFeaturesCallback = callback;
+  isExtracting        = true;
+  onFeaturesCallback  = callback;
+  activeDetectionMode = mode === 'ml' ? 'ml' : 'basic';
 
-  Logger.info('🎤 [START] Requesting microphone and loading YAMNet...');
+  Logger.info(`🎤 [START] Requesting microphone and loading YAMNet... (mode=${activeDetectionMode})`);
 
   try {
     // Eagerly load YAMNet
@@ -190,12 +203,20 @@ function useScriptProcessorMainThreadCapture(sr) {
           return;
         }
 
+        // ── DETECTION PATH ────────────────────────────────────────────
+        // Both modes currently resolve here. Path A (constellation
+        // fingerprinting) is not present in this build, so 'basic' runs the
+        // engine exactly as it has been measured — thresholds, margin rule
+        // and session aggregation all unchanged. When Path A lands, branch
+        // on activeDetectionMode at THIS point only; nothing above or below
+        // needs to move.
         const matchResult = findBestMatch(analysis.embedding, analysis.meanScores);
 
         if (onFeaturesCallback) {
           onFeaturesCallback({
             compositeEmbedding: analysis.embedding,
             _workerResult: matchResult,
+            detectionMode: activeDetectionMode,
             rms: rms
           });
         }

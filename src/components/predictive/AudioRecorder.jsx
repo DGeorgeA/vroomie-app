@@ -8,11 +8,12 @@ import { buildReadableLabel, resetMatchState } from "@/lib/audioMatchingEngine";
 import { clearContinuousAlert, speakScanResult, speakUnableToDetect } from "@/lib/voiceFeedback";
 import { Logger } from "@/lib/logger";
 import { getDetectionMode, setDetectionMode } from "@/lib/detectionMode";
-import { useAuth } from "@/contexts/AuthContext";
 import UpgradeModal from "./UpgradeModal";
 import { motion } from "framer-motion";
 import { supabase } from "@/lib/supabase";
 import { useSettingsStore } from "@/store/settingsStore";
+import { useAiAccess } from "@/hooks/useAiAccess";
+import { describeAiAccess } from "@/services/aiAccessService";
 
 export default function AudioRecorder({
   onRecordingComplete,
@@ -113,7 +114,11 @@ export default function AudioRecorder({
   const [debugStats, setDebugStats] = useState(null);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const IS_DEBUG = import.meta.env.DEV;
-  const { isPro } = useAuth();
+  // AI Enabled (Path B) entitlement: admin / global unlock / paid = unlimited,
+  // free = FREE_AI_USE_LIMIT scans. Supersedes the old bare isPro check, which
+  // could not express the admin override, the global unlock or the free quota.
+  // Basic mode never consults this.
+  const aiAccess = useAiAccess();
   const debugDebounceRef = useRef(null);
   const pendingDebugRef  = useRef(null);
   const nativeAudioCtxRef = useRef(null);
@@ -145,16 +150,24 @@ export default function AudioRecorder({
         return;
       }
       
-      if (mode === 'ml' && !isPro) {
+      // AI Enabled is gated on the server-resolved entitlement, not on isPro
+      // alone: an admin, a global unlock, or unspent free-tier scans all
+      // qualify. Basic is never gated. Selecting a mode costs nothing — the
+      // free-tier quota is only consumed when a scan actually starts.
+      if (mode === 'ml' && !aiAccess.allowed) {
         setIsUpgradeModalOpen(true);
         return;
       }
-      
+
       setDetectionMode(mode);
       setDetectionModeState(mode);
       resetMatchState();
       const modeLabel = mode === 'ml' ? '⚡ AI Enabled' : '🔊 Basic Mode';
-      toast.success(`Detection mode set to: ${modeLabel}`);
+      toast.success(`Detection mode set to: ${modeLabel}`, {
+        description: mode === 'ml' && !aiAccess.unlimited
+          ? describeAiAccess(aiAccess)
+          : undefined,
+      });
       Logger.info(`User switched detection mode to: ${mode}`);
     } catch (err) {
       console.error("Error switching mode:", err);
@@ -236,6 +249,19 @@ export default function AudioRecorder({
     // MANDATORY debug log — confirms button is wired and responding instantly
     console.log("[Vroomie] Start Recording triggered");
     try {
+      // ── AI Enabled quota check (Path B only) ────────────────────────
+      // Runs BEFORE any state or capture work so a blocked free user never
+      // opens the microphone. Basic mode skips this entirely and its start
+      // path is unchanged. The counter is incremented below, once the scan
+      // is committed, so an abandoned click costs the user nothing.
+      if (getDetectionMode() === 'ml' && !aiAccess.allowed) {
+        setIsUpgradeModalOpen(true);
+        toast.error('AI Enabled scans used up', {
+          description: describeAiAccess(aiAccess),
+        });
+        return;
+      }
+
       // ══════════════════════════════════════════════════════════════
       // STEP 1 — INSTANT UI RESPONSE (0ms, no await, no async)
       // The waveform burst animation fires here. Timer starts here.
@@ -286,6 +312,14 @@ export default function AudioRecorder({
 
       const modeLabel = activeMode === 'ml' ? 'ML Mode' : 'Basic Mode';
       toast.success(`Recording started [${modeLabel}]`);
+
+      // Commit one AI Enabled scan against the free-tier quota. No-op for
+      // admin / globally-unlocked / paid users. Deliberately fire-and-forget:
+      // a failed counter write must never stall or abort a scan that has
+      // already started, and the server-side check still bounds the total.
+      if (activeMode === 'ml' && !aiAccess.unlimited) {
+        aiAccess.consume().catch(() => { /* fail-open for this session only */ });
+      }
 
       // Execute immediately to preserve user gesture token for AudioContext
       _startExtractionAsync(activeMode).catch(error => {
@@ -387,7 +421,7 @@ export default function AudioRecorder({
           }
         }
 
-      });
+      }, activeMode);
 
       // ══════════════════════════════════════════════════════════════
       // STEP 3 — Wire up waveform analyser + MediaRecorder
@@ -751,25 +785,33 @@ export default function AudioRecorder({
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             onClick={() => handleModeSwitch('ml')}
+            title={describeAiAccess(aiAccess)}
             className={`relative group flex items-center gap-2 px-5 py-2.5 rounded-full text-xs font-bold transition-colors duration-300 overflow-hidden ${
               detectionMode === 'ml'
                 ? 'bg-gradient-to-r from-cyan-600/90 to-blue-700/90 text-white shadow-[0_0_20px_rgba(6,182,212,0.4)] border border-cyan-400/50'
-                : !isPro
+                : !aiAccess.allowed
                   ? 'bg-gradient-to-r from-cyan-900/40 to-blue-900/40 text-cyan-200/50 border border-cyan-500/10'
                   : 'text-gray-500 hover:text-gray-300'
             }`}
           >
             {/* Shimmer animation for AI Enabled button */}
-            {(!isPro || detectionMode === 'ml') && (
+            {(!aiAccess.allowed || detectionMode === 'ml') && (
               <div className="absolute inset-0 w-[200%] bg-gradient-to-r from-transparent via-white/10 to-transparent translate-x-[-100%] animate-[shimmer_3s_infinite]" />
             )}
-            
-            {!isPro && <Lock className="w-3 h-3 text-cyan-400/50 relative z-10" />}
-            {isPro && <Sparkles className="w-3.5 h-3.5 text-cyan-300 relative z-10" />}
+
+            {!aiAccess.allowed && <Lock className="w-3 h-3 text-cyan-400/50 relative z-10" />}
+            {aiAccess.allowed && <Sparkles className="w-3.5 h-3.5 text-cyan-300 relative z-10" />}
             <span className="relative z-10 text-transparent bg-clip-text bg-gradient-to-r from-cyan-100 to-white">
               AI Enabled
             </span>
-            
+
+            {/* Free-tier balance — only while a quota actually applies */}
+            {!aiAccess.loading && !aiAccess.unlimited && aiAccess.remaining > 0 && (
+              <span className="relative z-10 text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-cyan-400/15 text-cyan-200 border border-cyan-400/20">
+                {aiAccess.remaining}
+              </span>
+            )}
+
             {/* Glow halo */}
             {detectionMode === 'ml' && (
               <div className="absolute inset-0 shadow-[inset_0_0_12px_rgba(255,255,255,0.2)] rounded-full pointer-events-none" />
