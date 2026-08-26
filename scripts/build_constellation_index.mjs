@@ -87,6 +87,45 @@ function resample(p, from) {
   return o;
 }
 
+// Spectral flatness (Wiener entropy): geometric mean / arithmetic mean of the
+// power spectrum. 1.0 is white noise; values approaching 0 are a pure tone.
+// Averaged over frames spread across the clip so a single quiet passage cannot
+// dominate. MEASURED on the shipped references:
+//   MotorStarter 0.191 · BearingAlternator 0.147 · Piston 0.102
+//   alternator_bearing_fault_critical 0.061  <- false-fires on pure tones
+const MIN_SPECTRAL_FLATNESS = 0.08;
+const FLATNESS_NFFT = 1024;
+const FLATNESS_FRAMES = 12;
+
+function spectralFlatness(pcm) {
+  const N = FLATNESS_NFFT;
+  if (pcm.length < N) return 1; // too short to judge — do not reject on this
+  const win = new Float64Array(N);
+  for (let i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (N - 1));
+
+  const step = Math.max(1, Math.floor((pcm.length - N) / FLATNESS_FRAMES));
+  let acc = 0, frames = 0;
+  for (let off = 0; off + N <= pcm.length && frames < FLATNESS_FRAMES; off += step) {
+    let logSum = 0, linSum = 0;
+    for (let k = 0; k < N / 2; k++) {
+      let re = 0, im = 0;
+      for (let n = 0; n < N; n++) {
+        const v = pcm[off + n] * win[n];
+        const a = (-2 * Math.PI * k * n) / N;
+        re += v * Math.cos(a);
+        im += v * Math.sin(a);
+      }
+      const power = re * re + im * im + 1e-12;
+      logSum += Math.log(power);
+      linSum += power;
+    }
+    const bins = N / 2;
+    acc += Math.exp(logSum / bins) / (linSum / bins);
+    frames++;
+  }
+  return frames ? acc / frames : 1;
+}
+
 /** Mirror of the factory's label derivation so families stay consistent. */
 function deriveMeta(name) {
   const base = name.replace(/\.wav$/i, '');
@@ -165,19 +204,43 @@ for (const name of wavs) {
   }
 }
 
-// One representative per family: the LONGEST recording carries the most
-// independent frames, so it yields the strongest coherence spike. Duplicates
-// are deliberately left to the embedding path.
+// One representative per family, chosen on TWO criteria:
+//
+//   1. TONALITY FLOOR (hard reject). A near-pure tone produces a sparse,
+//      highly regular constellation that aligns coherently with ANY other
+//      pure tone, so such a reference false-fires on ringtones, alarms and
+//      beeps. MEASURED: selecting by duration alone picked
+//      alternator_bearing_fault_critical.wav (spectral flatness 0.061) over
+//      BearingAlternator.wav (0.147); pure tones at 330-1000 Hz then scored
+//      689-721 against a 600 instant gate, versus 190-268 before. Every tone
+//      in that band became a false "alternator bearing fault".
+//      Same idea as the water_pump EXCLUDED entry, applied by measurement
+//      rather than by filename.
+//   2. LONGEST among survivors — more frames means a stronger coherence spike.
+//
+// Duration alone is NOT a safe selection rule. Flatness gates first.
 console.log('[constellation] indexing one representative per family...');
 for (const [faultType, list] of [...candidates.entries()].sort()) {
-  list.sort((a, b) => b.seconds - a.seconds);
-  const pick = list[0];
-  const others = list.length - 1;
+  for (const c of list) if (c.flatness === undefined) c.flatness = spectralFlatness(c.pcm);
+
+  const tonal = list.filter(c => c.flatness < MIN_SPECTRAL_FLATNESS);
+  for (const c of tonal) {
+    console.log(`  SKIP ${c.name} (spectral flatness ${c.flatness.toFixed(4)} < ${MIN_SPECTRAL_FLATNESS} — too tonal, would collide with pure tones)`);
+  }
+  const usable = list.filter(c => c.flatness >= MIN_SPECTRAL_FLATNESS);
+  if (usable.length === 0) {
+    console.log(`  [${faultType}] no broadband candidate — family left to the embedding path`);
+    continue;
+  }
+
+  usable.sort((a, b) => b.seconds - a.seconds);
+  const pick = usable[0];
+  const others = usable.length - 1;
   const extended = extendByCrossfadeLoop(pick.pcm, TARGET_SECONDS, SR);
   const note = extended.length > pick.pcm.length
     ? `looped ${pick.seconds.toFixed(1)}s -> ${(extended.length / SR).toFixed(1)}s`
     : 'native length';
-  console.log(`  [${faultType}] ${pick.name}  (${note}${others ? `, ${others} near-duplicate(s) left to the embedding path` : ''})`);
+  console.log(`  [${faultType}] ${pick.name}  (${note}, flatness ${pick.flatness.toFixed(4)}${others ? `, ${others} other candidate(s) left to the embedding path` : ''})`);
   addReference(pick.name, extended, pick.name);
 }
 

@@ -196,8 +196,55 @@ console.log('\n── Reference provenance (Supabase anomaly-patterns bucket) �
     /refusing to write a partial index/.test(builder));
   check('reference extension happens in-process, from the shared helper',
     /from '\.\/lib\/extendLoop\.mjs'/.test(builder));
-  check('one representative per family, chosen by longest recording',
-    /list\.sort\(\(a, b\) => b\.seconds - a\.seconds\)/.test(builder));
+  check('representative selection gates on tonality before duration',
+    /MIN_SPECTRAL_FLATNESS/.test(builder) && /spectralFlatness/.test(builder));
+  check('the tonality floor is documented with its measured basis',
+    /alternator_bearing_fault_critical/.test(builder) && /689-721|too tonal/.test(builder));
+  check('duration is only a tie-break among broadband survivors',
+    /usable\.sort\(\(a, b\) => b\.seconds - a\.seconds\)/.test(builder));
+}
+
+// ── No shipped reference may be tonal enough to collide with pure tones ─────
+// This is the invariant the db8f097 rebuild broke. Guarded here so a future
+// rebuild cannot ship it again unnoticed.
+console.log('\n── Shipped references are broadband, not tonal ──');
+{
+  const N = 1024, FRAMES = 10, FLOOR = 0.08;
+  const win = new Float64Array(N);
+  for (let i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (N - 1));
+  const flatness = (pcm) => {
+    if (pcm.length < N) return 1;
+    const step = Math.max(1, Math.floor((pcm.length - N) / FRAMES));
+    let acc = 0, frames = 0;
+    for (let off = 0; off + N <= pcm.length && frames < FRAMES; off += step) {
+      let logSum = 0, linSum = 0;
+      for (let k = 0; k < N / 2; k++) {
+        let re = 0, im = 0;
+        for (let n = 0; n < N; n++) {
+          const v = pcm[off + n] * win[n];
+          const a = (-2 * Math.PI * k * n) / N;
+          re += v * Math.cos(a); im += v * Math.sin(a);
+        }
+        const p = re * re + im * im + 1e-12;
+        logSum += Math.log(p); linSum += p;
+      }
+      const bins = N / 2;
+      acc += Math.exp(logSum / bins) / (linSum / bins);
+      frames++;
+    }
+    return frames ? acc / frames : 1;
+  };
+
+  const shipped = new Set(artifact.refs.map(r => r.source_file));
+  let tested = 0;
+  for (const file of fs.readdirSync(AUDIO_DIR).filter(f => shipped.has(f))) {
+    const { pcm: raw, rate } = decodeWav(fs.readFileSync(path.join(AUDIO_DIR, file)));
+    const fl = flatness(to16k(raw, rate));
+    check(`${file} is broadband enough to be a safe reference`, fl >= FLOOR,
+      `spectral flatness ${fl.toFixed(4)} (floor ${FLOOR})`);
+    tested++;
+  }
+  check('at least one shipped reference was tonality-checked', tested > 0, `${tested} refs`);
 }
 
 // ── Equivalence: bucket original + in-process loop == the shipped index ─────
@@ -256,14 +303,24 @@ console.log('\n── Bucket original + in-process loop vs the shipped index ─
 // ── Negative controls: nothing synthetic may fire ───────────────────────────
 console.log('\n── Negative controls must NOT fire (no false positives) ──');
 
+// Pure tones are swept densely across the musical/alert band because a tonal
+// REFERENCE collides with every tone near its own pitch. A rebuild that
+// selected alternator_bearing_fault_critical.wav (spectral flatness 0.061)
+// made 330-1000 Hz score 689-721 against a 600 gate — every ringtone, alarm
+// and microwave beep became a false alternator fault. One or two spot
+// frequencies would have missed most of that band.
 const NEGATIVES = [
   ['digital silence',        silence(LISTEN_SECONDS)],
   ['white noise',            whiteNoise(LISTEN_SECONDS, 42)],
   ['white noise (seed 7)',   whiteNoise(LISTEN_SECONDS, 7)],
   ['quiet white noise',      whiteNoise(LISTEN_SECONDS, 13, 0.02)],
-  ['440 Hz pure tone',       tone(LISTEN_SECONDS, 440)],
-  ['1 kHz pure tone',        tone(LISTEN_SECONDS, 1000)],
   ['200 Hz -> 6 kHz chirp',  chirp(LISTEN_SECONDS)],
+  ...[220, 330, 440, 523, 660, 880, 1000, 1500, 2000, 3000].map(
+    hz => [`${hz} Hz pure tone`, tone(LISTEN_SECONDS, hz)]
+  ),
+  // Loud and quiet variants — level must not buy a match either.
+  ['440 Hz tone (loud)',     tone(LISTEN_SECONDS, 440, 0.85)],
+  ['523 Hz tone (quiet)',    tone(LISTEN_SECONDS, 523, 0.05)],
 ];
 
 for (const [name, pcm] of NEGATIVES) {
