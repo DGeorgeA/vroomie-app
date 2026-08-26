@@ -9,6 +9,11 @@ let mediaStreamSource   = null;
 let mediaStream         = null;
 let scriptProcessor     = null;
 let onFeaturesCallback  = null;
+// Detection path this session is running. 'basic' = Path A (constellation
+// fingerprint), 'ml' = Path B (YAMNet embedding match). Recorded so every
+// report states which engine produced it. Both paths still run exactly as
+// before — this is bookkeeping for the entitlement layer, not a gate.
+let activeDetectionMode = 'basic';
 // Shazam-style fast path: rolling fingerprint listener. Additive — it never
 // suppresses the embedding pipeline, and a missing index simply disables it.
 let rollingMatcher      = null;
@@ -92,21 +97,30 @@ let appliedCaptureSettings = null;
 export function getCaptureSettings() { return appliedCaptureSettings; }
 export function getBestFingerprint() { return bestFingerprint; }
 
-export async function startExtraction(callback) {
+/** Detection path in use for the current session ('basic' | 'ml'). */
+export function getActiveDetectionMode() { return activeDetectionMode; }
+
+/**
+ * @param {(features: object) => void} callback per-window result sink
+ * @param {'basic'|'ml'} mode detection path for this session. Defaults to
+ *        'basic' so any existing caller keeps today's behaviour exactly.
+ */
+export async function startExtraction(callback, mode = 'basic') {
   if (isExtracting) {
     Logger.warn('Extraction already running.');
     return;
   }
 
-  isExtracting       = true;
-  onFeaturesCallback = callback;
-  constellationFired = false;
-  rollingMatcher     = null;
-  bestFingerprint    = { score: 0, normalized: 0, label: null };
-  pendingFeed        = [];
-  pendingFeedSamples = 0;
+  isExtracting        = true;
+  onFeaturesCallback  = callback;
+  activeDetectionMode = mode === 'ml' ? 'ml' : 'basic';
+  constellationFired  = false;
+  rollingMatcher      = null;
+  bestFingerprint     = { score: 0, normalized: 0, label: null };
+  pendingFeed         = [];
+  pendingFeedSamples  = 0;
 
-  Logger.info('🎤 [START] Requesting microphone and loading YAMNet...');
+  Logger.info(`🎤 [START] Requesting microphone and loading YAMNet... (mode=${activeDetectionMode})`);
 
   try {
     // Eagerly load YAMNet
@@ -319,12 +333,20 @@ function useScriptProcessorMainThreadCapture(sr) {
           return;
         }
 
+        // ── DETECTION PATH B — embedding match ────────────────────────
+        // Path A (constellation fingerprint) runs independently, ungated,
+        // above this block. Both paths execute in BOTH modes exactly as they
+        // have been measured: activeDetectionMode is recorded, never branched
+        // on here, so the entitlement layer cannot alter detection behaviour.
+        // If the two paths are ever to diverge by mode, THIS is the only
+        // place that needs a branch.
         const matchResult = findBestMatch(analysis.embedding, analysis.meanScores);
 
         if (onFeaturesCallback) {
           onFeaturesCallback({
             compositeEmbedding: analysis.embedding,
             _workerResult: matchResult,
+            detectionMode: activeDetectionMode,
             rms: rms
           });
         }

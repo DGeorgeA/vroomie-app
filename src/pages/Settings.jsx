@@ -6,6 +6,9 @@ import { useSettingsStore, LANGUAGE_OPTIONS, SENSITIVITY_CONFIG } from '@/store/
 import { setDetectionMode } from '@/lib/detectionMode';
 import { canAccess } from '@/lib/featureGate';
 import EthanolAdminSetting from '@/components/ethanol/EthanolAdminSetting';
+import AiDetectionAdminSetting from '@/components/predictive/AiDetectionAdminSetting';
+import { useAiAccess } from '@/hooks/useAiAccess';
+import { describeAiAccess } from '@/services/aiAccessService';
 import { toast } from 'sonner';
 import {
   User, Bell, Volume2, Shield, CreditCard,
@@ -109,6 +112,8 @@ export default function Settings() {
   const [micStatus, setMicStatus] = useState('checking');
   const [langOpen, setLangOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
+  // Server-resolved AI Enabled entitlement (admin / global / paid / free quota).
+  const aiAccess = useAiAccess();
 
   // Hydrate settings from Supabase on mount
   useEffect(() => {
@@ -146,15 +151,24 @@ export default function Settings() {
   };
 
   const handleMode = (mode) => {
-    if (mode === 'ml' && !isPro) {
-      toast.error('AI Enabled mode requires a Pro subscription.', {
-        description: 'Upgrade to unlock ML-based detection.',
-        action: { label: 'Upgrade', onClick: () => navigate('/subscribe') },
-      });
+    // Basic is always available. AI Enabled needs an entitlement: admin, the
+    // global unlock, a paid plan, or unspent free-tier scans.
+    if (mode === 'ml' && !aiAccess.allowed) {
+      toast.error(
+        aiAccess.used > 0
+          ? 'You have used all your free AI Enabled scans.'
+          : 'AI Enabled mode requires a Pro subscription.',
+        {
+          description: describeAiAccess(aiAccess),
+          action: { label: 'Upgrade', onClick: () => navigate('/subscribe') },
+        }
+      );
       return;
     }
     setMode(mode);
-    toast.success(`Detection mode: ${mode === 'ml' ? 'AI Enabled' : 'Basic'}`);
+    toast.success(`Detection mode: ${mode === 'ml' ? 'AI Enabled' : 'Basic'}`, {
+      description: mode === 'ml' && !aiAccess.unlimited ? describeAiAccess(aiAccess) : undefined,
+    });
   };
 
   const handleUpgrade = () => {
@@ -341,17 +355,17 @@ export default function Settings() {
         {/* Detection Mode */}
         <div className="px-4 py-3.5">
           <div className="flex items-center gap-3 mb-3">
-            <div className={`w-9 h-9 rounded-xl bg-zinc-800/80 flex items-center justify-center ${isPro ? 'text-cyan-400' : 'text-zinc-500'}`}>
+            <div className={`w-9 h-9 rounded-xl bg-zinc-800/80 flex items-center justify-center ${aiAccess.allowed ? 'text-cyan-400' : 'text-zinc-500'}`}>
               <Activity className="w-4 h-4" />
             </div>
             <div>
               <p className="text-sm font-medium text-white">Detection Mode</p>
               <p className="text-xs text-zinc-500 mt-0.5">
-                {isPro ? 'Switch between basic pattern matching and AI engine' : 'AI mode requires Pro subscription'}
+                Switch between basic pattern matching and the AI engine
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <SegmentedControl
               options={[
                 { value: 'basic', label: 'Basic' },
@@ -359,14 +373,36 @@ export default function Settings() {
               ]}
               value={detectionMode}
               onChange={handleMode}
-              disabled={!isPro && detectionMode !== 'ml'}
+              // Basic is always selectable. The control only locks when AI
+              // Enabled is unavailable AND it is not the current selection.
+              disabled={!aiAccess.allowed && detectionMode !== 'ml'}
             />
-            {!isPro && (
+            {!aiAccess.loading && !aiAccess.allowed && (
               <span className="flex items-center gap-1 text-[10px] text-zinc-600">
-                <Lock className="w-3 h-3" /> Pro only
+                <Lock className="w-3 h-3" /> Subscribers only
               </span>
             )}
           </div>
+          {/* Entitlement line — quota remaining, or why access was granted */}
+          {!aiAccess.loading && (
+            <p className={`text-[11px] mt-2.5 ${
+              aiAccess.unlimited
+                ? 'text-emerald-400/80'
+                : aiAccess.remaining > 0
+                  ? 'text-cyan-400/80'
+                  : 'text-amber-400/80'
+            }`}>
+              {describeAiAccess(aiAccess)}
+              {!aiAccess.unlimited && aiAccess.remaining === 0 && (
+                <button
+                  onClick={() => navigate('/subscribe')}
+                  className="ml-2 underline underline-offset-2 hover:text-amber-300"
+                >
+                  Upgrade for unlimited
+                </button>
+              )}
+            </p>
+          )}
         </div>
       </SettingsCard>
 
@@ -424,6 +460,7 @@ export default function Settings() {
 
       {/* ══ DEVELOPER OPTIONS ══════════════════════════════════════════════ */}
       {/* ══ ADMIN ONLY — renders null (no wrapper, no spacing) for users ═══ */}
+      <AiDetectionAdminSetting onChanged={aiAccess.refresh} />
       <EthanolAdminSetting />
 
       <SectionHeader title="Developer Options" />
