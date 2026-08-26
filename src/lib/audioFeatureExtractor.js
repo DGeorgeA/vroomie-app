@@ -126,18 +126,27 @@ export async function startExtraction(callback, mode = 'basic') {
     // Eagerly load YAMNet
     await initializeEmbeddingEngine();
 
-    // Fingerprint index loads in parallel and NEVER blocks capture: if it is
-    // unavailable the session simply runs on the embedding pipeline alone.
-    loadConstellationIndex()
-      .then(ok => {
-        if (ok && isExtracting) {
-          rollingMatcher = createRollingMatcher();
-          Logger.info('[Constellation] fingerprint index ready — fast path armed');
-        } else if (!ok) {
-          Logger.warn('[Constellation] index unavailable — embedding path only');
-        }
-      })
-      .catch(() => { /* fail safe: fast path stays disabled */ });
+    // ── PATH A is exclusive to BASIC ──────────────────────────────────────
+    // Basic = Path A (fingerprint) + Path B (embedding), exactly as measured.
+    // AI Enabled = Path B only, so the paid engine is the ML engine and the
+    // fast path cannot pre-empt it. Arming is skipped entirely in 'ml' mode —
+    // no index hydration, no per-block hashing, no tryMatch cost.
+    if (activeDetectionMode === 'basic') {
+      // Index loads in parallel and NEVER blocks capture: if it is unavailable
+      // the session simply runs on the embedding pipeline alone.
+      loadConstellationIndex()
+        .then(ok => {
+          if (ok && isExtracting) {
+            rollingMatcher = createRollingMatcher();
+            Logger.info('[Constellation] fingerprint index ready — fast path armed (Basic)');
+          } else if (!ok) {
+            Logger.warn('[Constellation] index unavailable — embedding path only');
+          }
+        })
+        .catch(() => { /* fail safe: fast path stays disabled */ });
+    } else {
+      Logger.info('[Constellation] fast path not armed — AI Enabled runs Path B only');
+    }
 
     mediaStream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
@@ -210,12 +219,15 @@ function useScriptProcessorMainThreadCapture(sr) {
 
     totalSamples += blockSize;
 
-    // ── Shazam fast path: fed EVERY block, independent of YAMNet ───────────
+    // ── Shazam fast path (PATH A — BASIC ONLY): fed EVERY block ────────────
     // Deliberately outside the `!isProcessing` guard below: when inference runs
     // slower than the classification cadence the matcher would otherwise be
     // starved and never reach its minimum listen time. Pushing is a cheap
     // buffer copy; only tryMatch() (~20 ms) runs on a cadence.
-    if (!constellationFired) {
+    // In 'ml' mode rollingMatcher is never armed, so this whole block is inert
+    // — but the mode is checked explicitly so the isolation is not merely
+    // implied by arming order.
+    if (activeDetectionMode === 'basic' && !constellationFired) {
       const mono = new Float32Array(blockSize);
       for (let i = 0; i < blockSize; i++) {
         mono[i] = numCh > 1 ? (ch0[i] + input.getChannelData(1)[i]) / 2 : ch0[i];
