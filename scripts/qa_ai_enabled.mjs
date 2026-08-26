@@ -300,16 +300,36 @@ check('the counter is consumed only for ml',
 check('mode switching still refuses mid-recording',
   /Cannot switch while recording/.test(recorder));
 
-console.log('\n── Path A (the Basic engine) is untouched by the entitlement layer ──');
+console.log('\n── Path A is ISOLATED to Basic ──');
 
-check('Path A still loads its index and arms a rolling matcher',
-  /loadConstellationIndex\(\)/.test(extractor) && /createRollingMatcher\(\)/.test(extractor));
-check('Path A index warms on module load, before any entitlement check',
+check('Path A is armed only in basic mode',
+  /if \(activeDetectionMode === 'basic'\) \{[\s\S]{0,200}loadConstellationIndex\(\)/.test(extractor));
+check('the per-block fingerprint feed is gated on basic mode',
+  /if \(activeDetectionMode === 'basic' && !constellationFired\)/.test(extractor));
+check('AI Enabled explicitly logs that Path A is not armed',
+  /AI Enabled runs Path B only/.test(extractor));
+{
+  // Everything Path A owns must sit inside a basic-gated region: the arming
+  // block and the per-block feed are the only two places it is driven from.
+  const armIdx  = extractor.indexOf("if (activeDetectionMode === 'basic') {");
+  const feedIdx = extractor.indexOf("if (activeDetectionMode === 'basic' && !constellationFired)");
+  check('both Path A drivers are present and mode-gated', armIdx > 0 && feedIdx > armIdx);
+  // rollingMatcher must never be constructed outside the gated arm block.
+  const constructs = (extractor.match(/createRollingMatcher\(\)/g) || []).length;
+  check('the rolling matcher is constructed exactly once, inside the gate',
+    constructs === 1, `${constructs} construction sites`);
+}
+check('Path B is never gated on the mode (AI Enabled and Basic both run it)',
+  !/activeDetectionMode[^\n]*findBestMatch|findBestMatch[^\n]*activeDetectionMode/.test(extractor));
+
+console.log('\n── Basic keeps everything it had ──');
+
+check('Basic still runs Path B as well as Path A (no mode branch on the matcher)',
+  /const matchResult = findBestMatch\(analysis\.embedding, analysis\.meanScores\);/.test(extractor));
+check('Path A index still warms on module load, before any entitlement check',
   /setTimeout\(\(\) => \{ loadConstellationIndex\(\)/.test(extractor));
-check('Path A runs ungated — no entitlement symbol in the extractor',
+check('the extractor carries no entitlement symbol at all',
   !/aiAccess|getAiAccess|plan_flag|ai_enabled_uses/.test(extractor));
-check('Path A is never branched on the detection mode',
-  !/activeDetectionMode[^\n]*rollingMatcher|rollingMatcher[^\n]*activeDetectionMode/.test(extractor));
 check('Path A still feeds before the silence gate (P0 fix c7c8ed3 preserved)',
   extractor.indexOf('pendingFeed') < extractor.indexOf("reason: 'rejected_silence'"));
 check('Path A failure still degrades to embedding-only, never a hard error',
