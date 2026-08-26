@@ -154,6 +154,38 @@ check('entry_count is positive and matches the packed arrays',
 const hydrated = hydrateIndex(artifact);
 check('index hydrates without error', hydrated !== false && hydrated !== null);
 
+// ── Provenance: Basic's references come from the anomaly-patterns bucket ────
+console.log('\n── Reference provenance (Supabase anomaly-patterns bucket) ──');
+{
+  const builder = fs.readFileSync(path.join(ROOT, 'scripts/build_constellation_index.mjs'), 'utf8');
+  const embedBuilder = fs.readFileSync(path.join(ROOT, 'scripts/build_reference_fingerprints.mjs'), 'utf8');
+  const BUCKET_HOST = 'bdldmkhcdtlqxaopxlam.supabase.co';
+  const BUCKET_NAME = 'anomaly-patterns';
+
+  check('index declares its generator',
+    artifact.generated_by === 'scripts/build_constellation_index.mjs', artifact.generated_by);
+  check('Path A builder sources the anomaly-patterns bucket',
+    builder.includes(BUCKET_HOST) && builder.includes(BUCKET_NAME));
+  check('Path B builder sources the same bucket',
+    embedBuilder.includes(BUCKET_HOST) && embedBuilder.includes(BUCKET_NAME));
+  check('every Path A reference names a .wav source file',
+    artifact.refs.every(r => /\.wav$/i.test(r.source_file || '')));
+
+  // The exclusions below are MEASURED decisions, not oversights. If a rebuild
+  // ever reintroduces them, the healthy false-fire rate regresses.
+  const indexed = new Set(artifact.refs.map(r => (r.source_file || '').toLowerCase()));
+  check('misfire is NOT in the fingerprint index (caused the only 2 healthy false fires)',
+    !indexed.has('misfire_detected_medium.wav'));
+  check('the synthetic water-pump tone is NOT indexed',
+    !indexed.has('water_pump_failure_critical.wav'));
+  check('builder still documents both exclusions',
+    /misfire_detected_medium\.wav/.test(builder) && /water_pump_failure_critical\.wav/.test(builder));
+  check('short-reference floor is still enforced at 4.0 s',
+    /MIN_REF_SECONDS = 4\.0/.test(builder));
+  check('no duplicate references in the index',
+    new Set(artifact.refs.map(r => r.source_file)).size === artifact.refs.length);
+}
+
 // ── Negative controls: nothing synthetic may fire ───────────────────────────
 console.log('\n── Negative controls must NOT fire (no false positives) ──');
 
