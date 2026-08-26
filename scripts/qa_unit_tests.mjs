@@ -38,6 +38,16 @@ check('detection operating point matches the measured optimum',
   /const ANOMALY_THRESHOLD\s*=\s*0\.45/.test(engineSrc) && ANCHOR_MARGIN === 0.04,
   `threshold/margin = ${(engineSrc.match(/ANOMALY_THRESHOLD\s*=\s*([\d.]+)/) || [])[1]}/${ANCHOR_MARGIN}`);
 {
+  // v9.9 speaker-coloration rescue: constants must match the measured boundary
+  // (29/70 vetoed fault windows recovered, 0/108 speech/music admitted).
+  const wf = parseFloat((engineSrc.match(/WEAK_INTERFERER_VEHICLE_FLOOR\s*=\s*([\d.]+)/) || [])[1]);
+  const wc = parseFloat((engineSrc.match(/WEAK_INTERFERER_CEILING\s*=\s*([\d.]+)/) || [])[1]);
+  check('speaker-rescue gate clause matches measured boundary (0.02 floor, 0.30 ceiling)',
+    wf === 0.02 && wc === 0.30, `floor=${wf} ceiling=${wc}`);
+  check('speaker-rescue clause requires BOTH vehicle evidence AND weak interferer',
+    /isInterferer\s*&&\s*vehicleScore\s*>=\s*WEAK_INTERFERER_VEHICLE_FLOOR\s*&&[\s\S]{0,40}interfererScore\s*<=\s*WEAK_INTERFERER_CEILING/.test(engineSrc));
+}
+{
   const rec = fs.readFileSync(path.join(ROOT, 'src', 'components', 'predictive', 'AudioRecorder.jsx'), 'utf8');
   const frac = parseFloat((rec.match(/SESSION_FRACTION\s*=\s*([\d.]+)/) || [])[1]);
   const minW = parseInt((rec.match(/SESSION_MIN_ACCEPTED\s*=\s*(\d+)/) || [])[1], 10);
@@ -57,6 +67,20 @@ check('detection operating point matches the measured optimum',
     /confirmed\.length === 0[\s\S]{0,200}RECOVERY_TOTAL_FRACTION/.test(rec));
   check('recovery tie-break ranks by raw similarity (simSum), not margin/confidence',
     /simSum[\s\S]{0,120}RECOVERY_DOMINANCE/.test(rec) && rec.includes('bestFaultSimilarity'));
+  // v10.1 NEAR tier — the ONLY swept corner with zero added false alarms
+  // (0/140 held-out healthy, 0/8 interferers). A looser fraction cost 7/35.
+  const nearFrac = parseFloat((rec.match(/NEAR_SESSION_FRACTION\s*=\s*([\d.]+)/) || [])[1]);
+  const nearMargin = parseFloat((engineSrc.match(/NEAR_ANCHOR_MARGIN\s*=\s*([\d.]+)/) || [])[1]);
+  check('near-match tier matches the measured-safe corner (margin 0.02, fraction 0.85)',
+    nearMargin === 0.02 && nearFrac === 0.85, `nearMargin=${nearMargin} nearFraction=${nearFrac}`);
+  check('near tier fires only after primary AND recovery confirmed nothing',
+    /confirmed\.length === 0 && sessionNearRef/.test(rec));
+  check('near tier is capped at medium severity (never escalates health to critical)',
+    /matchMethod:\s*'near_match'/.test(rec) && /severity:\s*'medium'/.test(rec));
+  check('near tier possibility stays strictly below the 70% confirmed floor',
+    /Math\.max\(65, Math\.min\(69/.test(rec));
+  check('near band windows still count as CLEAN (primary rule unchanged)',
+    /sessionCleanWindowsRef\.current\+\+;[\s\S]{0,260}nearFaultType/.test(rec));
 }
 
 // ─── QA-1b: possibility statement format ────────────────────────────────────

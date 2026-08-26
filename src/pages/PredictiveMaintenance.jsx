@@ -132,6 +132,7 @@ export default function PredictiveMaintenance() {
         const { data, error } = await supabase
           .from('analyses')
           .select('*')
+          .neq('status', 'rejected') // abort-telemetry rows are diagnostics, not user history
           .order('created_at', { ascending: false })
           .limit(50);
 
@@ -172,6 +173,9 @@ export default function PredictiveMaintenance() {
         { event: 'INSERT', schema: 'public', table: 'analyses' },
         (payload) => {
           if (isMounted) {
+            // Abort-telemetry rows (status 'rejected') are remote diagnostics —
+            // never surface them as user sessions.
+            if (payload.new?.status === 'rejected') return;
             const newRow = { ...payload.new, created_date: payload.new.created_at };
             console.log(`[Vroomie Realtime] New row pushed: id=${newRow.id?.substring(0,8)} created_at=${newRow.created_at}`);
             // Deduplicate: only prepend if this id isn't already present

@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import { Mic, Square, Bug, Lock, Sparkles } from "lucide-react";
 import GlassButton from "../ui/GlassButton";
 import { toast } from "sonner";
-import { startExtraction, stopExtraction, getActiveMediaStream, getActiveAudioContext, getCaptureSettings } from "@/lib/audioFeatureExtractor";
+import { startExtraction, stopExtraction, getActiveMediaStream, getActiveAudioContext, getCaptureSettings, getBestFingerprint } from "@/lib/audioFeatureExtractor";
 import { startMotionCapture, stopMotionCapture } from "@/lib/motionDetector";
 import { buildReadableLabel, resetMatchState } from "@/lib/audioMatchingEngine"; // Legacy fallback if needed
 import { clearContinuousAlert, speakScanResult, speakUnableToDetect } from "@/lib/voiceFeedback";
@@ -65,6 +65,17 @@ export default function AudioRecorder({
   const RECOVERY_DOMINANCE = 1.10;
   const motionResultRef = useRef(null); // vehicle-vibration verdict for this session
   const sessionNoRefsRef = useRef(false); // reference artifact failed to load
+  // Per-stage rejection breakdown for field diagnosability of
+  // "Unable to detect" aborts: {silence, domain, domainTop1: Map<class,count>}
+  const sessionRejectBreakdownRef = useRef({ silence: 0, domain: 0, domainTop1: new Map() });
+  // Shazam-style fingerprint hit for this session (null until one fires).
+  const fingerprintHitRef = useRef(null);
+  // v10.1 NEAR band tally: family -> {hits, marginSum, sourceFile, labelHits}.
+  // Only consulted when the primary AND recovery rules confirmed nothing.
+  const sessionNearRef = useRef(new Map());
+  // Measured-safe operating point (see mlEmbeddingEngine NEAR_ANCHOR_MARGIN):
+  // 85% of accepted windows must sit in the near band for ONE family.
+  const NEAR_SESSION_FRACTION = 0.85;
 
   // Vehicle-vibration verdict is an ANNOTATION, not a hard gate: controlled
   // bench tests (reference samples replayed at a stationary phone) must still
@@ -204,7 +215,36 @@ export default function AudioRecorder({
         finalDecision:    'ANOMALY DETECTED',
       };
     };
-    if (accepted >= SESSION_MIN_ACCEPTED) {
+    // ── Shazam fast path wins outright ──────────────────────────────────────
+    // A coherent fingerprint match identified the exact reference recording.
+    // It is independent of (and far stricter than) the window-fraction rule, so
+    // it is reported directly and is NOT subject to the domain-gate abort —
+    // the audio was positively identified, so "unable to detect" would be
+    // plainly wrong. Confidence is fixed high because the coherence test
+    // already cleared a 2.5x margin over every measured negative.
+    const fpHit = fingerprintHitRef.current;
+    if (fpHit) {
+      const readable = buildReadableLabel(fpHit.anomaly);
+      const possibility = 97;
+      confirmed.push({
+        type:             readable,
+        rawLabel:         fpHit.anomaly,
+        faultType:        fpHit.faultType,
+        severity:         fpHit.severity,
+        timestamp:        fpHit.firstSeen,
+        status:           'anomaly',
+        signalSimilarity: possibility / 100,
+        possibility,
+        sourceFile:       fpHit.sourceFile,
+        matchMethod:      'acoustic_fingerprint',
+        fingerprintScore: fpHit.score,
+        listenSeconds:    fpHit.listenSeconds,
+        statement:        `There is a ${possibility}% possibility that there could be a possible ${readable}${fpHit.sourceFile ? ` (${fpHit.sourceFile})` : ''}`,
+        finalDecision:    'ANOMALY DETECTED',
+      });
+    }
+
+    if (!fpHit && accepted >= SESSION_MIN_ACCEPTED) {
       // PRIMARY rule (unchanged): a single family holds >=45% of accepted windows.
       for (const [familyKey, e] of sessionCandidatesRef.current) {
         if (e.hits / accepted >= SESSION_FRACTION) {
@@ -229,6 +269,47 @@ export default function AudioRecorder({
           }
           // else: candidates are abundant but no family is credibly dominant —
           // decline rather than risk naming the wrong fault.
+        }
+      }
+
+      // ── v10.1 NEAR-MATCH tier (65-69%, "verification required") ──────────
+      // Last resort: nothing confirmed, but one family's windows sat in the
+      // near band for >=85% of the session. Reported as POSSIBLE, never as a
+      // confirmed fault, and capped at severity 'medium' so overall health
+      // becomes 'warning' rather than 'critical'.
+      // Measured cost at this operating point: 0 added false alarms across
+      // 140 held-out healthy clips and the full interferer suite.
+      if (confirmed.length === 0 && sessionNearRef.current.size > 0) {
+        let nk = null, ne = null, bestFrac = 0;
+        for (const [k, e] of sessionNearRef.current) {
+          const frac = e.hits / accepted;
+          if (frac >= NEAR_SESSION_FRACTION && frac > bestFrac) { bestFrac = frac; nk = k; ne = e; }
+        }
+        if (ne) {
+          let dominantLabel = nk;
+          let best = 0;
+          for (const [l, c] of ne.labelHits) if (c > best) { best = c; dominantLabel = l; }
+          const readable = buildReadableLabel(dominantLabel);
+          // Map the near band [0.02, 0.04) onto 65-69% — strictly below the
+          // 70% floor the confirmed band starts at, so the two never blur.
+          const meanMargin = ne.marginSum / ne.hits;
+          const possibility = Math.max(65, Math.min(69,
+            Math.round(65 + ((meanMargin - 0.02) / 0.02) * 4)));
+          confirmed.push({
+            type:             readable,
+            rawLabel:         dominantLabel,
+            faultType:        nk,
+            severity:         'medium',   // never escalates overall health to critical
+            timestamp:        ne.firstSeen,
+            status:           'anomaly',
+            signalSimilarity: possibility / 100,
+            possibility,
+            sourceFile:       ne.sourceFile,
+            matchMethod:      'near_match',
+            isPossibleOnly:   true,
+            statement:        `There is a ${possibility}% possibility that there could be a possible ${readable}${ne.sourceFile ? ` (${ne.sourceFile})` : ''} — this is a low-confidence indication and requires verification by a qualified workshop`,
+            finalDecision:    'POSSIBLE — VERIFICATION REQUIRED',
+          });
         }
       }
     }
@@ -272,6 +353,9 @@ export default function AudioRecorder({
       sessionCleanWindowsRef.current = 0;
       sessionRejectionsRef.current = 0;
       sessionNoRefsRef.current = false;
+      sessionRejectBreakdownRef.current = { silence: 0, domain: 0, domainTop1: new Map() };
+      fingerprintHitRef.current = null;   // must not leak into the next session
+      sessionNearRef.current = new Map();
 
       isRecordingRef.current = true;   // ← update ref FIRST (used by async callbacks)
       setIsRecording(true);            // ← triggers waveform BURST immediately
@@ -370,12 +454,71 @@ export default function AudioRecorder({
         const rms        = workerResult.rms         || features.rms || 0;
         const reason     = workerResult.reason      || '';
 
+        // ── Shazam-style fingerprint hit ────────────────────────────────────
+        // A coherent constellation match identifies the exact reference
+        // recording being replayed. Time-offset coherence is a far stronger
+        // condition than similarity (measured: worst positive 2.5x above the
+        // worst of 115 healthy clips + all interferers), so this confirms the
+        // session immediately rather than waiting for the window-fraction rule.
+        if (status === 'fingerprint_match' && anomaly) {
+          if (!fingerprintHitRef.current) {
+            fingerprintHitRef.current = {
+              anomaly,
+              faultType: workerResult.faultType || anomaly,
+              severity: workerResult.severity || 'high',
+              sourceFile: workerResult.sourceFile || null,
+              score: workerResult.score,
+              normalized: workerResult.normalized,
+              listenSeconds: workerResult.listenSeconds,
+              firstSeen: recordingTimeRef.current,
+            };
+            const readable = buildReadableLabel(anomaly);
+            toast.success(`Identified: ${readable}`, {
+              description: `Acoustic fingerprint matched in ${workerResult.listenSeconds}s — finalising your report.`,
+              duration: 6000,
+            });
+            // Finalise straight away: this is the Shazam behaviour — identify
+            // and report, rather than making the user wait out the session.
+            if (isRecordingRef.current) stopRecording();
+          }
+          return;
+        }
+
         if (status === 'normal' && reason.startsWith('rejected_')) {
           sessionRejectionsRef.current++;
           if (reason === 'rejected_no_references') sessionNoRefsRef.current = true;
+          // Field diagnosability: keep a per-stage breakdown so an
+          // "Unable to detect" abort can say WHICH stage rejected the audio
+          // (silence gate vs domain gate) and what YAMNet heard.
+          if (reason === 'rejected_silence') {
+            sessionRejectBreakdownRef.current.silence++;
+          } else if (reason.startsWith('rejected_domain_')) {
+            sessionRejectBreakdownRef.current.domain++;
+            const cls = reason.slice('rejected_domain_'.length);
+            const m = sessionRejectBreakdownRef.current.domainTop1;
+            m.set(cls, (m.get(cls) || 0) + 1);
+          }
         } else if (status === 'normal' && reason !== '') {
           // gate-passed window that resolved healthy (below threshold / healthy margin)
           sessionCleanWindowsRef.current++;
+          // v10.1: additionally tally NEAR-band windows. This does NOT change
+          // the window's clean classification or any existing count — it only
+          // enables the low-confidence "possible" verdict below.
+          if (workerResult.nearFaultType) {
+            const nk = workerResult.nearFaultType;
+            const ne = sessionNearRef.current.get(nk) || {
+              hits: 0, marginSum: 0, sourceFile: null, bestMargin: 0,
+              firstSeen: recordingTimeRef.current, labelHits: new Map()
+            };
+            ne.hits++;
+            ne.marginSum += workerResult.nearMargin || 0;
+            ne.labelHits.set(workerResult.nearLabel || nk, (ne.labelHits.get(workerResult.nearLabel || nk) || 0) + 1);
+            if ((workerResult.nearMargin || 0) > ne.bestMargin) {
+              ne.bestMargin = workerResult.nearMargin || 0;
+              ne.sourceFile = workerResult.nearSourceFile || ne.sourceFile;
+            }
+            sessionNearRef.current.set(nk, ne);
+          }
         } else if (status === 'candidate' && anomaly) {
           sessionCandidateWindowsRef.current++;
           // Aggregate by fault FAMILY (faultType) — sibling references of the
@@ -505,7 +648,9 @@ export default function AudioRecorder({
         const { confirmed: realAnomalies, isMostlyRejected: isMostlySilence } = computeSessionOutcome();
 
         if (isVoiceAlertsEnabled) {
-          if (isMostlySilence) {
+          // A fingerprint identification means the audio WAS identified — never
+          // announce "unable to detect" over a positive result.
+          if (!fingerprintHitRef.current && isMostlySilence) {
             speakUnableToDetect(language);
           } else if (realAnomalies.length === 0) {
             speakScanResult([], language); // "No anomalies found"
@@ -582,26 +727,89 @@ export default function AudioRecorder({
         avgConfidence
       } = computeSessionOutcome();
 
+      // ── Abort telemetry: persist EVERY aborted session as a status:'rejected'
+      // row (hidden from history UIs, which filter this status out). Field
+      // failures previously left ZERO remote evidence — "Unable to detect"
+      // reports could not be diagnosed without physical access to the device.
+      // Fire-and-forget: persistence must never delay or break the abort UX.
+      const persistAbortDiagnostics = (abortReason) => {
+        try {
+          const bd = sessionRejectBreakdownRef.current;
+          const heardAs = [...bd.domainTop1.entries()]
+            .sort((a, b) => b[1] - a[1]).slice(0, 5)
+            .map(([cls, n]) => `${cls} x${n}`);
+          supabase.from('analyses').insert({
+            vehicle_id: vehicleId || null,
+            duration_seconds: recordingTimeRef.current,
+            status: 'rejected',
+            confidence_score: 0,
+            anomalies_detected: [],
+            detection_mode: getDetectionMode(),
+            final_decision: 'ABORTED',
+            analysis_result: {
+              aborted: true,
+              abort_reason: abortReason,
+              session_diagnostics: {
+                windows_analyzed: accepted + rejections,
+                accepted,
+                rejected: rejections,
+                rejected_silence: bd.silence,
+                rejected_domain: bd.domain,
+                domain_heard_as: heardAs,
+                capture_settings: getCaptureSettings(),
+                best_fingerprint: getBestFingerprint(),
+                engine_build: 'v10.4'
+              }
+            }
+          }).then(({ error }) => {
+            if (error) console.warn('[Vroomie] Abort telemetry not persisted:', error.message);
+            else console.log('[Vroomie] Abort telemetry persisted for remote diagnosis.');
+          });
+        } catch (e) { console.warn('[Vroomie] Abort telemetry failed:', e.message); }
+      };
+
       // ── Engine-health gate: if NOTHING was analyzed (YAMNet never loaded,
       // session too short) or the reference artifact failed to load, a report
       // would be fabricated from zero evidence — abort with a specific error
       // instead of publishing a fake-HEALTHY result.
-      if (accepted + rejections === 0) {
+      // A fingerprint identification bypasses every abort gate below: the
+      // recording WAS identified, so no "could not analyze" message applies.
+      const hasFingerprintHit = !!fingerprintHitRef.current;
+
+      if (!hasFingerprintHit && accepted + rejections === 0) {
         console.error('[Vroomie] Zero windows analyzed — model not ready or session too short. Aborting report.');
         toast.error("The audio engine could not analyze this session. Record for at least 10 seconds and check your connection.", { duration: 6000 });
+        persistAbortDiagnostics('zero_windows_analyzed');
         if (onRecordingComplete) onRecordingComplete(null);
         return;
       }
-      if (sessionNoRefsRef.current && accepted === 0) {
+      if (!hasFingerprintHit && sessionNoRefsRef.current && accepted === 0) {
         console.error('[Vroomie] Reference dataset failed to load — aborting report.');
         toast.error("Fault reference data failed to load. Check your connection and try again.", { duration: 6000 });
+        persistAbortDiagnostics('reference_artifact_failed_to_load');
         if (onRecordingComplete) onRecordingComplete(null);
         return;
       }
 
-      if (isMostlySilence) {
-        console.warn(`[Vroomie] Audio rejected (non-vehicle). Rejections: ${rejections}/${rejections + accepted}. Aborting report publish.`);
-        toast.error("Unable to detect vehicle audio. Please try again.", { duration: 4000 });
+      if (!hasFingerprintHit && isMostlySilence) {
+        // Tell the user (and the console) WHICH stage rejected the audio —
+        // "try again" without a why is undiagnosable from the field.
+        const bd = sessionRejectBreakdownRef.current;
+        const topHeard = [...bd.domainTop1.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+        console.warn(`[Vroomie] Audio rejected (non-vehicle). Rejections: ${rejections}/${rejections + accepted} ` +
+          `(silence: ${bd.silence}, non-vehicle: ${bd.domain}; heard as: ${topHeard.map(([c, n]) => `${c}x${n}`).join(', ') || 'n/a'}). Aborting report publish.`);
+        const why = bd.silence > bd.domain
+          ? 'The recording was mostly too quiet — increase playback volume or move the phone closer.'
+          : `The audio was heard as ${topHeard.length ? topHeard[0][0] : 'non-vehicle sound'} rather than a vehicle.`;
+        const bfp = getBestFingerprint();
+        const fpNote = bfp && bfp.score > 0
+          ? ` · closest fingerprint ${bfp.label || '?'} ${bfp.score}/600`
+          : ' · no fingerprint evidence';
+        toast.error("Unable to detect vehicle audio. Please try again.", {
+          description: `${why} (${bd.silence} quiet / ${bd.domain} non-vehicle of ${rejections + accepted} windows)${fpNote}`,
+          duration: 9000,
+        });
+        persistAbortDiagnostics('mostly_rejected_non_vehicle');
         if (onRecordingComplete) onRecordingComplete(null);
         return;
       }
@@ -688,7 +896,8 @@ export default function AudioRecorder({
             rejected: rejections,
             candidate_windows: sessionCandidateWindowsRef.current,
             capture_settings: getCaptureSettings(),
-            engine_build: 'v9.8'
+            best_fingerprint: getBestFingerprint(),
+            engine_build: 'v10.4'
           },
         },
         // processed_at intentionally omitted — created_at is server-generated (DEFAULT now())

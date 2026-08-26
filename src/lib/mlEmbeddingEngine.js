@@ -34,6 +34,16 @@ const ANOMALY_THRESHOLD = 0.45;
 // combined fault recall 34/47 = 72%, bucket file audit 54/55.
 const ANCHOR_MARGIN = 0.04;
 
+// v10.1 NEAR band floor. Windows with margin in [NEAR_ANCHOR_MARGIN,
+// ANCHOR_MARGIN) are still CLEAN for every existing rule — they only make a
+// low-confidence "possible" verdict available when that band dominates a
+// session (>=85% of accepted windows, enforced in AudioRecorder).
+// Parameter sweep over near ∈ {0.015..0.03} × fraction ∈ {0.45..0.85}
+// (scripts/measure_near_match_tier.mjs): 0.02 @ 0.85 is the only corner that
+// recovers a held-out fault while adding ZERO false alarms — 0/140 held-out
+// healthy clips and 0/8 interferers. The looser 0.45 fraction cost 7/35.
+const NEAR_ANCHOR_MARGIN = 0.02;
+
 // ─── Acoustic domain gate ─────────────────────────────────────────────────────
 // YAMNet embeddings of ANY two audible sounds (speech, music, engines) routinely
 // exceed 0.75 cosine similarity, so similarity alone cannot tell "TV dialogue"
@@ -88,6 +98,16 @@ const VEHICLE_SCORE_FLOOR = 0.03;
 // but ONLY when interferer (speech/music/TV) evidence is negligible. Measured:
 // fault recordings score ≤ 0.09 on interferer classes; speech/TV/music 0.17–1.0.
 const GENERIC_INTERFERER_CEILING = 0.15;
+
+// v9.9 speaker-coloration rescue boundary (field "Unable to detect" RCA,
+// scripts/rca_gate_boundary.mjs). Real-speaker playback shifts YAMNet top-1 to
+// Speech/Applause/Bell on several genuine fault recordings; windows carrying
+// BOTH a weak interferer top-1 AND mechanical evidence may pass to matching.
+// Measured plane: 70 vetoed reference windows vs 108 real-speech/music windows
+// — this boundary recovers 29 and admits 0 (speech: intf 0.47–0.98, veh ≈0.001;
+// recovered faults: veh 0.02–0.05, intf ≤0.30).
+const WEAK_INTERFERER_VEHICLE_FLOOR = 0.02;
+const WEAK_INTERFERER_CEILING = 0.30;
 
 
 /**
@@ -191,8 +211,20 @@ export function evaluateAudioDomain(meanScores) {
     // Generic acoustics (White noise, Sine wave, Explosion, …): pass to the
     // margin matcher, but only when speech/music/TV evidence is negligible.
     (!isInterferer && interfererScore < GENERIC_INTERFERER_CEILING) ||
-    // Interferer top-1: only an overwhelmingly dominant mechanical signature passes.
-    (vehicleScore >= VEHICLE_SCORE_FLOOR && vehicleScore > interfererScore);
+    // Interferer top-1: an overwhelmingly dominant mechanical signature passes.
+    (vehicleScore >= VEHICLE_SCORE_FLOOR && vehicleScore > interfererScore) ||
+    // v9.9 SPEAKER-COLORATION RESCUE (field failure, measured): playback
+    // through a real speaker shifts YAMNet toward Speech/Applause/Bell, and
+    // the hard interferer-top-1 veto was discarding windows that ALSO carried
+    // vehicle evidence (MotorStarter through a phone speaker: 12/12 windows
+    // "Speech", 0 accepted -> "Unable to detect"). Accept WEAK interferer
+    // top-1 when mechanical evidence coexists. Boundary measured on 70 vetoed
+    // reference windows vs 108 real-speech/music windows: recovers 29,
+    // admits 0 — real speech scores 0.47-0.98 (>> 0.30 ceiling) with vehicle
+    // evidence ~0.001 (<< 0.02 floor). The margin matcher + anchors + session
+    // rule remain behind this gate as further defenses.
+    (isInterferer && vehicleScore >= WEAK_INTERFERER_VEHICLE_FLOOR &&
+     interfererScore <= WEAK_INTERFERER_CEILING);
   return { accepted, top1: YAMNET_CLASSES[top1Idx], vehicleScore, interfererScore };
 }
 
@@ -329,11 +361,21 @@ export function findBestMatch(liveEmbedding, meanScores = null) {
   }
   if (margin < ANCHOR_MARGIN) {
     // Sounds like an engine, but no closer to a fault than to a healthy engine.
+    // v10.1: windows in the NEAR band still count as CLEAN (status/reason and
+    // therefore the primary rule are unchanged bit-for-bit) but carry the
+    // family and margin so the session can offer a low-confidence "possible"
+    // verdict when — and only when — the band overwhelmingly dominates.
+    // Sweep-measured: near>=0.02 at a 0.85 session fraction adds 0 false
+    // alarms over 140 held-out healthy clips and 0 over the interferer suite.
     return {
       status: 'normal',
       anomaly: null,
       confidence: 0,
-      reason: `healthy_margin_${margin.toFixed(3)}`
+      reason: `healthy_margin_${margin.toFixed(3)}`,
+      nearFaultType: margin >= NEAR_ANCHOR_MARGIN ? (bestMatch.fault_type || bestMatch.label) : null,
+      nearLabel: margin >= NEAR_ANCHOR_MARGIN ? bestMatch.label : null,
+      nearMargin: margin >= NEAR_ANCHOR_MARGIN ? margin : 0,
+      nearSourceFile: margin >= NEAR_ANCHOR_MARGIN ? (bestMatch.source_file || null) : null,
     };
   }
 

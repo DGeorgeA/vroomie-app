@@ -190,15 +190,22 @@ check('no entitlement object yields a sign-in prompt',
 console.log('\n══ PART 2 — BASIC PATH MUST BE UNCHANGED ══\n');
 console.log('── Engine files carry no diff from the last measured build ──');
 
-// 5624472 is the v9.8 commit whose figures (155/162 sim-acoustic, 9/140 healthy
-// FP, bit-identical held-out matrix) the product currently claims.
-const MEASURED_BASELINE = '5624472';
+// The entitlement work must not perturb the shipped detection engine, so every
+// engine file is diffed against origin/main — the branch carrying the measured
+// v10.4 figures. Path A (constellation fingerprint) and Path B (YAMNet
+// embedding) are BOTH protected: Basic runs Path A, and neither may drift.
+const MEASURED_BASELINE = process.env.QA_BASELINE || 'origin/main';
 const ENGINE_FILES = [
+  // Path A — Shazam-style constellation fingerprint
+  'src/lib/constellationMatcher.js',
+  'public/constellation_v1.json',
+  // Path B — YAMNet embedding match
   'src/lib/mlEmbeddingEngine.js',
+  'public/fingerprints_v9.json',
+  // Shared
   'src/lib/audioMatchingEngine.js',
   'src/lib/detectionMode.js',
   'src/store/settingsStore.js',
-  'public/fingerprints_v9.json',
 ];
 
 let gitAvailable = true;
@@ -224,13 +231,41 @@ if (gitAvailable) {
 
 console.log('\n── Calibrated constants still hold their measured values ──');
 
+console.log('   Path B — YAMNet embedding');
 const engine = read('src/lib/mlEmbeddingEngine.js');
 check('ANOMALY_THRESHOLD is 0.45', /const ANOMALY_THRESHOLD = 0\.45;/.test(engine));
 check('ANCHOR_MARGIN is 0.04', /const ANCHOR_MARGIN = 0\.04;/.test(engine));
+check('NEAR_ANCHOR_MARGIN is 0.02', /const NEAR_ANCHOR_MARGIN = 0\.02;/.test(engine));
 check('VEHICLE_SCORE_FLOOR is 0.03', /const VEHICLE_SCORE_FLOOR = 0\.03;/.test(engine));
 check('GENERIC_INTERFERER_CEILING is 0.15', /const GENERIC_INTERFERER_CEILING = 0\.15;/.test(engine));
+check('WEAK_INTERFERER_VEHICLE_FLOOR is 0.02',
+  /const WEAK_INTERFERER_VEHICLE_FLOOR = 0\.02;/.test(engine));
+check('WEAK_INTERFERER_CEILING is 0.30', /const WEAK_INTERFERER_CEILING = 0\.30;/.test(engine));
 check('marginToConfidence maps 0.70..0.97',
   /Math\.max\(0\.70,\s*Math\.min\(0\.97,\s*0\.70 \+ 1\.08 \* \(margin - ANCHOR_MARGIN\)\)\)/.test(engine));
+
+console.log('   Path A — constellation fingerprint (what Basic runs)');
+const fp = read('src/lib/constellationMatcher.js');
+check('Path A sample rate is 16 kHz', /export const SR = 16000;/.test(fp));
+check('NFFT is 1024 (64 ms)', /const NFFT = 1024;/.test(fp));
+check('HOP is 256 (16 ms)', /const HOP = 256;/.test(fp));
+check('band edges unchanged', /const BANDS = \[0, 20, 40, 80, 160, 320, NBINS\];/.test(fp));
+check('PEAK_FACTOR is 1.6', /const PEAK_FACTOR = 1\.6;/.test(fp));
+check('FANOUT is 6', /const FANOUT = 6;/.test(fp));
+check('pairing window DT 1..48, DF 160',
+  /const DT_MIN = 1, DT_MAX = 48, DF_MAX = 160;/.test(fp));
+check('instant gate: score >= 600',
+  /export const MIN_COHERENT_SCORE = 600;/.test(fp));
+check('instant gate: normalized >= 0.05',
+  /export const MIN_NORMALIZED_SCORE = 0\.05;/.test(fp));
+check('sustained gate: score >= 480',
+  /export const SUSTAINED_COHERENT_SCORE = 480;/.test(fp));
+check('sustained gate: normalized >= 0.042',
+  /export const SUSTAINED_NORMALIZED_SCORE = 0\.042;/.test(fp));
+check('sustained gate needs 2 consecutive attempts',
+  /export const SUSTAINED_REPEATS = 2;/.test(fp));
+check('listen window 5 s / min 3 s',
+  /export const LISTEN_SECONDS = 5;/.test(fp) && /export const MIN_LISTEN_SECONDS = 3;/.test(fp));
 
 const recorder = read('src/components/predictive/AudioRecorder.jsx');
 check('SESSION_FRACTION is 0.45', /const SESSION_FRACTION = 0\.45;/.test(recorder));
@@ -264,6 +299,21 @@ check('the counter is consumed only for ml',
 }
 check('mode switching still refuses mid-recording',
   /Cannot switch while recording/.test(recorder));
+
+console.log('\n── Path A (the Basic engine) is untouched by the entitlement layer ──');
+
+check('Path A still loads its index and arms a rolling matcher',
+  /loadConstellationIndex\(\)/.test(extractor) && /createRollingMatcher\(\)/.test(extractor));
+check('Path A index warms on module load, before any entitlement check',
+  /setTimeout\(\(\) => \{ loadConstellationIndex\(\)/.test(extractor));
+check('Path A runs ungated — no entitlement symbol in the extractor',
+  !/aiAccess|getAiAccess|plan_flag|ai_enabled_uses/.test(extractor));
+check('Path A is never branched on the detection mode',
+  !/activeDetectionMode[^\n]*rollingMatcher|rollingMatcher[^\n]*activeDetectionMode/.test(extractor));
+check('Path A still feeds before the silence gate (P0 fix c7c8ed3 preserved)',
+  extractor.indexOf('pendingFeed') < extractor.indexOf("reason: 'rejected_silence'"));
+check('Path A failure still degrades to embedding-only, never a hard error',
+  /fail safe: fast path stays disabled/.test(extractor));
 
 console.log('\n── Quota is spent on scan start, not on mode selection ──');
 
