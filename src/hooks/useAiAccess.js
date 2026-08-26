@@ -13,12 +13,8 @@
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
-import {
-  getAiAccess,
-  consumeAiUse,
-  FREE_AI_USE_LIMIT,
-  GRANT_NONE,
-} from '@/services/aiAccessService';
+import { getAiAccess, consumeAiUse } from '@/services/aiAccessService';
+import { FREE_AI_USE_LIMIT, GRANT_NONE } from '@/services/aiAccessPolicy';
 
 const INITIAL = Object.freeze({
   allowed: false, unlimited: false, grant: GRANT_NONE,
