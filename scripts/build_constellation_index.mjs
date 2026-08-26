@@ -1,16 +1,31 @@
 /**
  * build_constellation_index.mjs — offline builder for the Shazam-style index.
  *
+ * SINGLE SOURCE OF TRUTH: the Supabase storage bucket `anomaly-patterns`.
+ * Nothing else. Previously this also read a local audio_files/extended_10s
+ * directory produced by scripts/extend_reference_wavs.py, which wrote to a
+ * hard-coded Windows path outside the repository — so the index could not be
+ * reproduced on any other machine, and the shipped artifact depended on files
+ * no checkout contained. That source is gone.
+ *
  * Imports the hashing from src/lib/constellationMatcher.js so index-time and
- * query-time fingerprinting are provably the same code. Sources, in priority
- * order:
- *   1. audio_files/extended_10s/*.wav  (10 s crossfade-looped originals — more
- *      frames means a stronger coherence spike)
- *   2. distinct bucket classes not covered above
- * The 44 near-duplicate power-steering bucket variants are deliberately NOT
- * all indexed: constellation matching identifies exact recordings, so
- * duplicates add index weight without adding discriminative power. A few
- * representatives are enough.
+ * query-time fingerprinting are provably the same code.
+ *
+ * REFERENCE EXTENSION (moved in-process, was extend_reference_wavs.py):
+ * constellation matching scales with reference duration — more frames means
+ * more hashes means a stronger time-offset coherence spike — and most bucket
+ * originals are only 1-2 s, below MIN_REF_SECONDS. Short references are
+ * therefore crossfade-looped up to TARGET_SECONDS here, in memory. These are
+ * steady-state mechanical sounds, so seamless looping is acoustically
+ * faithful: a 2 s alternator whine and a 10 s alternator whine are the same
+ * physical signal. The loop uses a 50 ms equal-power crossfade because a naive
+ * concatenation leaves a click, and a click registers as spurious spectral
+ * peaks that pollute the constellation.
+ *
+ * ONE REPRESENTATIVE PER FAMILY: constellation matching identifies exact
+ * recordings, so near-duplicates (the bucket holds 44 power-steering variants)
+ * add index weight without adding discriminative power. The longest recording
+ * in each family is indexed; the rest are covered by the embedding path.
  *
  * Output: public/constellation_v1.json  (compact base64 Int32 arrays)
  */
@@ -18,10 +33,10 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { computeConstellationHashes, SR } from '../src/lib/constellationMatcher.js';
+import { extendByCrossfadeLoop, TARGET_SECONDS, XFADE_SECONDS } from './lib/extendLoop.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
-const SRC10 = path.resolve(ROOT, '..', 'audio_files', 'extended_10s');
 const OUT = path.join(ROOT, 'public', 'constellation_v1.json');
 const BUCKET = 'https://bdldmkhcdtlqxaopxlam.supabase.co/storage/v1/object/public/anomaly-patterns/';
 const LIST_URL = 'https://bdldmkhcdtlqxaopxlam.supabase.co/storage/v1/object/list/anomaly-patterns';
@@ -115,44 +130,55 @@ function addReference(name, pcm16, sourceFile) {
   console.log(`  ${name.padEnd(44)} ${(pcm16.length / SR).toFixed(1)}s  hashes=${fp.h.length}`);
 }
 
-console.log('[constellation] indexing extended 10 s originals...');
-const covered = new Set();
-if (fs.existsSync(SRC10)) {
-  for (const name of fs.readdirSync(SRC10).filter(f => f.toLowerCase().endsWith('.wav'))) {
-    const { pcm, rate } = decodeWav(fs.readFileSync(path.join(SRC10, name)));
-    addReference(name, resample(pcm, rate), name);
-    covered.add(deriveMeta(name).fault_type);
-  }
-} else {
-  console.warn('[constellation] extended_10s not found — run scripts/extend_reference_wavs.py first');
-}
-
-console.log('[constellation] indexing remaining distinct bucket classes...');
+// ── SOLE SOURCE: the anomaly-patterns bucket ────────────────────────────────
+console.log(`[constellation] listing bucket ${LIST_URL}`);
+let wavs = [];
 try {
   const res = await fetch(LIST_URL, {
     method: 'POST',
     headers: { apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prefix: '', limit: 200, sortBy: { column: 'name', order: 'asc' } }),
+    body: JSON.stringify({ prefix: '', limit: 1000, sortBy: { column: 'name', order: 'asc' } }),
   });
-  const wavs = (await res.json()).filter(o => /\.wav$/i.test(o.name)).map(o => o.name);
-  for (const name of wavs) {
-    if (EXCLUDED.has(name)) { console.log(`  SKIP ${name} (excluded)`); continue; }
-    const meta = deriveMeta(name);
-    const isPS = meta.fault_type === 'power_steering';
-    // Skip classes already covered by a 10 s original, except keep a few PS
-    // representatives (that family has genuinely distinct recordings).
-    if (covered.has(meta.fault_type) && !isPS) continue;
-    // PS bucket variants are 1.5 s — all fall below MIN_REF_SECONDS and are
-    // covered by the 10 s PowerSteeringPump reference + the embedding path.
-    if (isPS) continue;
-    try {
-      const buf = Buffer.from(await (await fetch(BUCKET + encodeURIComponent(name))).arrayBuffer());
-      const { pcm, rate } = decodeWav(buf);
-      addReference(name, resample(pcm, rate), name);
-    } catch (e) { console.warn(`  ${name}: ${e.message}`); }
-  }
+  if (!res.ok) throw new Error(`list HTTP ${res.status}`);
+  wavs = (await res.json()).filter(o => /\.wav$/i.test(o.name)).map(o => o.name);
 } catch (e) {
-  console.warn('[constellation] bucket listing failed:', e.message);
+  console.error(`[constellation] FATAL: cannot list the bucket — ${e.message}`);
+  console.error('[constellation] The bucket is the only source; refusing to write a partial index.');
+  process.exit(1);
+}
+console.log(`[constellation] ${wavs.length} wav objects in bucket`);
+
+// Download every candidate once, recording its true duration so the
+// per-family representative can be chosen on evidence rather than filename.
+const candidates = new Map();   // fault_type -> [{name, pcm, seconds}]
+for (const name of wavs) {
+  if (EXCLUDED.has(name)) { console.log(`  SKIP ${name} (excluded — see EXCLUDED)`); continue; }
+  try {
+    const buf = Buffer.from(await (await fetch(BUCKET + encodeURIComponent(name))).arrayBuffer());
+    const { pcm, rate } = decodeWav(buf);
+    const pcm16 = resample(pcm, rate);
+    const meta = deriveMeta(name);
+    if (!candidates.has(meta.fault_type)) candidates.set(meta.fault_type, []);
+    candidates.get(meta.fault_type).push({ name, pcm: pcm16, seconds: pcm16.length / SR });
+  } catch (e) {
+    console.warn(`  ${name}: ${e.message}`);
+  }
+}
+
+// One representative per family: the LONGEST recording carries the most
+// independent frames, so it yields the strongest coherence spike. Duplicates
+// are deliberately left to the embedding path.
+console.log('[constellation] indexing one representative per family...');
+for (const [faultType, list] of [...candidates.entries()].sort()) {
+  list.sort((a, b) => b.seconds - a.seconds);
+  const pick = list[0];
+  const others = list.length - 1;
+  const extended = extendByCrossfadeLoop(pick.pcm, TARGET_SECONDS, SR);
+  const note = extended.length > pick.pcm.length
+    ? `looped ${pick.seconds.toFixed(1)}s -> ${(extended.length / SR).toFixed(1)}s`
+    : 'native length';
+  console.log(`  [${faultType}] ${pick.name}  (${note}${others ? `, ${others} near-duplicate(s) left to the embedding path` : ''})`);
+  addReference(pick.name, extended, pick.name);
 }
 
 // group by hash so the runtime can slice contiguous runs

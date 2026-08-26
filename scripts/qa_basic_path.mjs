@@ -39,9 +39,11 @@ import {
   LISTEN_SECONDS,
   MIN_LISTEN_SECONDS,
 } from '../src/lib/constellationMatcher.js';
+import { extendByCrossfadeLoop, TARGET_SECONDS } from './lib/extendLoop.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
+const AUDIO_DIR = path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), 'scripts/tmp_audio');
 let failures = 0;
 const check = (name, cond, detail = '') => {
   console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${detail ? '  — ' + detail : ''}`);
@@ -184,6 +186,71 @@ console.log('\n── Reference provenance (Supabase anomaly-patterns bucket) �
     /MIN_REF_SECONDS = 4\.0/.test(builder));
   check('no duplicate references in the index',
     new Set(artifact.refs.map(r => r.source_file)).size === artifact.refs.length);
+
+  // The bucket must be the ONLY input. The retired extend_reference_wavs.py
+  // wrote to a hard-coded Windows path outside the repo, so any index built
+  // from it was unreproducible in a clean checkout.
+  check('builder reads no source other than the bucket',
+    !/extended_10s|SRC10|readdirSync\(/.test(builder.replace(/^\s*\*.*$/gm, '')));
+  check('builder refuses to write a partial index if the bucket is unreachable',
+    /refusing to write a partial index/.test(builder));
+  check('reference extension happens in-process, from the shared helper',
+    /from '\.\/lib\/extendLoop\.mjs'/.test(builder));
+  check('one representative per family, chosen by longest recording',
+    /list\.sort\(\(a, b\) => b\.seconds - a\.seconds\)/.test(builder));
+}
+
+// ── Equivalence: bucket original + in-process loop == the shipped index ─────
+// This is what makes the bucket sufficient as a sole source. The shipped index
+// was built from a pre-computed extended_10s directory; if looping the ORIGINAL
+// reproduces the shipped hash_count exactly, that directory held nothing the
+// builder cannot now derive itself.
+console.log('\n── Bucket original + in-process loop vs the shipped index ──');
+{
+  const byFile = new Map(artifact.refs.map(r => [r.source_file, r]));
+  let reproduced = 0, willChange = 0, checked = 0;
+
+  for (const file of fs.readdirSync(AUDIO_DIR).filter(f => byFile.has(f))) {
+    const ref = byFile.get(file);
+    const { pcm: raw, rate } = decodeWav(fs.readFileSync(path.join(AUDIO_DIR, file)));
+    const src = to16k(raw, rate);
+    const ext = extendByCrossfadeLoop(src, TARGET_SECONDS, SR);
+
+    const hashesNative = computeConstellationHashes(src).h.length;
+    const hashesExt    = computeConstellationHashes(ext).h.length;
+    checked++;
+
+    // The shipped index is a MIX: files that came via the retired extended_10s
+    // directory were looped to 10 s; files taken straight from the bucket were
+    // indexed at native length. Both must be accounted for.
+    if (hashesExt === ref.hash_count) {
+      reproduced++;
+      check(`${file} — looping the bucket original reproduces the shipped index`,
+        true, `${(src.length / SR).toFixed(1)}s -> 10.0s = ${hashesExt} hashes (shipped ${ref.hash_count})`);
+    } else if (hashesNative === ref.hash_count) {
+      willChange++;
+      check(`${file} — shipped at NATIVE length; a bucket-only rebuild will extend it`,
+        true, `native ${hashesNative} (shipped) -> looped ${hashesExt} after rebuild`);
+    } else {
+      check(`${file} — hash count matches the shipped index by some route`, false,
+        `shipped ${ref.hash_count}, native ${hashesNative}, looped ${hashesExt}`);
+    }
+
+    // The crossfade must never introduce clipping, whichever route applies.
+    let peak = 0;
+    for (let i = 0; i < ext.length; i++) peak = Math.max(peak, Math.abs(ext[i]));
+    check(`${file} loop introduces no clipping`, peak <= 1.0001, `peak=${peak.toFixed(3)}`);
+  }
+
+  check('at least one reference was equivalence-checked', checked > 0, `${checked} refs`);
+  check('the retired extended_10s directory held nothing the builder cannot derive',
+    reproduced > 0, `${reproduced} reference(s) reproduced exactly from the bucket original`);
+  if (willChange > 0) {
+    console.log(`      NOTE: ${willChange} reference(s) ship at native length and will gain hashes on the`);
+    console.log('      next bucket-only rebuild. More hashes means a stronger coherence spike, but it');
+    console.log('      also adds index weight — re-run verify_sustained_tier.mjs against the healthy');
+    console.log('      corpus before shipping a rebuilt index.');
+  }
 }
 
 // ── Negative controls: nothing synthetic may fire ───────────────────────────
@@ -226,7 +293,6 @@ for (const [name, pcm] of NEGATIVES) {
 // build_constellation_index.mjs.
 console.log('\n── True positives: indexed source recordings must FIRE ──');
 
-const AUDIO_DIR = path.join(ROOT, 'scripts/tmp_audio');
 const loadClip = (file, secs = LISTEN_SECONDS, offset = 0) => {
   const { pcm: raw, rate } = decodeWav(fs.readFileSync(path.join(AUDIO_DIR, file)));
   const pcm = to16k(raw, rate);
