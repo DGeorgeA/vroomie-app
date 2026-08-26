@@ -8,6 +8,7 @@ import { buildReadableLabel, resetMatchState } from "@/lib/audioMatchingEngine";
 import { clearContinuousAlert, speakScanResult, speakUnableToDetect } from "@/lib/voiceFeedback";
 import { Logger } from "@/lib/logger";
 import { getDetectionMode, setDetectionMode } from "@/lib/detectionMode";
+import { summariseNormality } from "@/lib/normalityScorer";
 import UpgradeModal from "./UpgradeModal";
 import { motion } from "framer-motion";
 import { supabase } from "@/lib/supabase";
@@ -68,6 +69,9 @@ export default function AudioRecorder({
   // Per-stage rejection breakdown for field diagnosability of
   // "Unable to detect" aborts: {silence, domain, domainTop1: Map<class,count>}
   const sessionRejectBreakdownRef = useRef({ silence: 0, domain: 0, domainTop1: new Map() });
+  // Path C shadow scores for this session. Telemetry ONLY — deliberately not
+  // read by computeSessionOutcome, so the normality model cannot alter a verdict.
+  const sessionNormalityRef = useRef([]);
   // Shazam-style fingerprint hit for this session (null until one fires).
   const fingerprintHitRef = useRef(null);
   // v10.1 NEAR band tally: family -> {hits, marginSum, sourceFile, labelHits}.
@@ -354,6 +358,7 @@ export default function AudioRecorder({
       sessionRejectionsRef.current = 0;
       sessionNoRefsRef.current = false;
       sessionRejectBreakdownRef.current = { silence: 0, domain: 0, domainTop1: new Map() };
+      sessionNormalityRef.current = [];
       fingerprintHitRef.current = null;   // must not leak into the next session
       sessionNearRef.current = new Map();
 
@@ -447,6 +452,8 @@ export default function AudioRecorder({
       // ══════════════════════════════════════════════════════════════
       await startExtraction((features) => {
         const workerResult = features._workerResult || {};
+        // Path C shadow collection — never gates, never suppresses.
+        if (features.normality) sessionNormalityRef.current.push(features.normality);
         const status     = workerResult.status     || 'normal';
         const confidence = workerResult.confidence  || 0;
         const anomaly    = workerResult.anomaly     || null;
@@ -758,6 +765,7 @@ export default function AudioRecorder({
                 domain_heard_as: heardAs,
                 capture_settings: getCaptureSettings(),
                 best_fingerprint: getBestFingerprint(),
+                normality_shadow: summariseNormality(sessionNormalityRef.current),
                 engine_build: 'v10.4'
               }
             }
@@ -897,6 +905,7 @@ export default function AudioRecorder({
             candidate_windows: sessionCandidateWindowsRef.current,
             capture_settings: getCaptureSettings(),
             best_fingerprint: getBestFingerprint(),
+            normality_shadow: summariseNormality(sessionNormalityRef.current),
             engine_build: 'v10.4'
           },
         },

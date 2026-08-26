@@ -1,6 +1,7 @@
 import { Logger } from './logger';
 import { initializeEmbeddingEngine, getAudioAnalysis, findBestMatch } from './mlEmbeddingEngine';
 import { loadConstellationIndex, createRollingMatcher, isIndexReady } from './constellationMatcher';
+import { loadNormalityModel, scoreNormality, isNormalityReady } from './normalityScorer';
 
 // ─── Module-level state ───────────────────────────────────
 let isExtracting        = false;
@@ -145,7 +146,18 @@ export async function startExtraction(callback, mode = 'basic') {
         })
         .catch(() => { /* fail safe: fast path stays disabled */ });
     } else {
-      Logger.info('[Constellation] fast path not armed — AI Enabled runs Path B only');
+      Logger.info('[Constellation] fast path not armed — AI Enabled runs Path B + Path C');
+
+      // ── PATH C is exclusive to AI ENABLED, and runs in SHADOW ───────────
+      // Loads in parallel, never blocks capture, and its score influences no
+      // verdict — it is computed, logged, and measured. See normalityScorer.js
+      // for why promotion must be earned against the healthy sweep first.
+      loadNormalityModel()
+        .then(ok => {
+          if (ok) Logger.info('[Normality] Path C armed (shadow — no verdict effect)');
+          else Logger.warn('[Normality] Path C unavailable — AI Enabled runs Path B only');
+        })
+        .catch(() => { /* fail safe: Path C stays disabled */ });
     }
 
     mediaStream = await navigator.mediaDevices.getUserMedia({
@@ -354,11 +366,26 @@ function useScriptProcessorMainThreadCapture(sr) {
         // place that needs a branch.
         const matchResult = findBestMatch(analysis.embedding, analysis.meanScores);
 
+        // ── PATH C — normality score (AI Enabled only, SHADOW) ────────────
+        // Reuses the embedding Path B just computed: no second model runs, so
+        // this costs ~33K multiply-adds against a YAMNet forward pass. The
+        // result is attached for telemetry ONLY and is deliberately not read
+        // by any decision in AudioRecorder's session aggregation.
+        let normality = null;
+        if (activeDetectionMode === 'ml' && isNormalityReady()) {
+          try {
+            normality = scoreNormality(analysis.embedding);
+          } catch (nErr) {
+            Logger.warn('[Normality] scoring failed, continuing:', nErr?.message);
+          }
+        }
+
         if (onFeaturesCallback) {
           onFeaturesCallback({
             compositeEmbedding: analysis.embedding,
             _workerResult: matchResult,
             detectionMode: activeDetectionMode,
+            normality,
             rms: rms
           });
         }
