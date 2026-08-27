@@ -10,10 +10,13 @@ let mediaStreamSource   = null;
 let mediaStream         = null;
 let scriptProcessor     = null;
 let onFeaturesCallback  = null;
-// Detection path this session is running. 'basic' = Path A (constellation
-// fingerprint), 'ml' = Path B (YAMNet embedding match). Recorded so every
-// report states which engine produced it. Both paths still run exactly as
-// before — this is bookkeeping for the entitlement layer, not a gate.
+// Detection tier this session is running:
+//   'basic' = Path A (constellation fingerprint) + Path B (YAMNet embedding)
+//   'ml'    = Path A + Path B + Path C (normality model, shadow)
+// The ONLY thing this flag gates is Path C. Paths A and B behave identically
+// in both tiers, so the entitlement layer cannot change how detection works —
+// it can only add an engine on top. Also recorded on every window so a report
+// states which tier produced it.
 let activeDetectionMode = 'basic';
 // Shazam-style fast path: rolling fingerprint listener. Additive — it never
 // suppresses the embedding pipeline, and a missing index simply disables it.
@@ -127,35 +130,43 @@ export async function startExtraction(callback, mode = 'basic') {
     // Eagerly load YAMNet
     await initializeEmbeddingEngine();
 
-    // ── PATH A is exclusive to BASIC ──────────────────────────────────────
-    // Basic = Path A (fingerprint) + Path B (embedding), exactly as measured.
-    // AI Enabled = Path B only, so the paid engine is the ML engine and the
-    // fast path cannot pre-empt it. Arming is skipped entirely in 'ml' mode —
-    // no index hydration, no per-block hashing, no tryMatch cost.
-    if (activeDetectionMode === 'basic') {
-      // Index loads in parallel and NEVER blocks capture: if it is unavailable
-      // the session simply runs on the embedding pipeline alone.
-      loadConstellationIndex()
-        .then(ok => {
-          if (ok && isExtracting) {
-            rollingMatcher = createRollingMatcher();
-            Logger.info('[Constellation] fingerprint index ready — fast path armed (Basic)');
-          } else if (!ok) {
-            Logger.warn('[Constellation] index unavailable — embedding path only');
-          }
-        })
-        .catch(() => { /* fail safe: fast path stays disabled */ });
-    } else {
-      Logger.info('[Constellation] fast path not armed — AI Enabled runs Path B + Path C');
+    // ── PATH A runs in BOTH modes ─────────────────────────────────────────
+    //   Basic      = Path A + Path B
+    //   AI Enabled = Path A + Path B + Path C   (a strict SUPERSET of Basic)
+    //
+    // Path A was briefly exclusive to Basic. That was measured to be a
+    // regression, not an isolation win: alternator_bearing_fault,
+    // motor_starter and piston_knock are all indexed fingerprint families, and
+    // disarming Path A left them dependent on Path B alone. Path B is only
+    // demonstrably able to generalise for power_steering, the single family
+    // with more than a handful of distinct source recordings (45); held out
+    // from its own recording, alternator_bearing_fault falls to a 0.021 margin
+    // against a 0.04 gate. See scripts/rca_pathb_separability.mjs.
+    //
+    // A paid tier must never detect LESS than the free one, so AI Enabled
+    // keeps the fast path and adds the ML and normality engines on top.
+    // Index loads in parallel and NEVER blocks capture: if it is unavailable
+    // the session simply runs on the embedding pipeline alone.
+    loadConstellationIndex()
+      .then(ok => {
+        if (ok && isExtracting) {
+          rollingMatcher = createRollingMatcher();
+          Logger.info(`[Constellation] fingerprint index ready — fast path armed (${activeDetectionMode})`);
+        } else if (!ok) {
+          Logger.warn('[Constellation] index unavailable — embedding path only');
+        }
+      })
+      .catch(() => { /* fail safe: fast path stays disabled */ });
 
-      // ── PATH C is exclusive to AI ENABLED, and runs in SHADOW ───────────
-      // Loads in parallel, never blocks capture, and its score influences no
-      // verdict — it is computed, logged, and measured. See normalityScorer.js
-      // for why promotion must be earned against the healthy sweep first.
+    // ── PATH C is exclusive to AI ENABLED, and runs in SHADOW ─────────────
+    // Loads in parallel, never blocks capture, and its score influences no
+    // verdict — it is computed, logged, and measured. See normalityScorer.js
+    // for why promotion must be earned against the healthy sweep first.
+    if (activeDetectionMode === 'ml') {
       loadNormalityModel()
         .then(ok => {
           if (ok) Logger.info('[Normality] Path C armed (shadow — no verdict effect)');
-          else Logger.warn('[Normality] Path C unavailable — AI Enabled runs Path B only');
+          else Logger.warn('[Normality] Path C unavailable — AI Enabled runs Paths A + B');
         })
         .catch(() => { /* fail safe: Path C stays disabled */ });
     }
@@ -231,15 +242,12 @@ function useScriptProcessorMainThreadCapture(sr) {
 
     totalSamples += blockSize;
 
-    // ── Shazam fast path (PATH A — BASIC ONLY): fed EVERY block ────────────
+    // ── Shazam fast path (PATH A — BOTH modes): fed EVERY block ────────────
     // Deliberately outside the `!isProcessing` guard below: when inference runs
     // slower than the classification cadence the matcher would otherwise be
     // starved and never reach its minimum listen time. Pushing is a cheap
     // buffer copy; only tryMatch() (~20 ms) runs on a cadence.
-    // In 'ml' mode rollingMatcher is never armed, so this whole block is inert
-    // — but the mode is checked explicitly so the isolation is not merely
-    // implied by arming order.
-    if (activeDetectionMode === 'basic' && !constellationFired) {
+    if (!constellationFired) {
       const mono = new Float32Array(blockSize);
       for (let i = 0; i < blockSize; i++) {
         mono[i] = numCh > 1 ? (ch0[i] + input.getChannelData(1)[i]) / 2 : ch0[i];

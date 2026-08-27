@@ -215,14 +215,18 @@ const recorder = read('src/components/predictive/AudioRecorder.jsx');
 
 check('Path C is armed only in ml mode',
   /activeDetectionMode === 'ml' && isNormalityReady\(\)/.test(extractor));
-check('Path C is loaded only on the non-basic branch',
-  extractor.indexOf('loadNormalityModel()') > extractor.indexOf("if (activeDetectionMode === 'basic')"));
+check('Path C is loaded only inside the ml branch',
+  /if \(activeDetectionMode === 'ml'\) \{[\s\S]{0,200}loadNormalityModel\(\)/.test(extractor));
 check('Path C never arms in basic mode',
   !/activeDetectionMode === 'basic'[\s\S]{0,400}loadNormalityModel/.test(extractor));
 check('scoring failure is caught and the session continues',
   /\[Normality\] scoring failed, continuing/.test(extractor));
-check('Path A remains basic-only (unchanged by Path C)',
-  /if \(activeDetectionMode === 'basic' && !constellationFired\)/.test(extractor));
+// Path A now runs in BOTH tiers — AI Enabled is Basic plus Path C, never less.
+// Disarming Path A for AI Enabled was measured to be a regression; see
+// scripts/rca_four_families.mjs and scripts/rca_pathb_separability.mjs.
+check('Path A is unaffected by the mode (runs in both tiers)',
+  /if \(!constellationFired\) \{/.test(extractor)
+  && !/activeDetectionMode === 'basic' && !constellationFired/.test(extractor));
 
 // The critical invariant: nothing Path C produces may influence a verdict.
 {

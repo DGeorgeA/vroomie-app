@@ -300,27 +300,46 @@ check('the counter is consumed only for ml',
 check('mode switching still refuses mid-recording',
   /Cannot switch while recording/.test(recorder));
 
-console.log('\n── Path A is ISOLATED to Basic ──');
+console.log('\n── AI Enabled is a strict SUPERSET of Basic ──');
+// Path A was briefly basic-only. That was measured to be a regression:
+// alternator_bearing_fault, motor_starter and piston_knock are all indexed
+// fingerprint families, and disarming Path A left them on Path B alone, which
+// only demonstrably generalises for power_steering (see
+// scripts/rca_pathb_separability.mjs). A paid tier must never detect LESS than
+// the free one, so the tiers are now:
+//   Basic      = Path A + Path B
+//   AI Enabled = Path A + Path B + Path C
+// Path C is the ONLY thing the mode flag may gate.
 
-check('Path A is armed only in basic mode',
-  /if \(activeDetectionMode === 'basic'\) \{[\s\S]{0,200}loadConstellationIndex\(\)/.test(extractor));
-check('the per-block fingerprint feed is gated on basic mode',
-  /if \(activeDetectionMode === 'basic' && !constellationFired\)/.test(extractor));
-check('AI Enabled explicitly logs that Path A is not armed',
-  /AI Enabled runs Path B only/.test(extractor));
+check('Path A arming is NOT gated on the mode',
+  /^\s*loadConstellationIndex\(\)/m.test(extractor));
+check('the per-block fingerprint feed is NOT gated on the mode',
+  /if \(!constellationFired\) \{/.test(extractor)
+  && !/activeDetectionMode === 'basic' && !constellationFired/.test(extractor));
+check('no branch arms Path A for one mode only',
+  !/if \(activeDetectionMode === 'basic'\)[\s\S]{0,300}loadConstellationIndex\(\)/.test(extractor));
 {
-  // Everything Path A owns must sit inside a basic-gated region: the arming
-  // block and the per-block feed are the only two places it is driven from.
-  const armIdx  = extractor.indexOf("if (activeDetectionMode === 'basic') {");
-  const feedIdx = extractor.indexOf("if (activeDetectionMode === 'basic' && !constellationFired)");
-  check('both Path A drivers are present and mode-gated', armIdx > 0 && feedIdx > armIdx);
-  // rollingMatcher must never be constructed outside the gated arm block.
+  // The rolling matcher must still be constructed exactly once, so the two
+  // tiers cannot drift into separate Path A implementations.
   const constructs = (extractor.match(/createRollingMatcher\(\)/g) || []).length;
-  check('the rolling matcher is constructed exactly once, inside the gate',
+  check('the rolling matcher is constructed exactly once',
     constructs === 1, `${constructs} construction sites`);
+  // Path C stays exclusive to AI Enabled.
+  const cIdx = extractor.indexOf("if (activeDetectionMode === 'ml') {");
+  check('Path C is armed only in AI Enabled', cIdx > 0);
+  check('Path C scoring is also mode-gated',
+    /activeDetectionMode === 'ml' && isNormalityReady\(\)/.test(extractor));
 }
 check('Path B is never gated on the mode (AI Enabled and Basic both run it)',
   !/activeDetectionMode[^\n]*findBestMatch|findBestMatch[^\n]*activeDetectionMode/.test(extractor));
+{
+  // The mode flag must gate NOTHING except Path C. Any other conditional use
+  // means a tier can change how detection behaves, which is the failure this
+  // section exists to prevent.
+  const gates = (extractor.match(/if \([^)]*activeDetectionMode[^)]*\)/g) || []);
+  check('the mode flag gates Path C and nothing else',
+    gates.every(g => /'ml'/.test(g)), gates.join(' | ') || 'none');
+}
 
 console.log('\n── Basic keeps everything it had ──');
 
