@@ -38,9 +38,30 @@ import { extendByCrossfadeLoop, TARGET_SECONDS, XFADE_SECONDS } from './lib/exte
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const OUT = path.join(ROOT, 'public', 'constellation_v1.json');
-const BUCKET = 'https://bdldmkhcdtlqxaopxlam.supabase.co/storage/v1/object/public/anomaly-patterns/';
-const LIST_URL = 'https://bdldmkhcdtlqxaopxlam.supabase.co/storage/v1/object/list/anomaly-patterns';
-const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJkbGRta2hjZHRscXhhb3B4bGFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjM4NDMwNDYsImV4cCI6MjA3OTQxOTA0Nn0.v3lbUrwF6ZDPn-z8NYE01h7Fs1cTa1TAxQlTAsY3xbU';
+const PROJECT = process.env.SUPABASE_PROJECT_REF || 'bdldmkhcdtlqxaopxlam';
+const BUCKET_NAME = 'anomaly-patterns';
+// SUPABASE_URL exists so the read path can be pointed at a mock or a staging
+// project without editing this file — scripts/qa_bucket_read.mjs uses it to
+// exercise pagination, folder recursion and retry offline.
+const ORIGIN = (process.env.SUPABASE_URL || `https://${PROJECT}.supabase.co`).replace(/\/+$/, '');
+const BUCKET = `${ORIGIN}/storage/v1/object/public/${BUCKET_NAME}/`;
+const LIST_URL = `${ORIGIN}/storage/v1/object/list/${BUCKET_NAME}`;
+// The ANON key is public by design — it is shipped in the browser bundle and is
+// safe in source. It is read from the environment first so a key rotation does
+// not require a code edit. NEVER put a service_role key here: it bypasses Row
+// Level Security entirely, and this script only needs public read.
+const ANON_KEY = process.env.SUPABASE_ANON_KEY
+  || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJkbGRta2hjZHRscXhhb3B4bGFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjM4NDMwNDYsImV4cCI6MjA3OTQxOTA0Nn0.v3lbUrwF6ZDPn-z8NYE01h7Fs1cTa1TAxQlTAsY3xbU';
+
+// Storage read tuning. The bucket is the SOLE source, so reading it must be
+// complete and verifiable — a silently short read produces a silently
+// incomplete index, which is worse than a build that fails loudly.
+const LIST_PAGE = 100;        // Supabase caps a list page; paginate by offset
+const MAX_LIST_PAGES = 200;   // hard stop so a paging bug cannot loop forever
+const MAX_FOLDER_DEPTH = 4;   // recurse into subfolders, but not unboundedly
+const FETCH_RETRIES = 4;      // transient 5xx / socket resets are common
+const RETRY_BASE_MS = 500;    // 0.5s, 1s, 2s, 4s
+const DOWNLOAD_CONCURRENCY = 6;
 const EXCLUDED = new Set([
   'water_pump_failure_critical.wav',   // synthetic tone, not a recording
   // Misfire is acoustically an IRREGULAR IDLE, so its fingerprint collides
@@ -207,39 +228,139 @@ function addReference(name, pcm16, sourceFile) {
 }
 
 // ── SOLE SOURCE: the anomaly-patterns bucket ────────────────────────────────
+//
+// Reading the bucket has to be COMPLETE, not best-effort. A truncated listing
+// or a dropped download does not fail the build — it silently produces an index
+// missing references, and a missing reference is a fault the app can no longer
+// detect. Every read below therefore either succeeds or aborts the build.
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+/** fetch with bounded retry on transient failures. 4xx is not retried. */
+async function fetchRetry(url, init = {}, what = url) {
+  let lastErr;
+  for (let attempt = 0; attempt <= FETCH_RETRIES; attempt++) {
+    if (attempt) await sleep(RETRY_BASE_MS * 2 ** (attempt - 1));
+    try {
+      const res = await fetch(url, init);
+      // A 4xx is a real answer — retrying will not change it.
+      if (res.status >= 400 && res.status < 500) {
+        throw new Error(`HTTP ${res.status} ${res.statusText} (not retryable)`);
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+      return res;
+    } catch (e) {
+      lastErr = e;
+      if (/not retryable/.test(e.message)) break;
+      if (attempt < FETCH_RETRIES) {
+        console.warn(`  retry ${attempt + 1}/${FETCH_RETRIES} — ${what}: ${e.message}`);
+      }
+    }
+  }
+  throw new Error(`${what}: ${lastErr.message}`);
+}
+
+/**
+ * List every .wav in the bucket, paginating by offset and recursing into
+ * folders. The previous single `limit: 1000` call had two silent failure
+ * modes: a bucket larger than one page was truncated, and anything inside a
+ * folder was invisible (Supabase returns folders as entries with a null id,
+ * not as their contents).
+ */
+async function listAllWavs(prefix = '', depth = 0) {
+  if (depth > MAX_FOLDER_DEPTH) {
+    console.warn(`  folder depth limit reached at "${prefix}" — not recursing further`);
+    return [];
+  }
+  const found = [];
+  for (let page = 0; page < MAX_LIST_PAGES; page++) {
+    const res = await fetchRetry(LIST_URL, {
+      method: 'POST',
+      headers: { apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prefix, limit: LIST_PAGE, offset: page * LIST_PAGE,
+        sortBy: { column: 'name', order: 'asc' },
+      }),
+    }, `list "${prefix || '/'}" page ${page}`);
+
+    const batch = await res.json();
+    if (!Array.isArray(batch) || batch.length === 0) break;
+
+    for (const o of batch) {
+      const full = prefix ? `${prefix}/${o.name}` : o.name;
+      // Supabase marks a folder placeholder with a null id.
+      if (o.id === null || o.id === undefined) {
+        found.push(...await listAllWavs(full, depth + 1));
+      } else if (/\.wav$/i.test(o.name)) {
+        found.push(full);
+      }
+    }
+    if (batch.length < LIST_PAGE) break;   // short page = last page
+    if (page === MAX_LIST_PAGES - 1) {
+      throw new Error(`listing "${prefix || '/'}" exceeded ${MAX_LIST_PAGES} pages — aborting rather than truncating`);
+    }
+  }
+  return found;
+}
+
 console.log(`[constellation] listing bucket ${LIST_URL}`);
 let wavs = [];
 try {
-  const res = await fetch(LIST_URL, {
-    method: 'POST',
-    headers: { apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prefix: '', limit: 1000, sortBy: { column: 'name', order: 'asc' } }),
-  });
-  if (!res.ok) throw new Error(`list HTTP ${res.status}`);
-  wavs = (await res.json()).filter(o => /\.wav$/i.test(o.name)).map(o => o.name);
+  wavs = await listAllWavs();
 } catch (e) {
   console.error(`[constellation] FATAL: cannot list the bucket — ${e.message}`);
   console.error('[constellation] The bucket is the only source; refusing to write a partial index.');
   process.exit(1);
 }
+if (wavs.length === 0) {
+  console.error('[constellation] FATAL: the bucket listed zero .wav objects.');
+  console.error('[constellation] Refusing to write an empty index.');
+  process.exit(1);
+}
 console.log(`[constellation] ${wavs.length} wav objects in bucket`);
 
-// Download every candidate once, recording its true duration so the
-// per-family representative can be chosen on evidence rather than filename.
+// Download every candidate once, recording its true duration so selection is
+// made on evidence rather than filename. Downloads run with modest concurrency;
+// ANY failure aborts the build, for the same reason a failed listing does.
+const wanted = wavs.filter(name => {
+  const base = name.split('/').pop();
+  if (EXCLUDED.has(base)) { console.log(`  SKIP ${name} (excluded — see EXCLUDED)`); return false; }
+  return true;
+});
+
 const candidates = new Map();   // fault_type -> [{name, pcm, seconds}]
-for (const name of wavs) {
-  if (EXCLUDED.has(name)) { console.log(`  SKIP ${name} (excluded — see EXCLUDED)`); continue; }
-  try {
-    const buf = Buffer.from(await (await fetch(BUCKET + encodeURIComponent(name))).arrayBuffer());
-    const { pcm, rate } = decodeWav(buf);
-    const pcm16 = resample(pcm, rate);
-    const meta = deriveMeta(name);
-    if (!candidates.has(meta.fault_type)) candidates.set(meta.fault_type, []);
-    candidates.get(meta.fault_type).push({ name, pcm: pcm16, seconds: pcm16.length / SR });
-  } catch (e) {
-    console.warn(`  ${name}: ${e.message}`);
+const failures = [];
+let nextDownload = 0;
+
+async function downloadWorker() {
+  while (nextDownload < wanted.length) {
+    const name = wanted[nextDownload++];
+    try {
+      const url = BUCKET + name.split('/').map(encodeURIComponent).join('/');
+      const res = await fetchRetry(url, {}, name);
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length === 0) throw new Error('empty body');
+      const { pcm, rate } = decodeWav(buf);
+      const pcm16 = resample(pcm, rate);
+      if (pcm16.length === 0) throw new Error('decoded to zero samples');
+      const meta = deriveMeta(name.split('/').pop());
+      if (!candidates.has(meta.fault_type)) candidates.set(meta.fault_type, []);
+      candidates.get(meta.fault_type).push({ name, pcm: pcm16, seconds: pcm16.length / SR });
+    } catch (e) {
+      failures.push(`${name}: ${e.message}`);
+    }
   }
 }
+await Promise.all(Array.from({ length: DOWNLOAD_CONCURRENCY }, downloadWorker));
+
+if (failures.length) {
+  console.error(`[constellation] FATAL: ${failures.length} of ${wanted.length} downloads failed:`);
+  for (const f of failures) console.error(`    ${f}`);
+  console.error('[constellation] A dropped reference is a fault the app can no longer detect.');
+  console.error('[constellation] Refusing to write a partial index.');
+  process.exit(1);
+}
+console.log(`[constellation] downloaded ${wanted.length} references across ${candidates.size} families`);
 
 // Candidate admission, in order:
 //

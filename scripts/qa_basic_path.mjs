@@ -162,12 +162,24 @@ console.log('\n── Reference provenance (Supabase anomaly-patterns bucket) �
   const builder = fs.readFileSync(path.join(ROOT, 'scripts/build_constellation_index.mjs'), 'utf8');
   const embedBuilder = fs.readFileSync(path.join(ROOT, 'scripts/build_reference_fingerprints.mjs'), 'utf8');
   const BUCKET_HOST = 'bdldmkhcdtlqxaopxlam.supabase.co';
+  const PROJECT_REF = 'bdldmkhcdtlqxaopxlam';
   const BUCKET_NAME = 'anomaly-patterns';
 
   check('index declares its generator',
     artifact.generated_by === 'scripts/build_constellation_index.mjs', artifact.generated_by);
-  check('Path A builder sources the anomaly-patterns bucket',
-    builder.includes(BUCKET_HOST) && builder.includes(BUCKET_NAME));
+  // The host is assembled from SUPABASE_PROJECT_REF / SUPABASE_URL so a key
+  // rotation or a staging project needs no code edit, and so qa_bucket_read
+  // can point the reader at a mock. The DEFAULT must still be this project.
+  check('Path A builder defaults to the anomaly-patterns bucket of this project',
+    builder.includes(PROJECT_REF) && builder.includes(BUCKET_NAME));
+  check('the bucket host is still supabase.co',
+    /\$\{PROJECT\}\.supabase\.co/.test(builder) || builder.includes(BUCKET_HOST));
+  // The builder only needs public read. A service_role key here would bypass
+  // Row Level Security entirely and must never be committed.
+  check('the builder carries no service_role credential',
+    !/service_role/.test(builder) || /NEVER put a service_role/.test(builder));
+  check('credentials are overridable from the environment',
+    /process\.env\.SUPABASE_ANON_KEY/.test(builder));
   check('Path B builder sources the same bucket',
     embedBuilder.includes(BUCKET_HOST) && embedBuilder.includes(BUCKET_NAME));
   check('every Path A reference names a .wav source file',
@@ -194,6 +206,32 @@ console.log('\n── Reference provenance (Supabase anomaly-patterns bucket) �
     !/extended_10s|SRC10|readdirSync\(/.test(builder.replace(/^\s*\*.*$/gm, '')));
   check('builder refuses to write a partial index if the bucket is unreachable',
     /refusing to write a partial index/.test(builder));
+
+  // Reading the sole source has to be COMPLETE. Each of these guards a silent
+  // failure mode that produces a smaller index with no error — and a reference
+  // missing from the index is a fault the app can no longer detect.
+  // Behaviour is proven end-to-end against a mock bucket in qa_bucket_read.mjs;
+  // these assertions stop the mechanism being removed.
+  check('the bucket listing paginates rather than taking one capped page',
+    /offset: page \* LIST_PAGE/.test(builder) && /MAX_LIST_PAGES/.test(builder));
+  check('listing aborts rather than silently truncating at the page limit',
+    /exceeded \$\{MAX_LIST_PAGES\} pages — aborting rather than truncating/.test(builder));
+  check('the listing recurses into subfolders',
+    /listAllWavs\(full, depth \+ 1\)/.test(builder) && /MAX_FOLDER_DEPTH/.test(builder));
+  check('folders are recognised by a null id, as Supabase returns them',
+    /o\.id === null/.test(builder));
+  check('transient failures are retried with backoff',
+    /RETRY_BASE_MS \* 2 \*\* \(attempt - 1\)/.test(builder));
+  check('a 4xx is not retried — it is a real answer, not a blip',
+    /not retryable/.test(builder));
+  check('object downloads check the response status before decoding',
+    /fetchRetry\(url, \{\}, name\)/.test(builder));
+  check('an empty or undecodable download is an error, not silent audio',
+    /empty body/.test(builder) && /decoded to zero samples/.test(builder));
+  check('ANY failed download aborts the build',
+    /downloads failed/.test(builder) && /A dropped reference is a fault/.test(builder));
+  check('an empty bucket listing aborts rather than writing an empty index',
+    /listed zero \.wav objects/.test(builder));
   check('reference extension happens in-process, from the shared helper',
     /from '\.\/lib\/extendLoop\.mjs'/.test(builder));
   check('representative selection gates on tonality before duration',
