@@ -204,6 +204,66 @@ console.log('\n── Reference provenance (Supabase anomaly-patterns bucket) �
     /usable\.sort\(\(a, b\) => b\.seconds - a\.seconds\)/.test(builder));
 }
 
+// ── Reference budget: coverage bought without spending FP headroom ──────────
+// Path A is an exact-recording matcher, so a bucket recording that is not
+// indexed is not covered by Path A at all. The builder therefore admits
+// SEVERAL recordings per family — but the false-positive cost of a denser
+// index is real and was measured (scripts/rca_dedup_sweep.mjs):
+//   8 refs -> worst negative 153 | 20 -> 153 | 24 -> 204 | 36 -> 351 | 52 -> 382
+// against a 480 sustained gate. Headroom is flat to 20 and erodes past it.
+console.log('\n── Reference budget stays inside the measured-safe zone ──');
+{
+  const builder = fs.readFileSync(path.join(ROOT, 'scripts/build_constellation_index.mjs'), 'utf8');
+  const num = (n) => {
+    const m = builder.match(new RegExp(`const ${n} = ([0-9.]+)`));
+    return m ? Number(m[1]) : null;
+  };
+  const perFamily = num('MAX_REFS_PER_FAMILY');
+  const total = num('MAX_TOTAL_REFS');
+  const dedup = num('DEDUP_SCORE');
+
+  check('the builder declares a per-family reference cap', perFamily > 0, `${perFamily}`);
+  check('the builder declares a total reference budget', total > 0, `${total}`);
+  // 20 is where the measured negative curve is still flat. Above it the index
+  // starts spending headroom that healthy-engine audio — untestable offline —
+  // needs. Raising this requires re-running the sweep, not just editing it.
+  check('the total budget stays within the measured-safe ceiling of 20',
+    total <= 20, `MAX_TOTAL_REFS=${total}`);
+  check('a per-family cap alone cannot exceed the total budget',
+    perFamily * 9 >= total, `${perFamily}/family x 9 families vs ${total}`);
+  check('the builder documents the measured negative curve',
+    /worst negative/.test(builder) && /headroom/.test(builder));
+
+  check('near-duplicate candidates are skipped rather than indexed',
+    dedup > 0 && /scoreAgainstAdmitted/.test(builder), `DEDUP_SCORE=${dedup}`);
+  check('the dedup threshold sits above the sustained gate',
+    dedup > SUSTAINED_COHERENT_SCORE,
+    `${dedup} > ${SUSTAINED_COHERENT_SCORE} — a candidate below this is NOT yet covered`);
+
+  // Round-robin is what stops a 45-recording family consuming the budget
+  // before a 1-recording family is reached. The thin families are precisely
+  // the ones the embedding path cannot carry, so starving them is the worst
+  // possible allocation.
+  check('families are filled round-robin, not one family at a time',
+    /for \(let round = 0; round < MAX_REFS_PER_FAMILY; round\+\+\)/.test(builder));
+  check('the per-family cap counts ADMITTED references, not candidates examined',
+    /admitted\.set\(faultType, admitted\.get\(faultType\) \+ 1\)/.test(builder)
+    && /cursor\.set\(faultType, i\)/.test(builder));
+  check('the budget is enforced before a reference is added, not after',
+    /refs\.length >= MAX_TOTAL_REFS/.test(builder));
+
+  // The shipped artifact must itself obey the budget it was built under.
+  check('the shipped index is within the total budget',
+    artifact.refs.length <= total, `${artifact.refs.length} refs vs budget ${total}`);
+  {
+    const perFam = new Map();
+    for (const r of artifact.refs) perFam.set(r.fault_type, (perFam.get(r.fault_type) || 0) + 1);
+    const over = [...perFam.entries()].filter(([, n]) => n > perFamily);
+    check('no shipped family exceeds the per-family cap',
+      over.length === 0, over.map(([f, n]) => `${f}=${n}`).join(', ') || `max ${Math.max(...perFam.values())}`);
+  }
+}
+
 // ── No shipped reference may be tonal enough to collide with pure tones ─────
 // This is the invariant the db8f097 rebuild broke. Guarded here so a future
 // rebuild cannot ship it again unnoticed.

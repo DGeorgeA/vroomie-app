@@ -69,6 +69,61 @@ distinct recordings it holds up held-out: 73% accepted, 82% correct, margin
 0.093 — more than double the gate. Nothing about Path B's design is broken. The
 reference set is simply too thin everywhere else.
 
+## Path A coverage of the bucket — better than the raw ratio suggests
+
+A separate question from generalisation: **which bucket recordings does Path A
+actually index?** Path A is an exact-recording matcher, so an unindexed
+recording gets no Path A coverage at all. The builder used to index exactly one
+representative per family — the longest broadband survivor — which reads as
+alarming (1 of 45 for power_steering) until it is broken down:
+
+| Family | Bucket recordings | In Path A | Real status |
+|---|---|---|---|
+| `intake_leak` | 1 | 1 | **fully covered** |
+| `motor_starter` | 1 | 1 | **fully covered** |
+| `piston_knock` | 1 | 1 | **fully covered** |
+| `rocker_valve` | 1 | 1 | **fully covered** |
+| `serpentine_belt` | 1 | 1 | **fully covered** |
+| `timing_chain` | 1 | 1 | **fully covered** |
+| `alternator_bearing_fault` | 3 | 1 | 1 of the other 2 is tonal and correctly excluded; **1 genuinely missing** |
+| `power_steering` | 45 | 1 | the one family Path B *does* generalise for — **covered by Path B** |
+| `misfire_detected_medium` | 1 | 0 | **gap** — excluded from Path A, Path B unproven |
+
+The six single-recording families are at 100% Path A coverage, because the
+representative *is* the family. The apparent gap was concentrated in exactly the
+family that needs Path A least.
+
+### What changed in the builder
+
+The "one representative per family" rule is now "up to
+`MAX_REFS_PER_FAMILY` (3) per family, `MAX_TOTAL_REFS` (20) overall, filled
+round-robin, near-duplicates skipped". The budget is measured, not chosen —
+sweeping total reference count against the negative controls:
+
+| total refs | worst negative | headroom to the 480 sustained gate |
+|---|---|---|
+| 8 (shipped) | 153 | 327 |
+| **20** | **153** | **327** ← flat |
+| 24 | 204 | 276 |
+| 28 | 253 | 227 |
+| 36 | 351 | 129 |
+| 52 (all 44 power_steering) | 382 | 98 |
+
+Headroom is untouched to 20 and erodes past it, so 20 is the ceiling and QA
+asserts it. Indexing all 44 power_steering recordings would take coverage to
+44/44 but cost 70% of the headroom **and** grow the artifact from 1.6 MB to
+11.8 MB — a bad trade for the one family Path B already covers. Round-robin
+matters because the thin families are precisely the ones Path B cannot carry;
+they must not be starved by a family with 45 recordings.
+
+Note the negatives testable offline are speech, noise, music and silence.
+Healthy **engine idle** sits acoustically far closer to a pump whine and lives
+in the bucket, so real headroom is smaller than the table shows. Staying in the
+flat region is what makes that unmeasured margin safe.
+
+**This takes effect only on the next rebuild with bucket access.** The shipped
+artifact is unchanged at 8 references.
+
 ## Why this surfaced now
 
 While Path A was armed in both tiers, the fingerprint fast path covered

@@ -97,6 +97,43 @@ const MIN_SPECTRAL_FLATNESS = 0.08;
 const FLATNESS_NFFT = 1024;
 const FLATNESS_FRAMES = 12;
 
+// ── Reference budget ────────────────────────────────────────────────────────
+// Path A is an EXACT-RECORDING matcher: it recognises the recordings in its
+// index and nothing else. Indexing one representative per family therefore
+// left every other bucket recording to the embedding path, which measurement
+// showed only generalises for power_steering
+// (scripts/rca_pathb_separability.mjs). So admit SEVERAL recordings per family.
+//
+// The limit is false positives, and the cost is NOT linear. Sweeping the total
+// reference count against the negative controls
+// (scripts/rca_dedup_sweep.mjs, scripts/rca_full_bucket_coverage.mjs):
+//
+//   total refs   worst negative   headroom to the 480 sustained gate
+//        8 (shipped)   153              327
+//       20             153              327   <- unchanged
+//       24             204              276
+//       28             253              227
+//       36             351              129
+//       52             382               98
+//
+// Headroom is untouched up to 20 references and degrades from 24 onward, as
+// coincidental hits accumulate across a denser hash space. This is the same
+// effect the pre-ship review recorded when near-duplicates raised the worst
+// healthy negative from 237 to 443.
+//
+// 20 is therefore a MEASURED ceiling, not a guess. Note the negatives that can
+// be tested here are speech, noise, music and silence; healthy ENGINE IDLE sits
+// acoustically far closer to a pump whine and lives in the bucket, so the real
+// headroom is smaller than these numbers. Staying inside the flat region of the
+// curve is what makes that unmeasured margin safe to spend.
+const MAX_REFS_PER_FAMILY = 3;
+const MAX_TOTAL_REFS = 20;
+// A candidate that already matches the partial index this strongly is ALREADY
+// detected, so indexing it buys no coverage and only adds hash density.
+// Measured: at 1200 the 44 power_steering recordings still scored 44/44
+// coverage with 35 of 44 admitted.
+const DEDUP_SCORE = 1200;
+
 function spectralFlatness(pcm) {
   const N = FLATNESS_NFFT;
   if (pcm.length < N) return 1; // too short to judge — do not reject on this
@@ -204,7 +241,7 @@ for (const name of wavs) {
   }
 }
 
-// One representative per family, chosen on TWO criteria:
+// Candidate admission, in order:
 //
 //   1. TONALITY FLOOR (hard reject). A near-pure tone produces a sparse,
 //      highly regular constellation that aligns coherently with ANY other
@@ -216,15 +253,21 @@ for (const name of wavs) {
 //      in that band became a false "alternator bearing fault".
 //      Same idea as the water_pump EXCLUDED entry, applied by measurement
 //      rather than by filename.
-//   2. LONGEST among survivors — more frames means a stronger coherence spike.
+//   2. LONGEST first — more frames means a stronger coherence spike.
+//   3. DEDUP — a candidate already matching the partial index at DEDUP_SCORE
+//      is already detected, so it would add density without coverage.
+//   4. BUDGET — MAX_REFS_PER_FAMILY, then the measured MAX_TOTAL_REFS ceiling.
 //
-// Duration alone is NOT a safe selection rule. Flatness gates first.
-console.log('[constellation] indexing one representative per family...');
+// Families are filled ROUND-ROBIN rather than one at a time, so a family with
+// 45 recordings cannot consume the whole budget before a family with 3 is
+// reached. The thin families are exactly the ones the embedding path cannot
+// carry, so they must not be starved.
+console.log(`[constellation] admitting up to ${MAX_REFS_PER_FAMILY}/family, ${MAX_TOTAL_REFS} total...`);
+
+const pools = new Map();
 for (const [faultType, list] of [...candidates.entries()].sort()) {
   for (const c of list) if (c.flatness === undefined) c.flatness = spectralFlatness(c.pcm);
-
-  const tonal = list.filter(c => c.flatness < MIN_SPECTRAL_FLATNESS);
-  for (const c of tonal) {
+  for (const c of list.filter(c => c.flatness < MIN_SPECTRAL_FLATNESS)) {
     console.log(`  SKIP ${c.name} (spectral flatness ${c.flatness.toFixed(4)} < ${MIN_SPECTRAL_FLATNESS} — too tonal, would collide with pure tones)`);
   }
   const usable = list.filter(c => c.flatness >= MIN_SPECTRAL_FLATNESS);
@@ -232,16 +275,87 @@ for (const [faultType, list] of [...candidates.entries()].sort()) {
     console.log(`  [${faultType}] no broadband candidate — family left to the embedding path`);
     continue;
   }
-
   usable.sort((a, b) => b.seconds - a.seconds);
-  const pick = usable[0];
-  const others = usable.length - 1;
-  const extended = extendByCrossfadeLoop(pick.pcm, TARGET_SECONDS, SR);
-  const note = extended.length > pick.pcm.length
-    ? `looped ${pick.seconds.toFixed(1)}s -> ${(extended.length / SR).toFixed(1)}s`
-    : 'native length';
-  console.log(`  [${faultType}] ${pick.name}  (${note}, flatness ${pick.flatness.toFixed(4)}${others ? `, ${others} other candidate(s) left to the embedding path` : ''})`);
-  addReference(pick.name, extended, pick.name);
+  pools.set(faultType, usable);
+}
+
+// Hash -> packed entries for the references admitted so far, maintained
+// alongside pairs[] so the dedup check does not rebuild it per candidate.
+const admittedIndex = new Map();
+function noteAdmitted(fromPairIndex) {
+  for (let i = fromPairIndex; i < pairs.length; i++) {
+    const p = pairs[i];
+    let arr = admittedIndex.get(p.h);
+    if (!arr) { arr = []; admittedIndex.set(p.h, arr); }
+    arr.push(p.packed);
+  }
+}
+
+/** Best time-coherent score of a candidate against what is already indexed. */
+function scoreAgainstAdmitted(fp) {
+  if (admittedIndex.size === 0) return 0;
+  const perRef = new Map();
+  for (let i = 0; i < fp.h.length; i++) {
+    const hits = admittedIndex.get(fp.h[i]);
+    if (!hits) continue;
+    for (const packed of hits) {
+      const refId = packed >>> 20, off = (packed & 0xfffff) - fp.t[i];
+      let m = perRef.get(refId);
+      if (!m) { m = new Map(); perRef.set(refId, m); }
+      m.set(off, (m.get(off) || 0) + 1);
+    }
+  }
+  let best = 0;
+  for (const m of perRef.values()) for (const c of m.values()) if (c > best) best = c;
+  return best;
+}
+
+// admitted = references actually indexed for the family (what the cap limits).
+// cursor   = how far through that family's candidate list we have looked, so a
+//            skipped duplicate is not re-examined on the next round.
+const admitted = new Map([...pools.keys()].map(k => [k, 0]));
+const cursor = new Map([...pools.keys()].map(k => [k, 0]));
+
+outer:
+for (let round = 0; round < MAX_REFS_PER_FAMILY; round++) {
+  let progressed = false;
+  for (const [faultType, usable] of pools) {
+    if (admitted.get(faultType) > round) continue;
+    if (refs.length >= MAX_TOTAL_REFS) {
+      console.log(`  BUDGET reached (${MAX_TOTAL_REFS} references) — remaining candidates left to the embedding path`);
+      break outer;
+    }
+    let i = cursor.get(faultType);
+    while (i < usable.length) {
+      const c = usable[i++];
+      const extended = extendByCrossfadeLoop(c.pcm, TARGET_SECONDS, SR);
+      const fp = computeConstellationHashes(extended);
+      const dup = scoreAgainstAdmitted(fp);
+      if (dup >= DEDUP_SCORE) {
+        console.log(`  SKIP ${c.name} (already matches the index at ${dup} >= ${DEDUP_SCORE} — covered, would only add density)`);
+        continue;
+      }
+      const note = extended.length > c.pcm.length
+        ? `looped ${c.seconds.toFixed(1)}s -> ${(extended.length / SR).toFixed(1)}s`
+        : 'native length';
+      console.log(`  [${faultType}] ${c.name}  (${note}, flatness ${c.flatness.toFixed(4)})`);
+      const before = pairs.length;
+      addReference(c.name, extended, c.name);
+      if (pairs.length > before) {          // addReference can still reject
+        noteAdmitted(before);
+        admitted.set(faultType, admitted.get(faultType) + 1);
+        progressed = true;
+        break;
+      }
+    }
+    cursor.set(faultType, i);
+  }
+  if (!progressed) break;
+}
+
+for (const [faultType, usable] of pools) {
+  const left = usable.length - admitted.get(faultType);
+  if (left > 0) console.log(`  [${faultType}] ${left} further candidate(s) left to the embedding path`);
 }
 
 // group by hash so the runtime can slice contiguous runs
