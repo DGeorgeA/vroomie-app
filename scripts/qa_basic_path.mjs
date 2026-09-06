@@ -232,6 +232,39 @@ console.log('\n── Reference provenance (Supabase anomaly-patterns bucket) �
     /downloads failed/.test(builder) && /A dropped reference is a fault/.test(builder));
   check('an empty bucket listing aborts rather than writing an empty index',
     /listed zero \.wav objects/.test(builder));
+
+  // ── Path B provenance, verified against the LIVE project ──────────────
+  // The anomaly-patterns bucket holds 110 objects (55 wav + 55 json) and is
+  // the only bucket. NONE of the 90 healthy anchor recordings are in it — they
+  // come from a Kaggle dataset outside this repo. The anchors are what let
+  // Path B say "no" via ANCHOR_MARGIN, so an index built without them still
+  // loads, still scores, and confidently calls healthy engines faulty.
+  check('Path B builder states that anchors are NOT in Supabase',
+    /NOT come from Supabase|NOT in Supabase/.test(embedBuilder));
+  check('Path B builder checks its anchor sources exist before building',
+    /anchor sources are missing/.test(embedBuilder));
+  check('the anchor precondition runs BEFORE YAMNet and the downloads',
+    embedBuilder.indexOf('anchor sources are missing') < embedBuilder.indexOf('Loading YAMNet'),
+    'fail fast — loading the model and pulling 55 files takes minutes');
+  check('Path B refuses to write an index that is too thin to ship',
+    /too thin to ship/.test(embedBuilder)
+    && /Refusing to overwrite public\/fingerprints_v9\.json/.test(embedBuilder));
+  check('the thinness floor covers faults AND healthy anchors',
+    /MIN_FAULTS/.test(embedBuilder) && /MIN_HEALTHY/.test(embedBuilder));
+
+  // The shipped index must itself clear the floor the builder enforces, or the
+  // floor is set above what actually ships and no rebuild could ever pass.
+  {
+    const fp = JSON.parse(fs.readFileSync(path.join(ROOT, 'public/fingerprints_v9.json'), 'utf8'));
+    const healthy = fp.anchors.filter(a => a.kind === 'healthy').length;
+    const floor = (n) => Number((embedBuilder.match(new RegExp(`${n} = (\\d+)`)) || [])[1]);
+    check('shipped index clears the builder MIN_FAULTS floor',
+      fp.faults.length >= floor('MIN_FAULTS'), `${fp.faults.length} >= ${floor('MIN_FAULTS')}`);
+    check('shipped index clears the builder MIN_HEALTHY floor',
+      healthy >= floor('MIN_HEALTHY'), `${healthy} >= ${floor('MIN_HEALTHY')}`);
+    check('shipped index clears the builder MIN_ANCHORS floor',
+      fp.anchors.length >= floor('MIN_ANCHORS'), `${fp.anchors.length} >= ${floor('MIN_ANCHORS')}`);
+  }
   check('reference extension happens in-process, from the shared helper',
     /from '\.\/lib\/extendLoop\.mjs'/.test(builder));
   check('representative selection gates on tonality before duration',

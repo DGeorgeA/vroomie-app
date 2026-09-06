@@ -53,6 +53,38 @@ const SYNTH_CLASSES = new Set(['Sine wave', 'Harmonic', 'Chirp tone', 'Sound eff
 // real recording and delete this entry to enable the class.
 const EXCLUDED_REFERENCES = new Set(['water_pump_failure_critical.wav']);
 
+// ─── Preconditions, checked BEFORE any slow work ────────────────────
+//
+// PROVENANCE — the anchors do NOT come from Supabase. Verified against the
+// live project: anomaly-patterns holds 110 objects (55 wav + 55 json) and is
+// the ONLY bucket; NONE of the 90 healthy anchor recordings are in it. They
+// come from the Kaggle dataset at DATASET, which lives OUTSIDE this repository
+// and is not version-controlled.
+//
+// This matters because the anchors are what let Path B say "no", via the
+// ANCHOR_MARGIN gate. An index built without them still loads and still
+// scores — it just confidently labels healthy engines as faults.
+//
+// Checked here, at the top, rather than 200 lines and 55 downloads later:
+// loading YAMNet and pulling the bucket takes minutes, and there is no reason
+// to spend them on a build that cannot succeed.
+{
+  const missing = [
+    [DATASET, 'Kaggle car-diagnostics dataset (healthy anchors)'],
+    [path.join(ROOT, 'scratch', 'testaudio'), 'interferer test audio'],
+  ].filter(([d]) => !fs.existsSync(d));
+  if (missing.length) {
+    console.error('[Factory] FATAL: anchor sources are missing:\n');
+    for (const [d, what] of missing) console.error(`    ${what}\n      expected at: ${d}\n`);
+    console.error('  These are NOT in Supabase — the anomaly-patterns bucket contains');
+    console.error('  fault references only. Without them the index would ship with no');
+    console.error('  healthy anchors, and the anchor-margin gate that suppresses false');
+    console.error('  positives on healthy engines would have nothing to compare against.');
+    console.error('  Refusing to build. Restore the dataset and re-run.');
+    process.exit(1);
+  }
+}
+
 // ─── class map (for QC) ─────────────────────────────────────────────
 const csv = fs.readFileSync(path.join(__dirname, 'yamnet_class_map.csv'), 'utf8');
 const CLASSES = csv.trim().split('\n').slice(1).map(raw => {
@@ -363,7 +395,18 @@ if (fs.existsSync(LOCAL_REF_DIR)) {
 }
 
 // ─── Build anchors ──────────────────────────────────────────────────
-// EVEN indices only — odd indices are held out for the benchmark script.
+//
+// PROVENANCE WARNING — the anchors do NOT come from Supabase.
+// Verified against the live project: the anomaly-patterns bucket holds 110
+// objects (55 wav + 55 json) and is the ONLY bucket. NONE of the 90 healthy
+// anchor recordings are in it — they come from the Kaggle dataset at DATASET
+// below, which lives OUTSIDE this repository and is not version-controlled.
+//
+// This matters because the anchors are what make Path B able to say "no",
+// via the ANCHOR_MARGIN gate. An index built without them would still load,
+// still score, and would confidently label healthy engines as faults. So the
+// dataset is a hard precondition, checked up front rather than discovered
+// 55 downloads later, and the anchor count is re-checked before writing.
 const anchors = [];
 function pickEven(dir, n) {
   const all = fs.readdirSync(dir).filter(f => f.endsWith('.wav'))
@@ -485,6 +528,28 @@ const FAMILY_CAP = 100;
 }
 
 // ─── Write artifact ─────────────────────────────────────────────────
+//
+// Last line of defence. The shipped index carries 352 fault embeddings and 94
+// anchors (78 healthy, 16 interferer). An index materially thinner than that
+// is a silent detection regression, not a smaller file: too few healthy
+// anchors and every window clears ANCHOR_MARGIN, so healthy engines get named
+// as faults. Refuse rather than overwrite a good artifact with a bad one.
+{
+  const healthy = anchors.filter(a => a.kind === 'healthy').length;
+  const MIN_FAULTS = 300, MIN_HEALTHY = 60, MIN_ANCHORS = 80;
+  const problems = [];
+  if (faults.length < MIN_FAULTS) problems.push(`fault embeddings ${faults.length} < ${MIN_FAULTS}`);
+  if (healthy < MIN_HEALTHY) problems.push(`healthy anchors ${healthy} < ${MIN_HEALTHY}`);
+  if (anchors.length < MIN_ANCHORS) problems.push(`total anchors ${anchors.length} < ${MIN_ANCHORS}`);
+  if (problems.length) {
+    console.error('[Factory] FATAL: the built index is too thin to ship:');
+    for (const p of problems) console.error(`    ${p}`);
+    console.error(`  Shipped reference: 352 faults, 94 anchors (78 healthy).`);
+    console.error('  Refusing to overwrite public/fingerprints_v9.json.');
+    process.exit(1);
+  }
+}
+
 const artifact = {
   version: 'v9',
   generated_by: 'scripts/build_reference_fingerprints.mjs',
